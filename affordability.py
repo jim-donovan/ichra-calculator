@@ -270,20 +270,34 @@ class AffordabilityAnalyzer:
         # Build employee_locations list for batch LCSP query
         employee_locations = []
         for _, employee in employees_with_income.iterrows():
-            # Access pandas Series columns safely using dict-like access or direct indexing
+            # Access pandas Series columns safely - use .get() with proper defaults
+            # Note: For pandas Series, check column existence before access
             try:
-                age = int(employee['age']) if 'age' in employee.index else int(employee.get('employee_age', 0))
-            except (KeyError, ValueError):
+                if 'age' in employee.index:
+                    age = int(employee['age']) if pd.notna(employee['age']) else 0
+                elif 'employee_age' in employee.index:
+                    age = int(employee['employee_age']) if pd.notna(employee['employee_age']) else 0
+                else:
+                    age = 0
+            except (ValueError, TypeError):
                 age = 0
 
             try:
-                state = str(employee['state']).upper() if 'state' in employee.index else ''
-            except KeyError:
+                if 'state' in employee.index and pd.notna(employee['state']):
+                    state = str(employee['state']).upper()
+                else:
+                    state = ''
+            except (ValueError, TypeError):
                 state = ''
 
             try:
-                rating_area_id = employee['rating_area_id'] if 'rating_area_id' in employee.index else employee.get('rating_area', None)
-            except KeyError:
+                if 'rating_area_id' in employee.index and pd.notna(employee['rating_area_id']):
+                    rating_area_id = employee['rating_area_id']
+                elif 'rating_area' in employee.index and pd.notna(employee['rating_area']):
+                    rating_area_id = employee['rating_area']
+                else:
+                    rating_area_id = None
+            except (ValueError, TypeError):
                 rating_area_id = None
 
             # Convert age to age band

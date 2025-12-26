@@ -137,11 +137,13 @@ WHERE
 
             # Create a CASE WHEN for counting employee area coverage per state
             # Safe to interpolate after validation above
+            # Use regex extraction for safe integer conversion (handles malformed data)
             rating_area_list = ', '.join([str(ra) for ra in validated_areas])
             case_statements.append(f"""
                 WHEN SUBSTRING(p.hios_plan_id, 6, 2) = '{state}'
-                    AND REPLACE(br.rating_area_id, 'Rating Area ', '')::integer IN ({rating_area_list})
-                THEN REPLACE(br.rating_area_id, 'Rating Area ', '')::integer
+                    AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer IN ({rating_area_list})
+                THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
             """)
 
         case_when_clause = '\n'.join(case_statements)
@@ -152,15 +154,24 @@ WHERE
             SELECT
                 p.hios_plan_id,
                 SUBSTRING(p.hios_plan_id, 6, 2) as state_code,
-                COUNT(DISTINCT REPLACE(br.rating_area_id, 'Rating Area ', '')::integer) as num_areas_covered,
-                ARRAY_AGG(DISTINCT REPLACE(br.rating_area_id, 'Rating Area ', '')::integer
-                         ORDER BY REPLACE(br.rating_area_id, 'Rating Area ', '')::integer) as covered_areas,
+                COUNT(DISTINCT CASE
+                    WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                END) as num_areas_covered,
+                ARRAY_AGG(DISTINCT CASE
+                    WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                END ORDER BY CASE
+                    WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                END) as covered_areas,
                 COUNT(DISTINCT CASE
                     {case_when_clause}
                 END) as num_employee_areas_covered
             FROM rbis_insurance_plan_base_rates_20251019202724 br
             JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
             WHERE p.hios_plan_id IN ({plan_placeholders})
+                AND br.rating_area_id ~ '^Rating Area [0-9]+$'
             GROUP BY p.hios_plan_id
         )
         SELECT *
@@ -252,7 +263,11 @@ WHERE
         SELECT DISTINCT
             p.hios_plan_id,
             SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
-            REPLACE(br.rating_area_id, 'Rating Area ', '')::integer AS rating_area_id,
+            CASE
+                WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                ELSE NULL
+            END AS rating_area_id,
             br.age,
             br.individual_rate AS premium,
             br.rate_effective_date,
@@ -270,7 +285,8 @@ WHERE
 
         if rating_area_id:
             # rating_area_id comes as integer from census, but stored as 'Rating Area X' in DB
-            query += " AND REPLACE(br.rating_area_id, 'Rating Area ', '')::integer = %s"
+            # Use regex extraction for safe integer comparison
+            query += " AND br.rating_area_id ~ '^Rating Area [0-9]+$' AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s"
             params.append(rating_area_id)
 
         query += " ORDER BY p.hios_plan_id, br.age"
@@ -297,11 +313,12 @@ WHERE
         Returns:
             DataFrame with rating area information
         """
+        # rating_area_id is already integer in rbis_state_rating_area_amended
         query = """
         SELECT
             state_code,
             county,
-            rating_area_id::integer AS rating_area_id,
+            rating_area_id,
             market
         FROM rbis_state_rating_area_amended
         WHERE UPPER(state_code) = UPPER(%s)
@@ -310,6 +327,47 @@ WHERE
         LIMIT 1
         """
         return db.execute_query(query, (state, county))
+
+    @staticmethod
+    def get_rating_areas_batch(db: DatabaseConnection,
+                                state_county_pairs: List[tuple]) -> pd.DataFrame:
+        """
+        Batch lookup rating areas for multiple (state, county) pairs.
+        More efficient than calling get_rating_area_by_county() in a loop.
+
+        Args:
+            db: Database connection
+            state_county_pairs: List of (state_code, county) tuples
+
+        Returns:
+            DataFrame with columns: state_code, county, rating_area_id
+        """
+        if not state_county_pairs:
+            return pd.DataFrame(columns=['state_code', 'county', 'rating_area_id'])
+
+        # Deduplicate pairs
+        unique_pairs = list(set(state_county_pairs))
+
+        # Build a query with multiple OR conditions
+        conditions = []
+        params = []
+        for state, county in unique_pairs:
+            conditions.append("(UPPER(state_code) = UPPER(%s) AND UPPER(county) = UPPER(%s))")
+            params.extend([state, county])
+
+        where_clause = " OR ".join(conditions)
+
+        # rating_area_id is already integer in rbis_state_rating_area_amended
+        query = f"""
+        SELECT DISTINCT
+            UPPER(state_code) as state_code,
+            UPPER(county) as county,
+            rating_area_id
+        FROM rbis_state_rating_area_amended
+        WHERE ({where_clause})
+            AND market = 'Individual'
+        """
+        return db.execute_query(query, tuple(params))
 
     @staticmethod
     def get_counties_by_state(db: DatabaseConnection, state: str) -> pd.DataFrame:
@@ -323,11 +381,12 @@ WHERE
         Returns:
             DataFrame with county list
         """
+        # rating_area_id is already integer in rbis_state_rating_area_amended
         query = """
         SELECT DISTINCT
             state_code,
             county,
-            rating_area_id::integer AS rating_area_id,
+            rating_area_id,
             market
         FROM rbis_state_rating_area_amended
         WHERE UPPER(state_code) = UPPER(%s)
@@ -352,11 +411,12 @@ WHERE
         # Handle ZIP+4 format (e.g., "29654-7352" -> "29654") and ensure 5 digits
         zip_code = str(zip_code).strip().split('-')[0].zfill(5)[:5]
 
+        # rating_area_id is already integer in rbis_state_rating_area_amended
         query = """
         SELECT
             ra.state_code,
             ra.county,
-            ra.rating_area_id::integer AS rating_area_id,
+            ra.rating_area_id,
             zc."USPS Default City for ZIP" as city
         FROM zip_to_county_correct zc
         JOIN rbis_state_rating_area_amended ra
@@ -454,7 +514,11 @@ WHERE
             p.hios_plan_id,
             p.plan_marketing_name as plan_name,
             SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
-            REPLACE(br.rating_area_id, 'Rating Area ', '')::integer AS rating_area_id,
+            CASE
+                WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                ELSE NULL
+            END AS rating_area_id,
             br.age,
             br.individual_rate as premium
         FROM rbis_insurance_plan_base_rates_20251019202724 br
@@ -464,7 +528,8 @@ WHERE
             AND p.market_coverage = 'Individual'
             AND v.csr_variation_type = 'Exchange variant (no CSR)'
             AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
-            AND REPLACE(br.rating_area_id, 'Rating Area ', '')::integer = %s
+            AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+            AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
             AND br.age = %s
             AND br.rate_effective_date = '2026-01-01'
             AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)
@@ -516,7 +581,11 @@ WHERE
                 p.hios_plan_id,
                 p.plan_marketing_name as plan_name,
                 SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
-                REPLACE(br.rating_area_id, 'Rating Area ', '')::integer AS rating_area_id,
+                CASE
+                    WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                    ELSE NULL
+                END AS rating_area_id,
                 br.age as age_band,
                 br.individual_rate as premium
             FROM rbis_insurance_plan_base_rates_20251019202724 br
@@ -526,7 +595,8 @@ WHERE
                 AND p.market_coverage = 'Individual'
                 AND v.csr_variation_type = 'Exchange variant (no CSR)'
                 AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
-                AND REPLACE(br.rating_area_id, 'Rating Area ', '')::integer = %s
+                AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
                 AND br.age = %s
                 AND br.rate_effective_date = '2026-01-01'
                 AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)

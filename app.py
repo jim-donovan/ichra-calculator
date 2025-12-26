@@ -5,6 +5,8 @@ Streamlit app for ICHRA benefits consultants to calculate and compare Individual
 
 import streamlit as st
 import sys
+import os
+import hashlib
 from pathlib import Path
 
 # Add current directory to path for imports
@@ -12,6 +14,50 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from constants import APP_CONFIG, PAGE_NAMES
 from database import get_database_connection, test_connection
+
+
+def check_authentication() -> bool:
+    """
+    Check if user is authenticated. Returns True if:
+    - No password is configured (APP_PASSWORD env var not set)
+    - User has entered the correct password
+
+    Configure by setting APP_PASSWORD environment variable or in .streamlit/secrets.toml:
+    [app]
+    password = "your-secure-password"
+    """
+    # Check if authentication is configured
+    password_hash = None
+
+    # Check environment variable first
+    if os.environ.get('APP_PASSWORD'):
+        password_hash = hashlib.sha256(os.environ['APP_PASSWORD'].encode()).hexdigest()
+    # Check Streamlit secrets
+    elif hasattr(st, 'secrets') and 'app' in st.secrets and 'password' in st.secrets['app']:
+        password_hash = hashlib.sha256(st.secrets['app']['password'].encode()).hexdigest()
+
+    # If no password configured, allow access
+    if not password_hash:
+        return True
+
+    # Check if already authenticated
+    if st.session_state.get('authenticated', False):
+        return True
+
+    # Show login form
+    st.title("🔐 ICHRA Calculator Login")
+    st.markdown("Please enter the password to access the application.")
+
+    password_input = st.text_input("Password", type="password", key="login_password")
+
+    if st.button("Login", type="primary"):
+        if hashlib.sha256(password_input.encode()).hexdigest() == password_hash:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password. Please try again.")
+
+    return False
 
 
 # Page configuration
@@ -49,9 +95,17 @@ def initialize_session_state():
     if 'export_data' not in st.session_state:
         st.session_state.export_data = None
 
-    # Database connection
+    # Database connection - use cached resource directly
+    # get_database_connection() is decorated with @st.cache_resource which handles thread safety
+    # We still store in session_state for compatibility, but the actual connection is cached
     if 'db' not in st.session_state:
-        st.session_state.db = get_database_connection()
+        try:
+            st.session_state.db = get_database_connection()
+        except Exception as e:
+            # Log the error but don't crash - pages can retry connection
+            import logging
+            logging.error(f"Failed to initialize database connection: {e}")
+            st.session_state.db = None
 
     # Navigation state
     if 'current_page' not in st.session_state:
@@ -60,6 +114,10 @@ def initialize_session_state():
 
 def main():
     """Main application entry point"""
+
+    # Check authentication first
+    if not check_authentication():
+        return
 
     # Initialize session state
     initialize_session_state()

@@ -347,6 +347,16 @@ else:
 
     if uploaded_file is not None:
         try:
+            # Security validation for file upload
+            MAX_FILE_SIZE_MB = 10
+            MAX_ROWS = 10000
+
+            # Check file size
+            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            if file_size_mb > MAX_FILE_SIZE_MB:
+                st.error(f"❌ File too large: {file_size_mb:.1f}MB. Maximum allowed is {MAX_FILE_SIZE_MB}MB.")
+                st.stop()
+
             # Read the uploaded file, forcing ZIP codes to be read as strings
             # This preserves leading zeros and prevents float conversion (e.g., 60005.0)
             # Auto-detect delimiter (handles comma, tab, semicolon, etc.)
@@ -354,7 +364,11 @@ else:
             import io
 
             # Read file content to detect delimiter
-            file_content = uploaded_file.getvalue().decode('utf-8')
+            try:
+                file_content = uploaded_file.getvalue().decode('utf-8')
+            except UnicodeDecodeError:
+                st.error("❌ File encoding error. Please save the file as UTF-8 encoded CSV.")
+                st.stop()
 
             # Use csv.Sniffer to detect delimiter
             try:
@@ -376,6 +390,23 @@ else:
             # Show detected format
             delimiter_name = {',': 'comma', '\t': 'tab', ';': 'semicolon', '|': 'pipe'}.get(detected_delimiter, 'custom')
             st.caption(f"📄 Detected format: {delimiter_name}-delimited")
+
+            # Validate row count
+            if len(census_raw) > MAX_ROWS:
+                st.error(f"❌ File has {len(census_raw):,} rows. Maximum allowed is {MAX_ROWS:,}.")
+                st.stop()
+
+            if len(census_raw) == 0:
+                st.error("❌ File appears to be empty or has no valid data rows.")
+                st.stop()
+
+            # Validate required columns exist
+            required_columns = ['Employee Number', 'Home Zip', 'Home State', 'Family Status', 'EE DOB']
+            missing_columns = [col for col in required_columns if col not in census_raw.columns]
+            if missing_columns:
+                st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
+                st.info("Please download and use the template to ensure all required columns are present.")
+                st.stop()
 
             # Clean up ZIP codes: remove .0 suffix if present (from Excel numeric formatting)
             # Handle ZIP+4 format (e.g., "29654-7352" -> "29654")

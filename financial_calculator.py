@@ -710,8 +710,11 @@ class FinancialSummaryCalculator:
             'employee_details': []  # Per-employee breakdown
         }
 
-        # Process each employee individually
-        for _, emp_row in census_df.iterrows():
+        # Pre-process all employees to collect unique (state, rating_area, age_band) tuples
+        employee_data = []
+        location_keys = set()
+
+        for idx, emp_row in census_df.iterrows():
             state = emp_row.get(state_col)
             if not state:
                 continue
@@ -749,68 +752,111 @@ class FinancialSummaryCalculator:
             if state in FAMILY_TIER_STATES:
                 age_band = 'Family-Tier Rates'
 
-            # Find lowest cost plan for this employee's rating area, age, and metal level
-            # Also get the plan name
-            query = """
-            SELECT p.plan_marketing_name, r.individual_rate as lcsp_rate
-            FROM rbis_insurance_plan_20251019202724 p
-            JOIN rbis_insurance_plan_base_rates_20251019202724 r
-                ON p.hios_plan_id = r.plan_id
-            WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
-              AND p.market_coverage = 'Individual'
-              AND p.plan_effective_date = '2026-01-01'
-              AND p.level_of_coverage = %s
-              AND r.market_coverage = 'Individual'
-              AND r.rating_area_id = %s
-              AND r.age = %s
-            ORDER BY r.individual_rate ASC
-            LIMIT 1
-            """
+            # Store employee data and location key for batch lookup
+            location_key = (state, rating_area_str, age_band)
+            location_keys.add(location_key)
 
-            lcsp_ee_rate = 0.0
-            lcsp_plan_name = None
-
-            try:
-                df = pd.read_sql(query, db.engine, params=(
-                    state, metal_level, rating_area_str, age_band
-                ))
-                if not df.empty and pd.notna(df.iloc[0]['lcsp_rate']):
-                    lcsp_ee_rate = float(df.iloc[0]['lcsp_rate'])
-                    lcsp_plan_name = df.iloc[0]['plan_marketing_name']
-                else:
-                    result['errors'].append(
-                        f"No {metal_level} rate for {state} RA {rating_area}, age {age_band}"
-                    )
-            except Exception as e:
-                result['errors'].append(f"Error querying {state}: {str(e)}")
-
-            # Apply tier multiplier
-            tier_multiplier = FinancialSummaryCalculator.TIER_MULTIPLIERS.get(family_status, 1.0)
-            estimated_tier_premium = lcsp_ee_rate * tier_multiplier
-
-            # Estimate lives based on tier
-            lives = tier_lives.get(family_status, 1)
-
-            # Store employee detail record
-            result['employee_details'].append({
+            employee_data.append({
                 'employee_id': employee_id,
                 'first_name': first_name,
                 'last_name': last_name,
                 'state': state,
                 'rating_area': rating_area,
+                'rating_area_str': rating_area_str,
                 'family_status': family_status,
                 'ee_age': ee_age,
+                'age_band': age_band,
+                'current_ee': current_ee,
+                'current_er': current_er,
+                'current_total': current_total,
+                'projected_2026': projected_2026,
+                'location_key': location_key
+            })
+
+        # Batch query: Get lowest cost plan for all unique (state, rating_area, age) combos
+        lcsp_lookup = {}
+        if location_keys:
+            # Build batch query using UNION ALL pattern
+            union_queries = []
+            params = []
+            for state, rating_area_str, age_band in location_keys:
+                union_queries.append("""
+                (SELECT
+                    %s as state,
+                    %s as rating_area_str,
+                    %s as age_band,
+                    p.plan_marketing_name,
+                    r.individual_rate as lcsp_rate
+                FROM rbis_insurance_plan_20251019202724 p
+                JOIN rbis_insurance_plan_base_rates_20251019202724 r
+                    ON p.hios_plan_id = r.plan_id
+                WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                  AND p.market_coverage = 'Individual'
+                  AND p.plan_effective_date = '2026-01-01'
+                  AND p.level_of_coverage = %s
+                  AND r.market_coverage = 'Individual'
+                  AND r.rating_area_id = %s
+                  AND r.age = %s
+                ORDER BY r.individual_rate ASC
+                LIMIT 1)
+                """)
+                params.extend([state, rating_area_str, age_band, state, metal_level, rating_area_str, age_band])
+
+            batch_query = "\nUNION ALL\n".join(union_queries)
+
+            try:
+                batch_df = pd.read_sql(batch_query, db.engine, params=tuple(params))
+                for _, row in batch_df.iterrows():
+                    key = (row['state'], row['rating_area_str'], row['age_band'])
+                    lcsp_lookup[key] = {
+                        'rate': float(row['lcsp_rate']) if pd.notna(row['lcsp_rate']) else 0.0,
+                        'plan_name': row['plan_marketing_name']
+                    }
+            except (ValueError, TypeError) as e:
+                result['errors'].append(f"Batch query error: {str(e)}")
+
+        # Process each employee using the batch lookup results
+        for emp in employee_data:
+            lcsp_data = lcsp_lookup.get(emp['location_key'])
+
+            if lcsp_data:
+                lcsp_ee_rate = lcsp_data['rate']
+                lcsp_plan_name = lcsp_data['plan_name']
+            else:
+                lcsp_ee_rate = 0.0
+                lcsp_plan_name = None
+                result['errors'].append(
+                    f"No {metal_level} rate for {emp['state']} RA {emp['rating_area']}, age {emp['age_band']}"
+                )
+
+            # Apply tier multiplier
+            tier_multiplier = FinancialSummaryCalculator.TIER_MULTIPLIERS.get(emp['family_status'], 1.0)
+            estimated_tier_premium = lcsp_ee_rate * tier_multiplier
+
+            # Estimate lives based on tier
+            lives = tier_lives.get(emp['family_status'], 1)
+
+            # Store employee detail record
+            result['employee_details'].append({
+                'employee_id': emp['employee_id'],
+                'first_name': emp['first_name'],
+                'last_name': emp['last_name'],
+                'state': emp['state'],
+                'rating_area': emp['rating_area'],
+                'family_status': emp['family_status'],
+                'ee_age': emp['ee_age'],
                 'lcsp_plan_name': lcsp_plan_name or 'No plan found',
                 'lcsp_ee_rate': lcsp_ee_rate,
                 'tier_multiplier': tier_multiplier,
                 'estimated_tier_premium': estimated_tier_premium,
-                'current_ee_monthly': current_ee,
-                'current_er_monthly': current_er,
-                'current_total_monthly': current_total,
-                'projected_2026_premium': projected_2026
+                'current_ee_monthly': emp['current_ee'],
+                'current_er_monthly': emp['current_er'],
+                'current_total_monthly': emp['current_total'],
+                'projected_2026_premium': emp['projected_2026']
             })
 
             # Add to state totals
+            state = emp['state']
             if state not in result['by_state']:
                 result['by_state'][state] = {
                     'employees': 0,
@@ -824,7 +870,7 @@ class FinancialSummaryCalculator:
             result['by_state'][state]['monthly'] += estimated_tier_premium
 
             result['total_monthly'] += estimated_tier_premium
-            result['total_projected_2026'] += projected_2026
+            result['total_projected_2026'] += emp['projected_2026']
             result['employees_covered'] += 1
             result['lives_covered'] += lives
 

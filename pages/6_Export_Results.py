@@ -16,6 +16,23 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from constants import EXPORT_FILE_PREFIX, DATE_FORMAT, FAMILY_STATUS_CODES
 from utils import DataFormatter, ContributionComparison
 from database import get_database_connection
+import re
+
+
+def sanitize_text_input(text: str, max_length: int = 100) -> str:
+    """
+    Sanitize text input for safe use in PDF generation.
+    - Strips whitespace
+    - Removes potentially problematic characters
+    - Limits length
+    """
+    if not text:
+        return ""
+    # Remove control characters and limit to printable ASCII + common unicode
+    sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', str(text))
+    # Strip and limit length
+    sanitized = sanitized.strip()[:max_length]
+    return sanitized
 
 # Try importing reportlab for PDF generation
 try:
@@ -97,8 +114,11 @@ else:
         col1, col2 = st.columns(2)
 
         with col1:
-            client_name = st.text_input("Client/Company Name", value="ABC Company")
-            consultant_name = st.text_input("Consultant Name", value="Your Name")
+            client_name_raw = st.text_input("Client/Company Name", value="ABC Company", max_chars=100)
+            consultant_name_raw = st.text_input("Consultant Name", value="Your Name", max_chars=100)
+            # Sanitize inputs for safe PDF generation
+            client_name = sanitize_text_input(client_name_raw)
+            consultant_name = sanitize_text_input(consultant_name_raw)
 
         with col2:
             include_employee_detail = st.checkbox(

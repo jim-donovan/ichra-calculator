@@ -760,13 +760,28 @@ class CensusProcessor:
         census_with_rating = census_df.copy()
         census_with_rating['rating_area_id'] = None
 
-        for idx, row in census_with_rating.iterrows():
-            rating_area_data = PlanQueries.get_rating_area_by_county(
-                db, row['state'], row['county']
-            )
+        # Batch query: get unique (state, county) pairs and look up all at once
+        if 'state' in census_with_rating.columns and 'county' in census_with_rating.columns:
+            # Get unique state/county pairs
+            state_county_pairs = list(census_with_rating[['state', 'county']].drop_duplicates().itertuples(index=False, name=None))
 
-            if not rating_area_data.empty:
-                census_with_rating.at[idx, 'rating_area_id'] = rating_area_data.iloc[0]['rating_area_id']
+            # Batch lookup all rating areas in one query
+            rating_areas_df = PlanQueries.get_rating_areas_batch(db, state_county_pairs)
+
+            if not rating_areas_df.empty:
+                # Create a lookup dict for fast mapping
+                rating_lookup = {}
+                for _, row in rating_areas_df.iterrows():
+                    key = (row['state_code'].upper(), row['county'].upper())
+                    rating_lookup[key] = row['rating_area_id']
+
+                # Apply to census
+                census_with_rating['rating_area_id'] = census_with_rating.apply(
+                    lambda row: rating_lookup.get(
+                        (str(row['state']).upper(), str(row['county']).upper())
+                    ),
+                    axis=1
+                )
 
         return census_with_rating
 
