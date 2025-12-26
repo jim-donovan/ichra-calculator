@@ -726,12 +726,18 @@ class FinancialSummaryCalculator:
             family_status = emp_row.get('Family Status', emp_row.get('family_status', 'EE'))
 
             # Get current premium from census (2025 data)
-            current_ee = emp_row.get('current_ee_monthly', 0) or 0
-            current_er = emp_row.get('current_er_monthly', 0) or 0
+            # Note: NaN or 0 evaluates to NaN (not 0) because bool(NaN) == True
+            current_ee_val = emp_row.get('current_ee_monthly', 0)
+            current_ee = 0.0 if pd.isna(current_ee_val) else float(current_ee_val or 0)
+            current_er_val = emp_row.get('current_er_monthly', 0)
+            current_er = 0.0 if pd.isna(current_er_val) else float(current_er_val or 0)
             current_total = current_ee + current_er
 
             # Get projected 2026 renewal premium (if available)
-            projected_2026 = emp_row.get('projected_2026_premium', 0) or 0
+            # Note: NaN or 0 evaluates to NaN (not 0) because bool(NaN) == True
+            # Must explicitly check for NaN using pd.isna()
+            projected_2026_val = emp_row.get('projected_2026_premium', 0)
+            projected_2026 = 0.0 if pd.isna(projected_2026_val) else float(projected_2026_val or 0)
 
             # Get rating area
             rating_area = emp_row.get('rating_area_id', 1)

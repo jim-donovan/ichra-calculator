@@ -146,9 +146,9 @@ exports/
 # Working files
 *.xlsx
 *.pptx
-.braingrid/
-.claude/
-.cursor/
+.braingrid
+.claude
+.cursor
 sendgrid.env
 
 # Documentation (local only)
