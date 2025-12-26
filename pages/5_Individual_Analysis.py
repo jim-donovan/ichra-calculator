@@ -205,7 +205,7 @@ def compare_current_vs_marketplace(employee_id: str, include_family: bool = True
             return float(val)
         try:
             return float(str(val).replace('$', '').replace(',', '').strip())
-        except:
+        except (ValueError, TypeError):
             return 0
 
     current_ee = parse_currency(current_ee)
@@ -435,7 +435,7 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
                 return float(val)
             try:
                 return float(str(val).replace('$', '').replace(',', '').strip())
-            except:
+            except (ValueError, TypeError):
                 return 0
 
         current_total = parse_currency(current_ee) + parse_currency(current_er)

@@ -966,7 +966,7 @@ def get_lcsp(employee_id: str, coverage_type: str = None) -> dict:
                 return "N/A"
             try:
                 return f"${float(val):,.0f}"
-            except:
+            except (ValueError, TypeError):
                 return str(val)
 
         # Calculate affordability threshold (9.12% of household income for 2026)
@@ -1139,7 +1139,7 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
                 return "N/A"
             try:
                 return f"${float(val):,.0f}"
-            except:
+            except (ValueError, TypeError):
                 return str(val)
 
         return {

@@ -115,13 +115,29 @@ WHERE
         case_statements = []
         all_required_areas = []
 
+        import re
+        # Validate inputs to prevent SQL injection
+        state_pattern = re.compile(r'^[A-Z]{2}$')
+
         for state, rating_areas in state_rating_areas.items():
-            # Store required areas for this state (will be joined back later)
+            # Validate state code format (must be exactly 2 uppercase letters)
+            if not state_pattern.match(str(state)):
+                raise ValueError(f"Invalid state code format: {state}")
+
+            # Validate rating areas are integers
+            validated_areas = []
             for ra in rating_areas:
+                if not isinstance(ra, (int, float)) or int(ra) != ra or int(ra) < 1 or int(ra) > 99:
+                    raise ValueError(f"Invalid rating area: {ra}")
+                validated_areas.append(int(ra))
+
+            # Store required areas for this state (will be joined back later)
+            for ra in validated_areas:
                 all_required_areas.append((state, ra))
 
             # Create a CASE WHEN for counting employee area coverage per state
-            rating_area_list = ', '.join([str(ra) for ra in rating_areas])
+            # Safe to interpolate after validation above
+            rating_area_list = ', '.join([str(ra) for ra in validated_areas])
             case_statements.append(f"""
                 WHEN SUBSTRING(p.hios_plan_id, 6, 2) = '{state}'
                     AND REPLACE(br.rating_area_id, 'Rating Area ', '')::integer IN ({rating_area_list})
@@ -1155,7 +1171,7 @@ class FinancialQueries:
 
         query += " ORDER BY p.level_of_coverage, p.plan_marketing_name"
 
-        return pd.read_sql(query, db.connect(), params=params)
+        return pd.read_sql(query, db.engine, params=params)
 
     @staticmethod
     def get_rates_batch(
@@ -1186,7 +1202,7 @@ class FinancialQueries:
           AND market_coverage = 'Individual'
         """
 
-        return pd.read_sql(query, db.connect(), params=(tuple(plan_ids),))
+        return pd.read_sql(query, db.engine, params=(tuple(plan_ids),))
 
     @staticmethod
     def get_plan_summary(
@@ -1220,7 +1236,7 @@ class FinancialQueries:
         LIMIT 1
         """
 
-        df = pd.read_sql(query, db.connect(), params=(plan_id,))
+        df = pd.read_sql(query, db.engine, params=(plan_id,))
 
         if df.empty:
             return {}
@@ -1257,7 +1273,7 @@ class FinancialQueries:
         ORDER BY p.hios_plan_id
         """
 
-        return pd.read_sql(query, db.connect(), params=(tuple(plan_ids),))
+        return pd.read_sql(query, db.engine, params=(tuple(plan_ids),))
 
 
 if __name__ == "__main__":

@@ -22,11 +22,6 @@ from dotenv import load_dotenv
 import anthropic
 import json
 from queries import PlanQueries
-from non_traditional_plans import (
-    NON_TRADITIONAL_PLANS,
-    calculate_non_traditional_costs,
-    get_savings_summary
-)
 
 # Load environment variables
 load_dotenv()
@@ -539,9 +534,7 @@ class AISuggestionEngine:
         self,
         census_df: pd.DataFrame,
         preferences: EmployerPreferences,
-        use_llm: bool = False,
-        custom_nontrad_rates: dict = None,
-        include_non_traditional: bool = False
+        use_llm: bool = False
     ) -> Tuple[List[ScoredPlan], Optional[str]]:
         """
         Generate plan suggestions using ACA-based scoring.
@@ -550,11 +543,6 @@ class AISuggestionEngine:
             census_df: Employee census DataFrame
             preferences: Employer preferences for filtering
             use_llm: Whether to use LLM for analysis (optional)
-            custom_nontrad_rates: Custom non-traditional plan rates (optional)
-                If provided, uses these rates instead of defaults for LLM analysis.
-                Structure: {2500: {(age_min, age_max): {'individual': rate, 'family': rate}}}
-            include_non_traditional: Whether to include non-traditional plan analysis (optional)
-                If False, LLM analysis focuses only on marketplace plans.
 
         Returns:
             Tuple of (scored_plans, llm_analysis)
@@ -604,9 +592,7 @@ class AISuggestionEngine:
                 candidate_plans=candidate_plans,
                 census_df=census_df,
                 preferences=preferences,
-                max_per_state=preferences.max_plans_per_state,
-                include_non_traditional=include_non_traditional,
-                custom_nontrad_rates=custom_nontrad_rates
+                max_per_state=preferences.max_plans_per_state
             )
 
             # Filter scored_plans to only include AI-selected plans
@@ -1081,9 +1067,7 @@ class LLMPlanAnalyzer:
         scored_plans: List[ScoredPlan],
         census_df: pd.DataFrame,
         preferences: EmployerPreferences,
-        top_n: int = 3,
-        custom_nontrad_rates: dict = None,
-        include_non_traditional: bool = False
+        top_n: int = 3
     ) -> str:
         """
         Generate LLM-powered analysis of top plan recommendations.
@@ -1093,15 +1077,13 @@ class LLMPlanAnalyzer:
             census_df: Employee census data
             preferences: Employer preferences
             top_n: Number of top plans to analyze
-            custom_nontrad_rates: Custom non-traditional plan rates (optional)
-            include_non_traditional: Whether to include non-traditional plan analysis
 
         Returns:
             Markdown-formatted analysis text
         """
         try:
             # Prepare context for LLM
-            context = self._prepare_context(scored_plans[:top_n], census_df, preferences, custom_nontrad_rates, include_non_traditional)
+            context = self._prepare_context(scored_plans[:top_n], census_df, preferences)
 
             # Create prompt
             prompt = self._create_analysis_prompt(context)
@@ -1135,9 +1117,7 @@ class LLMPlanAnalyzer:
         self,
         top_plans: List[ScoredPlan],
         census_df: pd.DataFrame,
-        preferences: EmployerPreferences,
-        custom_nontrad_rates: dict = None,
-        include_non_traditional: bool = False
+        preferences: EmployerPreferences
     ) -> Dict:
         """Prepare structured context for LLM"""
 
@@ -1201,54 +1181,26 @@ class LLMPlanAnalyzer:
         except (ImportError, AttributeError, RuntimeError):
             pass
 
-        # Build base context
+        # Build context
         context = {
             'census': census_summary,
             'lcsp_benchmarks': lcsp_benchmarks,
             'marketplace_plans': plan_summaries,
             'preferences': preferences_summary,
-            'current_group_plan': group_plan_data,
-            'include_non_traditional': include_non_traditional
+            'current_group_plan': group_plan_data
         }
 
-        # Only include non-traditional data if user selected it
-        if include_non_traditional:
-            # Calculate non-traditional plan costs (use custom rates if provided)
-            non_traditional_costs = calculate_non_traditional_costs(
-                census_df,
-                plan_key='modrn_dpc_bundle',
-                contribution_pct=preferences.contribution_pct,
-                deductible=2500,
-                custom_rates=custom_nontrad_rates
-            )
-
-            # Calculate savings summary including non-traditional
-            savings_data = get_savings_summary(
-                non_traditional_cost=non_traditional_costs['employer_annual_cost'],
-                marketplace_cost=marketplace_avg_annual,
-                group_plan_cost=group_plan_data.get('total_annual_cost') if group_plan_data else None
-            )
-
-            context['non_traditional_option'] = {
-                'plan_name': non_traditional_costs['plan_name'],
-                'costs': non_traditional_costs,
-                'features': NON_TRADITIONAL_PLANS['modrn_dpc_bundle']['features'],
-                'ideal_for': NON_TRADITIONAL_PLANS['modrn_dpc_bundle']['ideal_for'],
-                'considerations': NON_TRADITIONAL_PLANS['modrn_dpc_bundle']['considerations']
-            }
-            context['savings_analysis'] = savings_data
-        else:
-            # Marketplace-only savings analysis (no non-traditional comparison)
-            if group_plan_data:
-                group_cost = group_plan_data.get('total_annual_cost')
-                if group_cost:
-                    savings_vs_group = group_cost - marketplace_avg_annual
-                    context['savings_analysis'] = {
-                        'marketplace_vs_group': {
-                            'savings': savings_vs_group,
-                            'percentage': (savings_vs_group / group_cost * 100) if group_cost > 0 else 0
-                        }
+        # Marketplace savings analysis vs group plan
+        if group_plan_data:
+            group_cost = group_plan_data.get('total_annual_cost')
+            if group_cost:
+                savings_vs_group = group_cost - marketplace_avg_annual
+                context['savings_analysis'] = {
+                    'marketplace_vs_group': {
+                        'savings': savings_vs_group,
+                        'percentage': (savings_vs_group / group_cost * 100) if group_cost > 0 else 0
                     }
+                }
 
         return context
 
@@ -1256,11 +1208,10 @@ class LLMPlanAnalyzer:
         """Create the analysis prompt for Claude - focused on ICHRA cost savings strategy"""
 
         context_json = json.dumps(context, indent=2)
-        include_non_traditional = context.get('include_non_traditional', False)
 
-        # Common formatting guidelines
+        # Formatting guidelines
         formatting_guidelines = """**Guidelines:**
-- **Output plain text only. Do not use markdown formatting like **bold** or *italics*. 
+- **Output plain text only. Do not use markdown formatting like **bold** or *italics*.
 Format currency as plain numbers with $ prefix (e.g., $545,859.13).**
 - All numbers should be formatted as USD with commas (e.g., $12,345.67)
 - All percentages should be shown as whole numbers (e.g., 25% not 0.25)
@@ -1282,90 +1233,15 @@ Format currency as plain numbers with $ prefix (e.g., $545,859.13).**
 - When comparing costs, be clear about what is being compared (employer cost, employee cost, total cost)
 - If certain employees would benefit more from specific options, identify why (age, location, family status)"""
 
-        if include_non_traditional:
-            # Full prompt with non-traditional options
-            prompt = f"""Analyze this ICHRA transition opportunity for an employer considering moving from traditional group health insurance.
+        prompt = f"""Analyze this ICHRA transition opportunity for an employer considering moving from traditional group health insurance to marketplace plans.
 
 **Context:**
 {context_json}
-
-**CRITICAL FRAMING:**
-The marketplace plans shown are BENCHMARKS to help the employer understand the Individual marketplace landscape and set their ICHRA contribution strategy. The real opportunity is in non-traditional benefit solutions that can save 40-60% compared to both group plans and marketplace insurance.
-
-**Your Task:**
-Provide a strategic ICHRA savings analysis for the benefits consultant to present to their client. Structure your response as follows:
-
-## 💰 Cost Savings Potential (40% of analysis)
-
-**Lead with the money.** Calculate and present:
-- Total annual savings opportunity with ICHRA using non-traditional options
-- Comparison of three tiers:
-  1. Current group plan cost (if available in context)
-  2. Average marketplace plan cost (from benchmark plans provided)
-  3. Non-traditional option cost (ModRN + DPC bundle)
-- Dollar savings and percentage reduction for each transition
-- ROI timeline and break-even analysis
-- **Key message:** "You could save $X annually by transitioning to ICHRA with non-traditional benefits"
-
-## 🏥 Non-Traditional Benefit Strategies (30% of analysis)
-
-**Position as the primary cost-saving strategy.** Explain:
-- What the non-traditional option is (Direct Primary Care + ModRN virtual care + health sharing co-op)
-- Why it costs 40-60% less than traditional insurance:
-  - No insurance middleman for primary care
-  - Health sharing is not insurance (lower overhead, less regulation)
-  - Virtual care reduces expensive in-person visits
-  - Not subject to all ACA mandates
-- Multi-tier ICHRA strategy:
-  - **Tier 1 (Recommended):** Non-traditional bundle - most cost-effective for healthy employees
-  - **Tier 2:** Marketplace Silver/Gold - employee choice and flexibility
-  - **Tier 3:** Marketplace Platinum - for employees with complex medical needs
-- Implementation considerations and employee education needs
-- Risk mitigation: ensure employees understand non-traditional options are not traditional insurance
-
-## 📊 Marketplace Plan Benchmarks & Affordability (30% of analysis)
-
-**Frame as educational context AND affordability compliance.** Include:
-
-**AFFORDABILITY ANALYSIS (CRITICAL):**
-- The LOWEST-COST SILVER PLAN (LCSP) data is provided in the `lcsp_benchmarks` array in the context
-- Use these pre-calculated LCSP premiums as the benchmark for ICHRA affordability safe harbor compliance
-- For each state/rating area, the LCSP premium is provided - do NOT attempt to identify LCSP from the marketplace plans
-- Calculate the minimum employer contribution needed to cover LCSP
-- Note whether the current contribution strategy meets affordability requirements (9.96% safe harbor)
-
-**Marketplace Overview:**
-- What employees COULD buy on the Individual marketplace with their ICHRA allowance
-- Range of premiums by state to inform contribution strategy
-- Plan variety (metal levels, plan types) to demonstrate employee choice
-- How employer contribution percentage affects employee out-of-pocket costs
-
-For each benchmark plan, briefly note:
-- State and metal level
-- Average monthly cost
-- Whether it is the lowest-cost Silver (flag this clearly)
-- Who it might appeal to (e.g., "good for employees wanting traditional PPO network")
-
-{formatting_guidelines}
-- Be balanced - acknowledge considerations for non-traditional options
-
-**Output Format:**
-Return your analysis in markdown format following the three-section structure above."""
-
-        else:
-            # Marketplace-only prompt (NO non-traditional content)
-            prompt = f"""Analyze this ICHRA transition opportunity for an employer considering moving from traditional group health insurance to marketplace plans.
-
-**Context:**
-{context_json}
-
-**CRITICAL FRAMING:**
-The employer has chosen to focus on traditional ACA marketplace plans for their ICHRA strategy. Do NOT mention or recommend non-traditional options, health sharing, DPC bundles, or ModRN plans - these are not being considered.
 
 **Your Task:**
 Provide a strategic ICHRA marketplace analysis for the benefits consultant to present to their client. Structure your response as follows:
 
-## 💰 ICHRA Affordability & Cost Analysis (40% of analysis)
+## ICHRA Affordability & Cost Analysis (40% of analysis)
 
 **Start with affordability compliance, then lead with the numbers.**
 
@@ -1383,7 +1259,7 @@ Provide a strategic ICHRA marketplace analysis for the benefits consultant to pr
 - Per-employee cost breakdown by state
 - **Key message:** Focus on the employer's contribution strategy and affordability compliance
 
-## 📊 Recommended Marketplace Plans (40% of analysis)
+## Recommended Marketplace Plans (40% of analysis)
 
 **Position these as your recommendations.** For each plan:
 - Plan name, state, and metal level
@@ -1394,7 +1270,7 @@ Provide a strategic ICHRA marketplace analysis for the benefits consultant to pr
 - Which employee demographics it best serves
 - **Key message:** These are curated recommendations based on the employer's preferences and employee needs
 
-## 🎯 ICHRA Implementation Strategy (20% of analysis)
+## ICHRA Implementation Strategy (20% of analysis)
 
 **Practical next steps:**
 - Minimum contribution recommendations based on LCSP data provided (use the `lcsp_benchmarks` premiums)
@@ -1406,9 +1282,7 @@ Provide a strategic ICHRA marketplace analysis for the benefits consultant to pr
 {formatting_guidelines}
 
 **Output Format:**
-Return your analysis in markdown format following the three-section structure above.
-
-**IMPORTANT:** Do NOT mention non-traditional options, health sharing plans, DPC, ModRN, or any alternatives to ACA marketplace plans. The employer has specifically chosen a marketplace-only approach."""
+Return your analysis in markdown format following the three-section structure above."""
 
         return prompt
 
@@ -1417,9 +1291,7 @@ Return your analysis in markdown format following the three-section structure ab
         candidate_plans: List[ScoredPlan],
         census_df: pd.DataFrame,
         preferences: EmployerPreferences,
-        max_per_state: int = 1,
-        include_non_traditional: bool = False,
-        custom_nontrad_rates: dict = None
+        max_per_state: int = 1
     ) -> Tuple[List[str], str]:
         """
         Use LLM to intelligently select the best plans from scored candidates.
@@ -1429,8 +1301,6 @@ Return your analysis in markdown format following the three-section structure ab
             census_df: Employee census data
             preferences: Employer preferences
             max_per_state: Maximum plans to select per state
-            include_non_traditional: Whether to include non-traditional options
-            custom_nontrad_rates: Custom non-traditional plan rates
 
         Returns:
             Tuple of (selected_plan_ids, analysis_markdown)
@@ -1448,9 +1318,7 @@ Return your analysis in markdown format following the three-section structure ab
             context = self._prepare_selection_context(
                 candidates_by_state,
                 census_df,
-                preferences,
-                include_non_traditional,
-                custom_nontrad_rates
+                preferences
             )
 
             # Create selection prompt
@@ -1494,9 +1362,7 @@ Return your analysis in markdown format following the three-section structure ab
         self,
         candidates_by_state: Dict[str, List[ScoredPlan]],
         census_df: pd.DataFrame,
-        preferences: EmployerPreferences,
-        include_non_traditional: bool,
-        custom_nontrad_rates: dict = None
+        preferences: EmployerPreferences
     ) -> Dict:
         """Prepare context for LLM plan selection"""
 
@@ -1550,24 +1416,8 @@ Return your analysis in markdown format following the three-section structure ab
         context = {
             'census': census_summary,
             'candidates_by_state': candidates_data,
-            'preferences': preferences_data,
-            'include_non_traditional': include_non_traditional
+            'preferences': preferences_data
         }
-
-        # Add non-traditional option if selected
-        if include_non_traditional:
-            non_traditional_costs = calculate_non_traditional_costs(
-                census_df,
-                plan_key='modrn_dpc_bundle',
-                contribution_pct=preferences.contribution_pct,
-                deductible=2500,
-                custom_rates=custom_nontrad_rates
-            )
-            context['non_traditional_option'] = {
-                'plan_name': non_traditional_costs['plan_name'],
-                'costs': non_traditional_costs,
-                'features': NON_TRADITIONAL_PLANS['modrn_dpc_bundle']['features']
-            }
 
         return context
 
@@ -1575,7 +1425,6 @@ Return your analysis in markdown format following the three-section structure ab
         """Create prompt for LLM to select best plans"""
 
         context_json = json.dumps(context, indent=2)
-        include_non_traditional = context.get('include_non_traditional', False)
 
         prompt = f"""SELECT the best marketplace plan(s) for each state based on the employer's workforce, preferences, and ICHRA affordability requirements.
 
@@ -1614,31 +1463,25 @@ Then provide your detailed analysis below the JSON block.
 
 After the JSON block, provide a comprehensive analysis including:
 
-### 💰 Cost Analysis & Affordability
+### Cost Analysis & Affordability
 - **Lowest-cost Silver plan by state** - Identify the benchmark plan for each state
 - Total employer cost across all selected plans
 - Cost breakdown by state
 - Per-employee cost averages
 - Affordability assessment: Does the employer contribution cover the lowest-cost Silver?
 
-### 📊 Why These Plans Were Selected
+### Why These Plans Were Selected
 For each state, explain:
 - Why the selected plan is the best choice
 - How it compares to the lowest-cost Silver benchmark
 - Key trade-offs considered
 - How it aligns with employer preferences
 
-### 🎯 ICHRA Implementation Recommendations
+### ICHRA Implementation Recommendations
 - Contribution strategy to meet affordability safe harbor (lowest-cost Silver benchmark)
 - Recommended minimum contribution per employee class (if applicable)
 - Employee communication considerations
 - Any state-specific considerations
-
-{f'''### 🏥 Non-Traditional Option Comparison
-Compare the marketplace selections to the non-traditional bundle option.
-- Cost savings potential with non-traditional
-- Which employees might benefit from each approach
-- Recommended tiered strategy''' if include_non_traditional else ''}
 
 **TRANSPARENCY REQUIREMENT:**
 Be explicit about what factors influenced your selections:

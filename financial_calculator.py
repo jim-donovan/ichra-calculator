@@ -119,7 +119,7 @@ class FinancialSummaryCalculator:
             """
 
             try:
-                df = pd.read_sql(query, db.connect(), params=(state, tuple(metal_levels)))
+                df = pd.read_sql(query, db.engine, params=(state, tuple(metal_levels)))
                 result[state] = df.to_dict('records')
             except Exception as e:
                 print(f"Error fetching plans for {state}: {e}")
@@ -193,7 +193,7 @@ class FinancialSummaryCalculator:
                 """
 
                 try:
-                    df = pd.read_sql(query, db.connect(), params=(
+                    df = pd.read_sql(query, db.engine, params=(
                         state,
                         metal_level,
                         f"Rating Area {rating_area}",
@@ -209,7 +209,7 @@ class FinancialSummaryCalculator:
             # If no plan found in any employee's rating area, try Rating Area 1 as fallback
             if not plan_found and 1 not in rating_areas:
                 try:
-                    df = pd.read_sql(query, db.connect(), params=(
+                    df = pd.read_sql(query, db.engine, params=(
                         state,
                         metal_level,
                         "Rating Area 1",
@@ -322,7 +322,7 @@ class FinancialSummaryCalculator:
         """
 
         try:
-            df = pd.read_sql(query, db.connect(), params=(tuple(plan_ids),))
+            df = pd.read_sql(query, db.engine, params=(tuple(plan_ids),))
             return df
         except Exception as e:
             print(f"Error fetching rates: {e}")
@@ -521,9 +521,9 @@ class FinancialSummaryCalculator:
         """
 
         try:
-            df = pd.read_sql(query, db.connect(), params=(tuple(plan_ids),))
+            df = pd.read_sql(query, db.engine, params=(tuple(plan_ids),))
             return dict(zip(df['hios_plan_id'], df['plan_marketing_name']))
-        except:
+        except Exception:
             return {}
 
     @staticmethod
@@ -548,7 +548,7 @@ class FinancialSummaryCalculator:
             s = str(val).replace('$', '').replace(',', '').replace('"', '').strip()
             try:
                 return float(s)
-            except:
+            except (ValueError, TypeError):
                 return 0.0
 
         # Find contribution columns
@@ -607,7 +607,7 @@ class FinancialSummaryCalculator:
                 return 0.0
             try:
                 return float(s)
-            except:
+            except (ValueError, TypeError):
                 return 0.0
 
         result = {
@@ -771,7 +771,7 @@ class FinancialSummaryCalculator:
             lcsp_plan_name = None
 
             try:
-                df = pd.read_sql(query, db.connect(), params=(
+                df = pd.read_sql(query, db.engine, params=(
                     state, metal_level, rating_area_str, age_band
                 ))
                 if not df.empty and pd.notna(df.iloc[0]['lcsp_rate']):

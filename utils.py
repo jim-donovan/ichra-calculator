@@ -2085,12 +2085,8 @@ class WorkforceFitAnalyzer:
 
         # Strategic fit calculations
 
-        # Non-traditional fit: Best for younger (18-45), healthy workforces
-        # Higher percentage under 45 = higher fit
-        non_traditional_fit = young_workforce_pct
-
-        # Marketplace fit: Everyone can use marketplace, but older employees may prefer richer plans
-        # This is complement of non-traditional fit
+        # Marketplace fit: Everyone can use marketplace
+        # Younger workforces may prefer lower-cost Bronze/Silver, older may prefer Gold/Platinum
         marketplace_fit = 1 - (young_workforce_pct * 0.3)  # Most workforces fit marketplace well
 
         # Generate strategic headline
@@ -2126,14 +2122,12 @@ class WorkforceFitAnalyzer:
             'family_status_insights': family_status_insights,
 
             # Strategic insights
-            'non_traditional_fit_score': round(non_traditional_fit * 100, 1),
             'marketplace_fit_score': round(marketplace_fit * 100, 1),
 
             # Recommendation headline
             'headline': headline,
             'recommendation': WorkforceFitAnalyzer._generate_recommendation(
-                young_workforce_pct=young_workforce_pct,
-                non_traditional_fit=non_traditional_fit
+                young_workforce_pct=young_workforce_pct
             )
         }
 
@@ -2182,38 +2176,35 @@ class WorkforceFitAnalyzer:
 
     @staticmethod
     def _generate_recommendation(
-        young_workforce_pct: float,
-        non_traditional_fit: float
+        young_workforce_pct: float
     ) -> str:
         """
         Generate strategic recommendation text
 
         Args:
             young_workforce_pct: Percentage under 45
-            non_traditional_fit: Non-traditional fit score (0-1)
 
         Returns:
             Recommendation text
         """
-        if non_traditional_fit >= 0.60:
+        if young_workforce_pct >= 0.60:
             return (
                 f"With {int(young_workforce_pct * 100)}% of employees under 45, "
-                "this workforce is well-suited for a three-tier strategy including "
-                "non-traditional options (ModRN + DPC + Health Co-op) as the default tier, "
-                "offering significant cost savings for healthy employees while providing "
-                "marketplace alternatives for those preferring traditional insurance."
+                "this workforce is well-suited for cost-effective Bronze and Silver marketplace plans. "
+                "Consider offering a tiered ICHRA contribution strategy that provides flexibility "
+                "while controlling costs."
             )
-        elif non_traditional_fit >= 0.40:
+        elif young_workforce_pct >= 0.40:
             return (
                 f"With {int(young_workforce_pct * 100)}% of employees under 45, "
-                "consider a balanced approach with both marketplace plans and optional "
-                "non-traditional bundles to maximize employee choice and cost efficiency."
+                "a balanced marketplace strategy with Silver and Gold plan options "
+                "will provide good coverage across your workforce demographics."
             )
         else:
             return (
                 "This workforce demographics suggest focusing on marketplace Silver and Gold plans "
-                "with strong provider networks and comprehensive coverage, reserving non-traditional "
-                "options for younger, healthier employee segments."
+                "with strong provider networks and comprehensive coverage to meet the needs "
+                "of your experienced workforce."
             )
 
 

@@ -15,7 +15,7 @@ class DatabaseConnection:
     """Manages PostgreSQL database connections"""
 
     def __init__(self, host: str = "localhost", port: int = 5432,
-                 database: str = "pricing-proposal", user: str = "jimdonovan"):
+                 database: str = "pricing-proposal", user: Optional[str] = None):
         """
         Initialize database connection parameters
 
@@ -28,7 +28,10 @@ class DatabaseConnection:
         self.host = host
         self.port = port
         self.database = database
-        self.user = user
+        # Get user from parameter, environment, or current OS user
+        import os
+        import getpass
+        self.user = user or os.environ.get('DB_USER') or getpass.getuser()
         self._conn = None
         self._engine = None
 
@@ -48,7 +51,9 @@ class DatabaseConnection:
                     user=self.user
                 )
             except psycopg2.Error as e:
-                st.error(f"Database connection error: {e}")
+                import logging
+                logging.error(f"Database connection error: {e}")
+                st.error("Database connection error. Please check your configuration.")
                 raise
         return self._conn
 
@@ -90,7 +95,9 @@ class DatabaseConnection:
                     conn.commit()
                     return pd.DataFrame()
         except psycopg2.Error as e:
-            st.error(f"Query execution error: {e}")
+            import logging
+            logging.error(f"Query execution error: {e}")
+            st.error("Database query error. Please try again or contact support.")
             conn.rollback()
             raise
 
