@@ -1,6 +1,7 @@
 """
 Page 7: Proposal Generator
 Generate branded GLOVE PowerPoint proposals from ICHRA analysis
+Includes email delivery via SendGrid
 """
 
 import streamlit as st
@@ -18,6 +19,7 @@ from fit_score_calculator import FitScoreCalculator, FIT_SCORE_WEIGHTS
 from database import get_database_connection
 from constants import FAMILY_STATUS_CODES
 from utils import ContributionComparison
+from email_service import EmailService, validate_email, validate_file_size
 
 # Template path for PPTX (with placeholders)
 PPTX_TEMPLATE_PATH = Path(__file__).parent.parent / 'templates' / 'glove_proposal_template.pptx'
@@ -46,6 +48,16 @@ if 'proposal_buffer' not in st.session_state:
 
 if 'proposal_filename' not in st.session_state:
     st.session_state.proposal_filename = None
+
+# Email delivery state
+if 'email_result' not in st.session_state:
+    st.session_state.email_result = None
+
+if 'recipient_email' not in st.session_state:
+    st.session_state.recipient_email = ""
+
+if 'send_email_enabled' not in st.session_state:
+    st.session_state.send_email_enabled = False
 
 # Page header
 st.title("📑 Proposal Generator")
@@ -429,13 +441,87 @@ export_format = st.radio(
     label_visibility="collapsed"
 )
 
+# =============================================================================
+# EMAIL DELIVERY SECTION
+# =============================================================================
+st.markdown("---")
+st.subheader("📧 Email Delivery (Optional)")
+
+# Check if email service is configured
+email_service = EmailService()
+is_email_configured, email_config_error = email_service.is_configured()
+
+if not is_email_configured:
+    st.info("""
+    📧 **Email delivery not configured**
+
+    To enable email delivery, set the following environment variables in `.env`:
+    - `SENDGRID_API_KEY` - Your SendGrid API key
+    - `MONITORING_EMAIL` - Email address for failure notifications (optional)
+
+    You can still generate and download proposals manually.
+    """)
+    send_email_enabled = False
+else:
+    send_email_enabled = st.checkbox(
+        "Send proposal via email after generation",
+        value=st.session_state.send_email_enabled,
+        key="send_email_checkbox"
+    )
+    st.session_state.send_email_enabled = send_email_enabled
+
+    if send_email_enabled:
+        email_col1, email_col2 = st.columns([2, 1])
+
+        with email_col1:
+            recipient_email = st.text_input(
+                "Recipient Email Address",
+                value=st.session_state.recipient_email,
+                placeholder="client@example.com",
+                help="Enter the email address to send the proposal to",
+                key="recipient_email_input"
+            )
+            st.session_state.recipient_email = recipient_email
+
+            # Validate email in real-time
+            if recipient_email:
+                is_valid, error_msg = validate_email(recipient_email)
+                if not is_valid:
+                    st.error(f"⚠️ {error_msg}")
+
+        with email_col2:
+            st.markdown("&nbsp;")  # Spacer
+            st.caption("📨 The proposal will be sent as an attachment immediately after generation.")
+
 st.markdown("---")
 
-generate_col1, generate_col2 = st.columns([2, 1])
+# =============================================================================
+# GENERATE AND SEND BUTTONS
+# =============================================================================
+generate_col1, generate_col2, generate_col3 = st.columns([2, 1, 1])
 
 with generate_col1:
-    button_label = "🚀 Generate PDF Proposal" if "PDF" in export_format else "🚀 Generate PowerPoint Proposal"
-    if st.button(button_label, type="primary", use_container_width=True):
+    # Determine button label based on email settings
+    if send_email_enabled and st.session_state.recipient_email:
+        button_label = "🚀 Generate & Send"
+    else:
+        button_label = "🚀 Generate PDF Proposal" if "PDF" in export_format else "🚀 Generate PowerPoint Proposal"
+
+    # Validate before allowing generation with email
+    can_generate = True
+    if send_email_enabled:
+        if not st.session_state.recipient_email:
+            st.warning("⚠️ Please enter a recipient email address to send the proposal.")
+            can_generate = False
+        else:
+            is_valid, _ = validate_email(st.session_state.recipient_email)
+            if not is_valid:
+                can_generate = False
+
+    if st.button(button_label, type="primary", use_container_width=True, disabled=not can_generate):
+        # Reset email result
+        st.session_state.email_result = None
+
         with st.spinner("Generating proposal..."):
             try:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -460,6 +546,34 @@ with generate_col1:
 
                 st.success("✅ Proposal generated successfully!")
 
+                # Check file size before attempting email
+                if send_email_enabled and st.session_state.recipient_email:
+                    file_data = st.session_state.proposal_buffer.getvalue()
+                    is_size_valid, size_error = validate_file_size(file_data, st.session_state.proposal_filename)
+
+                    if not is_size_valid:
+                        st.error(f"📁 {size_error}")
+                        st.session_state.email_result = {
+                            "success": False,
+                            "error_message": size_error
+                        }
+                    else:
+                        # Send email
+                        with st.spinner("Sending email..."):
+                            result = email_service.send_proposal_email(
+                                recipient_email=st.session_state.recipient_email,
+                                client_name=client_name,
+                                attachment_data=file_data,
+                                attachment_filename=st.session_state.proposal_filename,
+                                presentation_id=f"{client_name_safe}_{timestamp}"
+                            )
+                            st.session_state.email_result = result.to_dict()
+
+                            if result.success:
+                                st.success(f"✅ Email sent successfully to {result.recipient}!")
+                            else:
+                                st.error(f"❌ Failed to send email: {result.error_message}")
+
             except Exception as e:
                 st.error(f"Error generating proposal: {e}")
                 import traceback
@@ -468,15 +582,65 @@ with generate_col1:
 with generate_col2:
     # Download button (only shown after generation)
     if st.session_state.proposal_buffer is not None:
-        download_label = "📥 Download PDF" if st.session_state.proposal_filename.endswith('.pdf') else "📥 Download PowerPoint"
+        download_label = "📥 Download"
         st.download_button(
             label=download_label,
             data=st.session_state.proposal_buffer.getvalue(),
             file_name=st.session_state.proposal_filename,
             mime=st.session_state.get('proposal_mime', 'application/pdf'),
-            type="primary",
+            type="secondary",
             use_container_width=True
         )
+
+with generate_col3:
+    # Retry email button (only shown after failed email attempt)
+    if (st.session_state.email_result is not None
+        and not st.session_state.email_result.get("success", False)
+        and st.session_state.proposal_buffer is not None
+        and is_email_configured):
+
+        if st.button("🔄 Retry Email", type="secondary", use_container_width=True):
+            with st.spinner("Retrying email..."):
+                file_data = st.session_state.proposal_buffer.getvalue()
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                client_name_safe = client_name.replace(' ', '_').replace('/', '-')
+
+                result = email_service.send_proposal_email(
+                    recipient_email=st.session_state.recipient_email,
+                    client_name=client_name,
+                    attachment_data=file_data,
+                    attachment_filename=st.session_state.proposal_filename,
+                    presentation_id=f"{client_name_safe}_{timestamp}"
+                )
+                st.session_state.email_result = result.to_dict()
+
+                if result.success:
+                    st.success(f"✅ Email sent successfully to {result.recipient}!")
+                else:
+                    st.error(f"❌ Failed to send email: {result.error_message}")
+
+# =============================================================================
+# EMAIL STATUS DISPLAY
+# =============================================================================
+if st.session_state.email_result is not None:
+    result = st.session_state.email_result
+    if result.get("success"):
+        st.markdown(f"""
+        <div style="padding: 15px; background: #dcfce7; border-radius: 8px; border-left: 4px solid #16a34a;">
+            <strong>📧 Email Delivered</strong><br>
+            <span style="color: #166534;">Sent to: {result.get('recipient')}</span><br>
+            <span style="color: #166534; font-size: 0.9em;">At: {result.get('sent_at', 'N/A')}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        error_msg = result.get('error_message', 'Unknown error')
+        st.markdown(f"""
+        <div style="padding: 15px; background: #fef2f2; border-radius: 8px; border-left: 4px solid #dc2626;">
+            <strong>❌ Email Delivery Failed</strong><br>
+            <span style="color: #991b1b;">{error_msg}</span><br>
+            <span style="color: #991b1b; font-size: 0.9em;">The proposal has been preserved - you can download it manually or retry sending.</span>
+        </div>
+        """, unsafe_allow_html=True)
 
 # =============================================================================
 # FOOTER
@@ -489,4 +653,5 @@ st.info("""
 - Current costs should be entered for accurate savings calculations
 - **PDF (Recommended):** Renders perfectly every time with all graphics intact
 - **PowerPoint:** Editable after download, but complex graphics may not display correctly
+- **Email Delivery:** Enable email delivery to automatically send the proposal to your client after generation
 """)
