@@ -151,10 +151,15 @@ check_az_*.py
 # Documentation (local only)
 CODE_REVIEW.md
 IMPLEMENTATION_SUMMARY.md
+CLAUDE.md
+DATABASE_SCHEMA.md
+RATE_CONFIGURATION_GUIDE.md
+PLACEHOLDER_REFERENCE.md
 
 # Unused files
 pdf_playwright_renderer.py
 pdf_strategic_proposal.py
+run.sh
 
 # Fonts (local only)
 fonts/
