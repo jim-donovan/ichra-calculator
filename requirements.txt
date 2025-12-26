@@ -29,6 +29,9 @@ requests>=2.31.0
 # Utilities
 python-dateutil>=2.8.2
 
+# Security
+bcrypt>=4.0.0
+
 # AI/LLM
 anthropic>=0.40.0
 python-dotenv>=1.0.0

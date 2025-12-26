@@ -339,6 +339,26 @@ if st.session_state.census_df is not None:
 
 else:
     # No census loaded - show file uploader
+    # Rate limiting for file uploads
+    import time
+    MAX_UPLOADS_PER_HOUR = 20
+    UPLOAD_WINDOW_SECONDS = 3600  # 1 hour
+
+    if 'upload_timestamps' not in st.session_state:
+        st.session_state.upload_timestamps = []
+
+    # Clean old timestamps
+    current_time = time.time()
+    st.session_state.upload_timestamps = [
+        t for t in st.session_state.upload_timestamps
+        if current_time - t < UPLOAD_WINDOW_SECONDS
+    ]
+
+    uploads_remaining = MAX_UPLOADS_PER_HOUR - len(st.session_state.upload_timestamps)
+    if uploads_remaining <= 0:
+        st.error("❌ Upload rate limit reached. Please wait before uploading more files.")
+        st.stop()
+
     uploaded_file = st.file_uploader(
         "Choose your census file",
         type=['csv', 'txt', 'tsv'],
@@ -346,6 +366,9 @@ else:
     )
 
     if uploaded_file is not None:
+        # Record this upload attempt
+        st.session_state.upload_timestamps.append(current_time)
+
         try:
             # Security validation for file upload
             MAX_FILE_SIZE_MB = 10
@@ -407,6 +430,20 @@ else:
                 st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
                 st.info("Please download and use the template to ensure all required columns are present.")
                 st.stop()
+
+            # Security: Check for CSV formula injection
+            # Formulas starting with =, @, +, - can execute when opened in Excel
+            formula_pattern = r'^[\s]*[=@\+\-]'
+            import re
+            for col in census_raw.columns:
+                if census_raw[col].dtype == 'object':  # Only check string columns
+                    suspicious = census_raw[col].astype(str).str.match(formula_pattern, na=False)
+                    if suspicious.any():
+                        # Sanitize by prefixing with single quote (Excel treats as text)
+                        census_raw[col] = census_raw[col].apply(
+                            lambda x: f"'{x}" if isinstance(x, str) and re.match(formula_pattern, x) else x
+                        )
+                        st.warning(f"⚠️ Sanitized potential formula content in column '{col}'")
 
             # Clean up ZIP codes: remove .0 suffix if present (from Excel numeric formatting)
             # Handle ZIP+4 format (e.g., "29654-7352" -> "29654")

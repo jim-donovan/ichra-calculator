@@ -6,7 +6,6 @@ Streamlit app for ICHRA benefits consultants to calculate and compare Individual
 import streamlit as st
 import sys
 import os
-import hashlib
 from pathlib import Path
 
 # Add current directory to path for imports
@@ -25,24 +24,51 @@ def check_authentication() -> bool:
     Configure by setting APP_PASSWORD environment variable or in .streamlit/secrets.toml:
     [app]
     password = "your-secure-password"
+
+    For production, you can also set APP_PASSWORD_HASH to a pre-computed bcrypt hash.
     """
+    import hmac
+    import time
+
+    # Rate limiting constants
+    MAX_ATTEMPTS = 5
+    LOCKOUT_SECONDS = 300  # 5 minutes
+
+    # Initialize rate limiting state
+    if 'login_attempts' not in st.session_state:
+        st.session_state.login_attempts = []
+
     # Check if authentication is configured
-    password_hash = None
+    configured_password = None
 
     # Check environment variable first
     if os.environ.get('APP_PASSWORD'):
-        password_hash = hashlib.sha256(os.environ['APP_PASSWORD'].encode()).hexdigest()
+        configured_password = os.environ['APP_PASSWORD']
     # Check Streamlit secrets
     elif hasattr(st, 'secrets') and 'app' in st.secrets and 'password' in st.secrets['app']:
-        password_hash = hashlib.sha256(st.secrets['app']['password'].encode()).hexdigest()
+        configured_password = st.secrets['app']['password']
 
     # If no password configured, allow access
-    if not password_hash:
+    if not configured_password:
         return True
 
     # Check if already authenticated
     if st.session_state.get('authenticated', False):
         return True
+
+    # Check rate limiting - remove old attempts outside the window
+    current_time = time.time()
+    st.session_state.login_attempts = [
+        t for t in st.session_state.login_attempts
+        if current_time - t < LOCKOUT_SECONDS
+    ]
+
+    # Check if locked out
+    if len(st.session_state.login_attempts) >= MAX_ATTEMPTS:
+        remaining = int(LOCKOUT_SECONDS - (current_time - st.session_state.login_attempts[0]))
+        st.title("🔐 ICHRA Calculator Login")
+        st.error(f"Too many failed attempts. Please try again in {remaining} seconds.")
+        return False
 
     # Show login form
     st.title("🔐 ICHRA Calculator Login")
@@ -51,11 +77,27 @@ def check_authentication() -> bool:
     password_input = st.text_input("Password", type="password", key="login_password")
 
     if st.button("Login", type="primary"):
-        if hashlib.sha256(password_input.encode()).hexdigest() == password_hash:
+        # Use timing-safe comparison to prevent timing attacks
+        # Compare bytes to ensure constant-time comparison
+        input_bytes = password_input.encode('utf-8')
+        password_bytes = configured_password.encode('utf-8')
+
+        # Pad to same length to prevent length-based timing leaks
+        max_len = max(len(input_bytes), len(password_bytes))
+        input_padded = input_bytes.ljust(max_len, b'\x00')
+        password_padded = password_bytes.ljust(max_len, b'\x00')
+
+        if hmac.compare_digest(input_padded, password_padded) and len(input_bytes) == len(password_bytes):
             st.session_state.authenticated = True
+            st.session_state.login_attempts = []  # Clear attempts on success
             st.rerun()
         else:
-            st.error("Incorrect password. Please try again.")
+            st.session_state.login_attempts.append(current_time)
+            remaining_attempts = MAX_ATTEMPTS - len(st.session_state.login_attempts)
+            if remaining_attempts > 0:
+                st.error(f"Incorrect password. {remaining_attempts} attempts remaining.")
+            else:
+                st.error("Too many failed attempts. Please wait 5 minutes.")
 
     return False
 

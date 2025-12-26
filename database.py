@@ -52,7 +52,12 @@ class DatabaseConnection:
                 )
             except psycopg2.Error as e:
                 import logging
-                logging.error(f"Database connection error: {e}")
+                import os
+                # Only log detailed errors in debug mode to prevent info leakage
+                if os.environ.get('DEBUG', '').lower() == 'true':
+                    logging.error(f"Database connection error: {e}")
+                else:
+                    logging.error(f"Database connection error: {type(e).__name__}")
                 st.error("Database connection error. Please check your configuration.")
                 raise
         return self._conn
@@ -96,7 +101,12 @@ class DatabaseConnection:
                     return pd.DataFrame()
         except psycopg2.Error as e:
             import logging
-            logging.error(f"Query execution error: {e}")
+            import os
+            # Only log detailed errors in debug mode to prevent info leakage
+            if os.environ.get('DEBUG', '').lower() == 'true':
+                logging.error(f"Query execution error: {e}")
+            else:
+                logging.error(f"Query execution error: {type(e).__name__}")
             st.error("Database query error. Please try again or contact support.")
             conn.rollback()
             raise
