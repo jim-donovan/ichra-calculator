@@ -1,0 +1,34 @@
+# ICHRA Calculator Requirements
+# Python dependencies for Streamlit application
+
+# Core web framework
+streamlit>=1.28.0
+
+# Database
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+
+# Data manipulation
+pandas>=2.1.0
+numpy>=1.24.0
+openpyxl>=3.1.0  # Excel file reading for non-traditional rate configuration
+
+# Visualization
+plotly>=5.17.0
+
+# PDF generation
+reportlab>=4.0.0
+
+# PowerPoint generation
+python-pptx>=0.6.21
+
+# PDF reading (for SBC documents)
+pypdf>=4.0.0
+requests>=2.31.0
+
+# Utilities
+python-dateutil>=2.8.2
+
+# AI/LLM
+anthropic>=0.40.0
+python-dotenv>=1.0.0

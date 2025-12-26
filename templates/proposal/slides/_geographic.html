@@ -1,0 +1,70 @@
+<!-- Slide 5: Geographic Distribution -->
+<div class="slide slide--cream p-50">
+    <div class="section-header">COST ANALYSIS</div>
+
+    <h2 class="title-lg mb-10">UNDERSTANDING YOUR</h2>
+    <h2 class="title-lg text-teal mb-30">WORKFORCE</h2>
+
+    <div class="flex gap-40" style="height: calc(100% - 220px);">
+        <!-- Left column -->
+        <div style="flex: 1;">
+            <!-- Summary card -->
+            <div class="card card--maroon mb-30" style="padding: 20px 30px;">
+                <div class="flex gap-40">
+                    <div>
+                        <p class="text-xs text-cream" style="opacity: 0.8;">EMPLOYEES</p>
+                        <p class="title-lg text-cream">{{ data.employee_count }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs text-cream" style="opacity: 0.8;">STATES</p>
+                        <p class="title-lg text-cream">{{ data.total_states }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top 5 states -->
+            <div class="card card--white" style="padding: 25px;">
+                <h4 class="text-mono text-sm text-teal mb-20">TOP 5 STATES</h4>
+
+                <div class="flex flex-col gap-15">
+                    {% if data.top_states %}
+                    {% set max_count = data.top_states[0].count if data.top_states else 1 %}
+                    {% for state_data in data.top_states[:5] %}
+                    <div class="flex items-center">
+                        <div class="bar bar--maroon" style="width: {{ (state_data.count / max_count) * 100 }}%; min-width: 80px;">
+                            <span class="text-sm" style="font-weight: 700;">{{ state_data.count }}</span>
+                            <span class="text-mono text-xs" style="margin-left: 15px;">{{ state_data.state | upper }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <p class="text-sm" style="opacity: 0.6;">No state data available</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column -->
+        <div style="flex: 1.2;">
+            <h4 class="title-sm mb-20">GEOGRAPHIC DISTRIBUTION</h4>
+
+            <p class="text-sm" style="opacity: 0.7; margin-bottom: 30px;">
+                [Map visualization would appear here]
+            </p>
+
+            <!-- Insight box -->
+            {% if data.top_states and data.top_states|length > 0 %}
+            {% set top_state = data.top_states[0] %}
+            {% set top_pct = (top_state.count / data.employee_count * 100) if data.employee_count > 0 else 0 %}
+            <div class="card" style="background: var(--light-teal); padding: 20px; margin-top: auto;">
+                <p class="text-sm" style="font-weight: 600;">
+                    {{ top_pct | int }}% of your workforce is in {{ top_state.state }}, but you've got people scattered across {{ data.total_states }} states.
+                </p>
+                <p class="text-sm mt-10">
+                    That's {{ data.total_states }} different insurance markets, {{ data.total_states }} different cost structures.
+                </p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

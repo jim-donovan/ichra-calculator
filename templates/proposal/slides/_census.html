@@ -1,0 +1,123 @@
+<!-- Slide 6: Census Data - Population Overview -->
+<div class="slide slide--cream p-50">
+    <div class="section-header">CENSUS DATA</div>
+
+    <h2 class="title-lg text-center mb-30">POPULATION OVERVIEW</h2>
+
+    <div class="flex gap-30" style="height: calc(100% - 180px);">
+        <!-- Left column: Covered Lives -->
+        <div style="flex: 0.8;">
+            <div class="card card--white mb-20" style="padding: 25px;">
+                <h4 class="text-mono text-sm text-teal mb-10">COVERED LIVES</h4>
+                <p class="title-xl text-teal">{{ data.covered_lives }}</p>
+
+                <div class="flex gap-20 mt-20">
+                    <div>
+                        <p class="text-xs text-maroon">EMPLOYEES</p>
+                        <p class="title-sm text-teal">{{ data.total_employees }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs text-maroon">DEPENDENTS</p>
+                        <p class="title-sm text-teal">{{ data.total_dependents }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card card--white" style="padding: 20px;">
+                <h4 class="text-mono text-xs text-center mb-15">DEMOGRAPHICS</h4>
+                <div class="flex justify-between">
+                    <div class="text-center">
+                        <p class="text-xs">AVG AGE</p>
+                        <p class="title-sm">{{ data.avg_employee_age | int }}</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs">AGE RANGE</p>
+                        <p class="title-sm">{{ data.age_range_min }}-{{ data.age_range_max }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Middle column: Coverage type donut -->
+        <div style="flex: 1; display: flex; flex-direction: column; align-items: center;">
+            <h4 class="text-mono text-sm text-center mb-20">EMPLOYEE COVERAGE TYPE</h4>
+
+            {% set total = data.total_employees or 1 %}
+            {% set ee_pct = (data.family_status_breakdown.get('EE', 0) / total) * 100 %}
+            {% set es_pct = (data.family_status_breakdown.get('ES', 0) / total) * 100 %}
+            {% set ec_pct = (data.family_status_breakdown.get('EC', 0) / total) * 100 %}
+            {% set f_pct = (data.family_status_breakdown.get('F', 0) / total) * 100 %}
+
+            <!-- SVG Donut Chart -->
+            {% set size = 200 %}
+            {% set radius = 70 %}
+            {% set circumference = 2 * 3.14159 * radius %}
+
+            <svg viewBox="0 0 {{ size }} {{ size }}" width="{{ size }}" height="{{ size }}">
+                {% set segments = [
+                    (ee_pct, '#0D7377'),
+                    (es_pct, '#6B7280'),
+                    (ec_pct, '#8B4513'),
+                    (f_pct, '#5DC1B9')
+                ] %}
+                {% set offset = 0 %}
+                {% for pct, color in segments %}
+                {% if pct > 0 %}
+                <circle
+                    cx="{{ size/2 }}" cy="{{ size/2 }}" r="{{ radius }}"
+                    fill="none"
+                    stroke="{{ color }}"
+                    stroke-width="25"
+                    stroke-dasharray="{{ (pct / 100) * circumference }} {{ circumference }}"
+                    stroke-dashoffset="{{ -offset }}"
+                    transform="rotate(-90 {{ size/2 }} {{ size/2 }})"
+                />
+                {% set offset = offset + (pct / 100) * circumference %}
+                {% endif %}
+                {% endfor %}
+            </svg>
+
+            <!-- Legend -->
+            <div class="flex flex-col gap-10 mt-20">
+                <div class="flex items-center gap-10">
+                    <div style="width: 15px; height: 15px; border-radius: 3px; background: #0D7377;"></div>
+                    <span class="text-mono text-xs">EMPLOYEE ONLY</span>
+                    <span class="text-sm text-teal" style="font-weight: 600;">{{ "%.1f" | format(ee_pct) }}%</span>
+                </div>
+                <div class="flex items-center gap-10">
+                    <div style="width: 15px; height: 15px; border-radius: 3px; background: #5DC1B9;"></div>
+                    <span class="text-mono text-xs">FAMILY</span>
+                    <span class="text-sm text-teal" style="font-weight: 600;">{{ "%.1f" | format(f_pct) }}%</span>
+                </div>
+                <div class="flex items-center gap-10">
+                    <div style="width: 15px; height: 15px; border-radius: 3px; background: #6B7280;"></div>
+                    <span class="text-mono text-xs">EE + SPOUSE</span>
+                    <span class="text-sm text-teal" style="font-weight: 600;">{{ "%.1f" | format(es_pct) }}%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Cost cards -->
+        <div style="flex: 1.2;">
+            <div class="flex gap-15 mb-20">
+                <div class="card card--maroon" style="flex: 1; padding: 15px;">
+                    <p class="text-xs text-cream" style="opacity: 0.8;">CURRENT EE</p>
+                    <p class="text-md text-cream" style="font-weight: 700;">${{ "{:,.0f}".format(data.current_ee_annual) }}</p>
+                    <p class="text-xs text-cream" style="opacity: 0.7;">Annual</p>
+                </div>
+
+                <div class="card card--teal" style="flex: 1; padding: 15px;">
+                    <p class="text-xs text-cream" style="opacity: 0.8;">CURRENT ER</p>
+                    <p class="text-md text-cream" style="font-weight: 700;">${{ "{:,.0f}".format(data.current_er_annual) }}</p>
+                    <p class="text-xs text-cream" style="opacity: 0.7;">Annual</p>
+                </div>
+
+                <div class="card card--dark" style="flex: 1; padding: 15px;">
+                    <p class="text-xs text-cream" style="opacity: 0.8;">TOTAL</p>
+                    <p class="text-md text-cream" style="font-weight: 700;">${{ "{:,.0f}".format(data.current_total_annual) }}</p>
+                    <p class="text-xs text-cream" style="opacity: 0.7;">${{ "{:,.0f}".format(data.current_total_monthly) }}/mo</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,85 @@
+<!-- Slide 3: GIFT - Fit Score -->
+<div class="slide slide--cream p-50">
+    <div class="section-header">GIFT</div>
+
+    <h2 class="title-lg text-teal text-center mt-10 mb-30">YOUR GLOVE ICHRA FIT TOTAL</h2>
+
+    <div class="flex items-center justify-center" style="height: calc(100% - 200px);">
+        <!-- Center: Donut chart with score -->
+        <div class="relative" style="width: 300px; height: 300px;">
+            {% set score = data.fit_score %}
+            {% set size = 300 %}
+            {% set radius = 120 %}
+            {% set stroke_width = 30 %}
+            {% set circumference = 2 * 3.14159 * radius %}
+            {% set offset = circumference * (1 - score / 100) %}
+
+            <svg viewBox="0 0 {{ size }} {{ size }}" width="{{ size }}" height="{{ size }}">
+                <!-- Background segments (6 equal parts) -->
+                {% for i in range(6) %}
+                {% set segment_size = 60 %}
+                {% set start_angle = -90 + (i * segment_size) %}
+                {% set colors = ['#0D7377', '#159A9C', '#5DC1B9', '#7ECEC4', '#0D7377', '#159A9C'] %}
+                <circle
+                    cx="{{ size/2 }}" cy="{{ size/2 }}" r="{{ radius }}"
+                    fill="none"
+                    stroke="{{ colors[i] }}"
+                    stroke-width="{{ stroke_width }}"
+                    stroke-dasharray="{{ circumference / 6 - 5 }} {{ circumference }}"
+                    stroke-dashoffset="{{ -i * circumference / 6 }}"
+                    transform="rotate({{ start_angle }} {{ size/2 }} {{ size/2 }})"
+                    opacity="0.3"
+                />
+                {% endfor %}
+
+                <!-- Score arc overlay -->
+                <circle
+                    cx="{{ size/2 }}" cy="{{ size/2 }}" r="{{ radius }}"
+                    fill="none"
+                    stroke="var(--teal-bg)"
+                    stroke-width="{{ stroke_width }}"
+                    stroke-dasharray="{{ circumference }}"
+                    stroke-dashoffset="{{ offset }}"
+                    stroke-linecap="round"
+                    transform="rotate(-90 {{ size/2 }} {{ size/2 }})"
+                />
+            </svg>
+
+            <!-- Center text -->
+            <div class="absolute" style="top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+                <span class="title-xl text-orange">{{ score }}</span>
+            </div>
+        </div>
+
+        <!-- Category labels around chart -->
+        <div class="absolute" style="top: 180px; left: 50px; width: 200px;">
+            <h4 class="text-sm text-teal" style="font-weight: 700;">Employee Experience</h4>
+            <p class="text-xs text-maroon">Exchange usability, broker support, enrollment friction</p>
+        </div>
+
+        <div class="absolute" style="top: 180px; right: 50px; width: 200px; text-align: right;">
+            <h4 class="text-sm text-teal" style="font-weight: 700;">Geographic Complexity</h4>
+            <p class="text-xs text-maroon">Multi-state footprint, rating area issues, regulatory impact</p>
+        </div>
+
+        <div class="absolute" style="top: 350px; left: 50px; width: 200px;">
+            <h4 class="text-sm text-teal" style="font-weight: 700;">Cost Advantage</h4>
+            <p class="text-xs text-maroon">Individual versus group benchmark, potential savings</p>
+        </div>
+
+        <div class="absolute" style="top: 350px; right: 50px; width: 200px; text-align: right;">
+            <h4 class="text-sm text-teal" style="font-weight: 700;">Workforce Fit</h4>
+            <p class="text-xs text-maroon">Age/income distribution, subsidy eligibility, family status mix</p>
+        </div>
+
+        <div class="absolute" style="bottom: 80px; left: 200px; width: 200px;">
+            <h4 class="text-sm text-teal" style="font-weight: 700;">Market Readiness</h4>
+            <p class="text-xs text-maroon">Carrier count, plan options, metal tier coverage</p>
+        </div>
+
+        <div class="absolute" style="bottom: 80px; right: 200px; width: 200px; text-align: right;">
+            <h4 class="text-sm text-teal" style="font-weight: 700;">Admin Readiness</h4>
+            <p class="text-xs text-maroon">Payroll integrations, Individual marketplace support</p>
+        </div>
+    </div>
+</div>

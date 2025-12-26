@@ -1,0 +1,70 @@
+<!-- Slide 4: The Results -->
+<div class="slide slide--cream p-50">
+    <div class="section-header text-teal">THE RESULTS</div>
+
+    <div class="flex gap-40" style="height: calc(100% - 100px);">
+        <!-- Left column: Stats -->
+        <div style="flex: 1.5;">
+            <h2 class="title-lg mb-10">WE TRIED TO TREATING</h2>
+            <h2 class="title-lg text-light-teal mb-40">THE SYMPTOMS.</h2>
+
+            <!-- Stats list -->
+            <div class="flex flex-col gap-30">
+                <div class="flex items-end gap-20">
+                    <div>
+                        <span class="stat__number text-teal">69</span>
+                        <span class="stat__suffix text-teal">%</span>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <h4 class="text-sm" style="font-weight: 700;">EMPLOYER CONTRIBUTION INCREASE</h4>
+                        <p class="text-sm" style="opacity: 0.8;">From 2015 to 2026, outpacing wage growth by nearly 10%</p>
+                    </div>
+                </div>
+
+                <div class="flex items-end gap-20">
+                    <div>
+                        <span class="stat__number text-teal">3</span>
+                        <span class="stat__suffix text-teal">X</span>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <h4 class="text-sm" style="font-weight: 700;">DEDUCTIBLES vs. WAGES GAP</h4>
+                        <p class="text-sm" style="opacity: 0.8;">Deductible tripled since 2012. Wage? Up 66%.</p>
+                    </div>
+                </div>
+
+                <div class="flex items-end gap-20">
+                    <div>
+                        <span class="stat__number text-light-teal">30</span>
+                        <span class="stat__suffix text-light-teal">%</span>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <h4 class="text-sm" style="font-weight: 700;">30 CENTS FOR EVERY DOLLAR</h4>
+                        <p class="text-sm" style="opacity: 0.8;">For every dollar spent is wasted on low-value care.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Healthcare burden card -->
+        <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+            <div class="card card--white" style="width: 280px; padding: 30px; text-align: center;">
+                <p class="text-mono text-sm text-maroon mb-20">
+                    FOR {{ data.employee_count }} EMPLOYEES
+                </p>
+
+                <div class="card card--maroon" style="padding: 30px;">
+                    {% if data.additional_healthcare_burden > 0 %}
+                    <p class="title-md text-cream">
+                        ${{ "{:,.0f}".format(data.additional_healthcare_burden / 1000) }}K
+                    </p>
+                    {% else %}
+                    <p class="title-md text-cream">$0</p>
+                    {% endif %}
+                    <p class="text-sm text-cream mt-10" style="opacity: 0.9;">
+                        additional healthcare<br>burden per year
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
