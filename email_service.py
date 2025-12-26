@@ -15,6 +15,7 @@ import re
 import base64
 import logging
 from datetime import datetime
+from html import escape as html_escape
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -215,6 +216,9 @@ GLOVE Benefits Team
 This is an automated message. Please do not reply to this email.
 """
 
+        # Escape user-provided values for HTML context
+        safe_client_name = html_escape(client_name)
+
         html_body = f"""
 <!DOCTYPE html>
 <html>
@@ -235,7 +239,7 @@ This is an automated message. Please do not reply to this email.
             <p>ICHRA Proposal</p>
         </div>
         <div class="content">
-            <p>Dear {client_name},</p>
+            <p>Dear {safe_client_name},</p>
             <p>Please find attached your <strong>ICHRA (Individual Coverage Health Reimbursement Arrangement) proposal</strong>.</p>
             <p>This proposal outlines the potential benefits and cost savings of transitioning to an ICHRA for your organization.</p>
             <p>If you have any questions about this proposal, please don't hesitate to reach out.</p>
@@ -288,6 +292,13 @@ Please investigate and manually send the proposal if needed.
 GLOVE Benefits Monitoring System
 """
 
+        # Escape user-provided values for HTML context
+        safe_client_name = html_escape(client_name)
+        safe_recipient_email = html_escape(recipient_email)
+        safe_presentation_id = html_escape(presentation_id)
+        safe_error_msg = html_escape(str(error_msg))
+        safe_status_code = html_escape(str(status_code))
+
         html_body = f"""
 <!DOCTYPE html>
 <html>
@@ -311,14 +322,14 @@ GLOVE Benefits Monitoring System
         <div class="content">
             <div class="details">
                 <p><strong>Timestamp:</strong> {timestamp.isoformat()}</p>
-                <p><strong>Client:</strong> {client_name}</p>
-                <p><strong>Intended Recipient:</strong> <code>{recipient_email}</code></p>
-                <p><strong>Presentation ID:</strong> <code>{presentation_id}</code></p>
+                <p><strong>Client:</strong> {safe_client_name}</p>
+                <p><strong>Intended Recipient:</strong> <code>{safe_recipient_email}</code></p>
+                <p><strong>Presentation ID:</strong> <code>{safe_presentation_id}</code></p>
             </div>
             <h3>Error Details</h3>
             <div class="details">
-                <p><strong>Status Code:</strong> {status_code}</p>
-                <p><strong>Message:</strong> {error_msg}</p>
+                <p><strong>Status Code:</strong> {safe_status_code}</p>
+                <p><strong>Message:</strong> {safe_error_msg}</p>
             </div>
             <p>Please investigate and manually send the proposal if needed.</p>
         </div>

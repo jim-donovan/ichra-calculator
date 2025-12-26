@@ -21,6 +21,32 @@ from constants import FAMILY_STATUS_CODES
 from utils import ContributionComparison
 from email_service import EmailService, validate_email, validate_file_size
 
+
+def send_email_and_update_state(
+    email_service: EmailService,
+    recipient_email: str,
+    client_name: str,
+    file_data: bytes,
+    filename: str,
+    presentation_id: str
+):
+    """
+    Send proposal email and update session state with result.
+
+    Returns:
+        EmailResult from the send operation
+    """
+    result = email_service.send_proposal_email(
+        recipient_email=recipient_email,
+        client_name=client_name,
+        attachment_data=file_data,
+        attachment_filename=filename,
+        presentation_id=presentation_id
+    )
+    st.session_state.email_result = result.to_dict()
+    return result
+
+
 # Template path for PPTX (with placeholders)
 PPTX_TEMPLATE_PATH = Path(__file__).parent.parent / 'templates' / 'glove_proposal_template.pptx'
 
@@ -498,7 +524,7 @@ st.markdown("---")
 # =============================================================================
 # GENERATE AND SEND BUTTONS
 # =============================================================================
-generate_col1, generate_col2, generate_col3 = st.columns([2, 1, 1])
+generate_col1, generate_col2 = st.columns([3, 1])
 
 with generate_col1:
     # Determine button label based on email settings
@@ -560,14 +586,14 @@ with generate_col1:
                     else:
                         # Send email
                         with st.spinner("Sending email..."):
-                            result = email_service.send_proposal_email(
+                            result = send_email_and_update_state(
+                                email_service=email_service,
                                 recipient_email=st.session_state.recipient_email,
                                 client_name=client_name,
-                                attachment_data=file_data,
-                                attachment_filename=st.session_state.proposal_filename,
+                                file_data=file_data,
+                                filename=st.session_state.proposal_filename,
                                 presentation_id=f"{client_name_safe}_{timestamp}"
                             )
-                            st.session_state.email_result = result.to_dict()
 
                             if result.success:
                                 st.success(f"✅ Email sent successfully to {result.recipient}!")
@@ -592,33 +618,6 @@ with generate_col2:
             use_container_width=True
         )
 
-with generate_col3:
-    # Retry email button (only shown after failed email attempt)
-    if (st.session_state.email_result is not None
-        and not st.session_state.email_result.get("success", False)
-        and st.session_state.proposal_buffer is not None
-        and is_email_configured):
-
-        if st.button("🔄 Retry Email", type="secondary", use_container_width=True):
-            with st.spinner("Retrying email..."):
-                file_data = st.session_state.proposal_buffer.getvalue()
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                client_name_safe = client_name.replace(' ', '_').replace('/', '-')
-
-                result = email_service.send_proposal_email(
-                    recipient_email=st.session_state.recipient_email,
-                    client_name=client_name,
-                    attachment_data=file_data,
-                    attachment_filename=st.session_state.proposal_filename,
-                    presentation_id=f"{client_name_safe}_{timestamp}"
-                )
-                st.session_state.email_result = result.to_dict()
-
-                if result.success:
-                    st.success(f"✅ Email sent successfully to {result.recipient}!")
-                else:
-                    st.error(f"❌ Failed to send email: {result.error_message}")
-
 # =============================================================================
 # EMAIL STATUS DISPLAY
 # =============================================================================
@@ -641,6 +640,29 @@ if st.session_state.email_result is not None:
             <span style="color: #991b1b; font-size: 0.9em;">The proposal has been preserved - you can download it manually or retry sending.</span>
         </div>
         """, unsafe_allow_html=True)
+
+        # Retry button (shown inline with error status)
+        if st.session_state.proposal_buffer is not None and is_email_configured:
+            if st.button("🔄 Retry Email", type="secondary"):
+                with st.spinner("Retrying email..."):
+                    file_data = st.session_state.proposal_buffer.getvalue()
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    client_name_safe = client_name.replace(' ', '_').replace('/', '-')
+
+                    retry_result = send_email_and_update_state(
+                        email_service=email_service,
+                        recipient_email=st.session_state.recipient_email,
+                        client_name=client_name,
+                        file_data=file_data,
+                        filename=st.session_state.proposal_filename,
+                        presentation_id=f"{client_name_safe}_{timestamp}"
+                    )
+
+                    if retry_result.success:
+                        st.success(f"✅ Email sent successfully to {retry_result.recipient}!")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Failed to send email: {retry_result.error_message}")
 
 # =============================================================================
 # FOOTER
