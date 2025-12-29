@@ -400,7 +400,7 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
                 delta_color=savings_color
             )
 
-with st.expander("📊 ICHRA Evaluation Workflow (Slide 13 - Final)", expanded=True):
+with st.expander("📊 ICHRA Evaluation Workflow (Slide 13 - Final)", expanded=False):
     st.caption("This slide is appended at the end of the presentation")
 
     workflow_col1, workflow_col2, workflow_col3 = st.columns(3)
@@ -544,7 +544,7 @@ with generate_col1:
             if not is_valid:
                 can_generate = False
 
-    if st.button(button_label, type="primary", use_container_width=True, disabled=not can_generate):
+    if st.button(button_label, type="primary", width="stretch", disabled=not can_generate):
         # Reset email result
         st.session_state.email_result = None
 
@@ -615,7 +615,7 @@ with generate_col2:
             file_name=st.session_state.proposal_filename,
             mime=st.session_state.get('proposal_mime', 'application/pdf'),
             type="secondary",
-            use_container_width=True
+            width="stretch"
         )
 
 # =============================================================================

@@ -408,8 +408,12 @@ WHERE
         Returns:
             DataFrame with county, rating_area_id, and state_code
         """
+        import logging
+        import time
+
         # Handle ZIP+4 format (e.g., "29654-7352" -> "29654") and ensure 5 digits
         zip_code = str(zip_code).strip().split('-')[0].zfill(5)[:5]
+        logging.debug(f"ZIP LOOKUP: Looking up {zip_code} in {state_code}")
 
         # rating_area_id is already integer in rbis_state_rating_area_amended
         query = """
@@ -427,7 +431,10 @@ WHERE
         LIMIT 1
         """
 
+        query_start = time.time()
+        logging.debug(f"ZIP LOOKUP: Executing primary query for {zip_code}...")
         result = db.execute_query(query, (zip_code, state_code))
+        logging.debug(f"ZIP LOOKUP: Primary query took {time.time() - query_start:.3f}s, got {len(result)} rows")
 
         if result.empty:
             # Try fallback using 3-digit ZIP prefix from original rating area table
@@ -555,6 +562,11 @@ WHERE
             DataFrame with columns: hios_plan_id, plan_name, state_code,
                                    rating_area_id, age_band, premium
         """
+        import logging
+        import time
+        logging.info(f"LCSP BATCH: Called with {len(employee_locations)} locations")
+        batch_start = time.time()
+
         if not employee_locations:
             return pd.DataFrame()
 
@@ -566,6 +578,8 @@ WHERE
             if key not in seen:
                 seen.add(key)
                 unique_combos.append(loc)
+
+        logging.info(f"LCSP BATCH: {len(unique_combos)} unique combinations after dedup")
 
         if not unique_combos:
             return pd.DataFrame()
@@ -606,7 +620,12 @@ WHERE
             params.extend([combo['state_code'], combo['rating_area_id'], combo['age_band']])
 
         query = "\nUNION ALL\n".join(union_queries)
-        return db.execute_query(query, tuple(params))
+        logging.info(f"LCSP BATCH: Executing query with {len(unique_combos)} UNION ALLs...")
+        query_start = time.time()
+        result = db.execute_query(query, tuple(params))
+        logging.info(f"LCSP BATCH: Query completed in {time.time() - query_start:.2f}s, returned {len(result)} rows")
+        logging.info(f"LCSP BATCH: Total batch time: {time.time() - batch_start:.2f}s")
+        return result
 
 
 class ComprehensivePlanQueries:

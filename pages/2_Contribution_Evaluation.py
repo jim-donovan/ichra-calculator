@@ -27,6 +27,11 @@ except ImportError:
 from database import get_database_connection
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Page config
@@ -413,8 +418,7 @@ if 'contribution_settings' not in st.session_state:
     st.session_state.contribution_settings = {
         'default_percentage': 75,
         'by_class': {},
-        'contribution_type': 'percentage',
-        'flat_amounts': {'EE': 400, 'ES': 600, 'EC': 600, 'F': 800}
+        'contribution_type': 'percentage'
     }
 
 if 'contribution_analysis' not in st.session_state:
@@ -588,11 +592,6 @@ def get_employer_contribution(employee: dict) -> float:
         # No match found - return 0 (should not happen with proper setup)
         return 0.0
 
-    # Handle flat contributions
-    elif contribution_type == 'flat':
-        flat_amounts = settings.get('flat_amounts', {})
-        return float(flat_amounts.get(family_status, flat_amounts.get('EE', 400)))
-
     # Handle percentage-based (default)
     else:
         # For percentage-based, we need the premium first - return the percentage
@@ -744,10 +743,11 @@ def get_marketplace_options(employee_id: str, metal_levels: list = None, max_res
                 premium = ee_premium
 
             # Calculate employee cost based on contribution type
-            if settings.get('contribution_type') == 'flat':
+            if settings.get('contribution_type') == 'class_based':
+                # Class-based: contribution is a fixed dollar amount
                 employee_cost = max(0, premium - contribution)
             else:
-                # Percentage-based
+                # Percentage-based (default)
                 employer_pays = premium * (contribution / 100)
                 employee_cost = premium - employer_pays
 
@@ -777,7 +777,7 @@ def get_marketplace_options(employee_id: str, metal_levels: list = None, max_res
             "family_status": employee.get('family_status', 'EE'),
             "plans": plans,
             "num_plans": len(plans),
-            "employer_contribution": f"${contribution:,.2f}/mo" if settings.get('contribution_type') == 'flat' else f"{contribution}%"
+            "employer_contribution": f"${contribution:,.2f}/mo" if settings.get('contribution_type') == 'class_based' else f"{contribution}%"
         }
 
     except Exception as e:
@@ -825,7 +825,7 @@ def compare_current_vs_marketplace(employee_id: str, include_family: bool = True
                 plan['_family_premium_num'] = family_premium
 
                 # Recalculate employee cost for family
-                if settings.get('contribution_type') == 'flat':
+                if settings.get('contribution_type') == 'class_based':
                     contribution = get_employer_contribution(employee)
                     plan['family_employee_cost'] = f"${max(0, family_premium - contribution):,.2f}"
                 else:
@@ -1312,14 +1312,24 @@ if 'affordability_analysis' not in st.session_state:
 
     if has_income_data:
         with st.spinner("Analyzing IRS affordability requirements..."):
+            import time
             from affordability import AffordabilityAnalyzer, ContributionRecommender
 
             try:
+                logging.info("=" * 60)
+                logging.info("AFFORDABILITY: Starting IRS affordability analysis...")
+                logging.info(f"AFFORDABILITY: Census has {len(census_df)} employees")
+                afford_start = time.time()
+
                 db = st.session_state.db
+                logging.info("AFFORDABILITY: Calling AffordabilityAnalyzer.analyze_workforce()...")
                 analysis = AffordabilityAnalyzer.analyze_workforce(census_df, db)
+                afford_elapsed = time.time() - afford_start
+                logging.info(f"AFFORDABILITY: analyze_workforce() completed in {afford_elapsed:.1f}s")
 
                 # Check if analysis returned an error
                 if 'error' in analysis:
+                    logging.error(f"AFFORDABILITY: Analysis returned error: {analysis['error']}")
                     st.error(f"⚠️ Affordability analysis error: {analysis['error']}")
                     st.info("💡 Tip: Ensure your census has been processed with age and location data")
                     st.session_state.affordability_analysis = None
@@ -1369,6 +1379,331 @@ if 'current_ee_monthly' in census_df.columns or 'current_er_monthly' in census_d
         st.warning("⚠️ Census has contribution columns but no data. Add 'Current EE Monthly' and 'Current ER Monthly' values for cost comparison.")
 else:
     st.warning("⚠️ No current contribution data in census. Add 'Current EE Monthly' and 'Current ER Monthly' columns for cost comparison.")
+
+st.markdown("---")
+
+# =============================================================================
+# CONTRIBUTION STRATEGY MODELER
+# =============================================================================
+
+st.markdown("## 🎯 Contribution Strategy Modeler")
+
+st.markdown("""
+Model different employer contribution strategies to find the optimal approach for your workforce.
+Each strategy calculates per-employee contributions based on their actual LCSP and demographics.
+""")
+
+# Initialize strategy state if needed
+if 'strategy_results' not in st.session_state:
+    st.session_state.strategy_results = {}
+
+# Strategy type selector
+strategy_options = [
+    ("Base Age + ACA 3:1 Curve", "base_age_curve"),
+    ("Percentage of Per-Employee LCSP", "percentage_lcsp"),
+    ("Fixed Age Tiers", "fixed_age_tiers"),
+    ("Custom Dollar Amounts", "custom"),
+]
+
+selected_strategy = st.selectbox(
+    "Select Strategy Type",
+    options=strategy_options,
+    format_func=lambda x: x[0],
+    key="strategy_type_selector"
+)
+
+strategy_type = selected_strategy[1]
+
+# Strategy-specific configuration
+strategy_config_col1, strategy_config_col2 = st.columns([2, 1])
+
+with strategy_config_col1:
+    if strategy_type == "base_age_curve":
+        st.markdown("##### Base Age + ACA 3:1 Curve")
+        st.markdown("""
+        Set a base contribution for a reference age. The system scales contributions using the
+        ACA 3:1 age rating curve (age 64 costs 3x age 21).
+        """)
+
+        curve_col1, curve_col2 = st.columns(2)
+        with curve_col1:
+            base_age = st.selectbox(
+                "Base Age",
+                options=[21, 25, 30, 35, 40],
+                index=0,
+                key="base_age_select"
+            )
+        with curve_col2:
+            base_contribution = st.number_input(
+                "Base Contribution ($/month)",
+                min_value=0.0,
+                max_value=5000.0,
+                value=400.0,
+                step=25.0,
+                key="base_contribution_input"
+            )
+
+        # Show preview of curve
+        from constants import ACA_AGE_CURVE
+        base_ratio = ACA_AGE_CURVE.get(base_age, 1.0)
+        age_64_amount = base_contribution * (ACA_AGE_CURVE[64] / base_ratio)
+        age_40_amount = base_contribution * (ACA_AGE_CURVE[40] / base_ratio)
+        st.info(f"**Preview:** Age {base_age}: ${base_contribution:,.0f}/mo → Age 40: ${age_40_amount:,.0f}/mo → Age 64: ${age_64_amount:,.0f}/mo")
+
+    elif strategy_type == "percentage_lcsp":
+        st.markdown("##### Percentage of Per-Employee LCSP")
+        st.markdown("""
+        Each employee receives a contribution equal to X% of their individual LCSP premium.
+        The LCSP is calculated using each employee's specific rating area and age.
+        """)
+
+        lcsp_percentage = st.slider(
+            "Percentage of LCSP to Cover",
+            min_value=50,
+            max_value=100,
+            value=75,
+            step=5,
+            format="%d%%",
+            key="lcsp_percentage_slider"
+        )
+        st.info(f"**{lcsp_percentage}%** of each employee's LCSP will be contributed. Lower-cost employees get smaller contributions, higher-cost employees get larger contributions.")
+
+    elif strategy_type == "fixed_age_tiers":
+        st.markdown("##### Fixed Age Tiers")
+        st.markdown("""
+        Set specific dollar amounts for each age tier. Employees are assigned to tiers based on their age.
+        """)
+
+        # Editable tier amounts
+        tier_amounts = {}
+        tier_cols = st.columns(4)
+        default_amounts = {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900}
+
+        tier_labels = ['21', '18-25', '26-35', '36-45', '46-55', '56-63', '64+']
+        for i, tier in enumerate(tier_labels):
+            col_idx = i % 4
+            with tier_cols[col_idx]:
+                tier_amounts[tier] = st.number_input(
+                    f"Age {tier}",
+                    min_value=0.0,
+                    max_value=5000.0,
+                    value=float(default_amounts.get(tier, 400)),
+                    step=25.0,
+                    key=f"tier_amount_{tier}"
+                )
+
+    elif strategy_type == "custom":
+        st.markdown("##### Custom Dollar Amounts")
+        st.markdown("Define custom contribution classes with specific criteria and amounts.")
+        st.warning("Custom class configuration is coming soon. Use Fixed Age Tiers for now.")
+        tier_amounts = {}  # Placeholder
+
+with strategy_config_col2:
+    st.markdown("##### Options")
+    apply_family_multipliers = st.checkbox(
+        "Apply Family Multipliers",
+        value=True,
+        help="EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x",
+        key="apply_family_mult"
+    )
+
+    if apply_family_multipliers:
+        st.caption("Family multipliers: EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x")
+
+# Calculate button
+if st.button("Calculate Strategy", type="primary", key="calc_strategy_btn"):
+    from contribution_strategies import (
+        ContributionStrategyCalculator,
+        StrategyConfig,
+        StrategyType as StratType
+    )
+
+    with st.spinner("Calculating contributions..."):
+        try:
+            calculator = ContributionStrategyCalculator(st.session_state.db, census_df)
+
+            # Build config based on strategy type
+            if strategy_type == "base_age_curve":
+                config = StrategyConfig(
+                    strategy_type=StratType.BASE_AGE_CURVE,
+                    base_age=base_age,
+                    base_contribution=base_contribution,
+                    apply_family_multipliers=apply_family_multipliers
+                )
+            elif strategy_type == "percentage_lcsp":
+                config = StrategyConfig(
+                    strategy_type=StratType.PERCENTAGE_LCSP,
+                    lcsp_percentage=lcsp_percentage,
+                    apply_family_multipliers=apply_family_multipliers
+                )
+            elif strategy_type == "fixed_age_tiers":
+                config = StrategyConfig(
+                    strategy_type=StratType.FIXED_AGE_TIERS,
+                    tier_amounts=tier_amounts,
+                    apply_family_multipliers=apply_family_multipliers
+                )
+            else:
+                st.error("Custom strategy not yet implemented")
+                config = None
+
+            if config:
+                result = calculator.calculate_strategy(config)
+                st.session_state.strategy_results[strategy_type] = result
+                st.success(f"Strategy calculated: **{result['strategy_name']}**")
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"Error calculating strategy: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+# Display strategy results if available
+if st.session_state.strategy_results:
+    st.markdown("---")
+    st.markdown("### 📈 Strategy Results")
+
+    # Get most recent result (or allow selection if multiple)
+    available_strategies = list(st.session_state.strategy_results.keys())
+
+    if len(available_strategies) > 1:
+        st.markdown("**Calculated Strategies:**")
+        for strat_key in available_strategies:
+            result = st.session_state.strategy_results[strat_key]
+            st.markdown(f"- {result['strategy_name']}: **${result['total_annual']:,.0f}/year**")
+
+    # Show detailed results for most recent
+    current_result = st.session_state.strategy_results.get(strategy_type)
+    if current_result:
+        result = current_result
+
+        # Summary metrics
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Total Monthly", f"${result['total_monthly']:,.0f}")
+        metric_cols[1].metric("Total Annual", f"${result['total_annual']:,.0f}")
+        metric_cols[2].metric("Employees", f"{result['employees_covered']}")
+        avg_monthly = result['total_monthly'] / result['employees_covered'] if result['employees_covered'] > 0 else 0
+        metric_cols[3].metric("Avg Monthly", f"${avg_monthly:,.0f}")
+
+        # Breakdown by age tier
+        with st.expander("📊 Breakdown by Age Tier", expanded=False):
+            by_age = result.get('by_age_tier', {})
+            if by_age:
+                age_data = []
+                for tier, data in by_age.items():
+                    avg = data['total_monthly'] / data['count'] if data['count'] > 0 else 0
+                    age_data.append({
+                        'Age Tier': tier,
+                        'Employees': data['count'],
+                        'Total Monthly': f"${data['total_monthly']:,.0f}",
+                        'Avg Monthly': f"${avg:,.0f}"
+                    })
+                st.dataframe(pd.DataFrame(age_data), hide_index=True, width="stretch")
+
+        # Breakdown by family status
+        with st.expander("👨‍👩‍👧 Breakdown by Family Status", expanded=False):
+            by_fs = result.get('by_family_status', {})
+            if by_fs:
+                fs_data = []
+                for fs, data in by_fs.items():
+                    avg = data['total_monthly'] / data['count'] if data['count'] > 0 else 0
+                    fs_data.append({
+                        'Family Status': fs,
+                        'Employees': data['count'],
+                        'Total Monthly': f"${data['total_monthly']:,.0f}",
+                        'Avg Monthly': f"${avg:,.0f}"
+                    })
+                st.dataframe(pd.DataFrame(fs_data), hide_index=True, width="stretch")
+
+        # Employee-level detail
+        with st.expander("📋 Employee Contribution Detail", expanded=False):
+            emp_contribs = result.get('employee_contributions', {})
+            if emp_contribs:
+                detail_data = []
+                for emp_id, data in emp_contribs.items():
+                    # Get employee name from census
+                    emp_row = census_df[
+                        (census_df['employee_id'].astype(str) == str(emp_id)) |
+                        (census_df.get('Employee Number', pd.Series()).astype(str) == str(emp_id))
+                    ] if 'employee_id' in census_df.columns or 'Employee Number' in census_df.columns else pd.DataFrame()
+
+                    if not emp_row.empty:
+                        emp = emp_row.iloc[0]
+                        first_name = emp.get('first_name') or emp.get('First Name', '')
+                        last_name = emp.get('last_name') or emp.get('Last Name', '')
+                        name = f"{first_name} {last_name}".strip() or emp_id
+                    else:
+                        name = emp_id
+
+                    detail_data.append({
+                        'Employee': name,
+                        'Age': data.get('age', ''),
+                        'State': data.get('state', ''),
+                        'Family': data.get('family_status', ''),
+                        'LCSP': f"${data.get('lcsp_ee_rate', 0):,.0f}" if data.get('lcsp_ee_rate') else '-',
+                        'Monthly': f"${data['monthly_contribution']:,.2f}",
+                        'Annual': f"${data['annual_contribution']:,.2f}"
+                    })
+
+                detail_df = pd.DataFrame(detail_data)
+                st.dataframe(detail_df, hide_index=True, width="stretch")
+
+        # CSV Export
+        st.markdown("---")
+        st.markdown("##### Export Strategy Data")
+
+        emp_contribs = result.get('employee_contributions', {})
+        if emp_contribs:
+            export_rows = []
+            for emp_id, data in emp_contribs.items():
+                emp_row = census_df[
+                    (census_df['employee_id'].astype(str) == str(emp_id)) |
+                    (census_df.get('Employee Number', pd.Series()).astype(str) == str(emp_id))
+                ] if 'employee_id' in census_df.columns or 'Employee Number' in census_df.columns else pd.DataFrame()
+
+                if not emp_row.empty:
+                    emp = emp_row.iloc[0]
+                    first_name = emp.get('first_name') or emp.get('First Name', '')
+                    last_name = emp.get('last_name') or emp.get('Last Name', '')
+                    zip_code = emp.get('zip_code') or emp.get('home_zip') or emp.get('Home Zip', '')
+                else:
+                    first_name = ''
+                    last_name = ''
+                    zip_code = ''
+
+                export_rows.append({
+                    'Employee ID': emp_id,
+                    'First Name': first_name,
+                    'Last Name': last_name,
+                    'Age': data.get('age', ''),
+                    'State': data.get('state', ''),
+                    'ZIP': zip_code,
+                    'Rating Area': data.get('rating_area', ''),
+                    'Family Status': data.get('family_status', ''),
+                    'LCSP EE Rate': data.get('lcsp_ee_rate', ''),
+                    'Age Ratio': data.get('age_ratio', ''),
+                    'Base Contribution': data.get('base_contribution', ''),
+                    'Family Multiplier': data.get('family_multiplier', ''),
+                    'Monthly Contribution': data['monthly_contribution'],
+                    'Annual Contribution': data['annual_contribution'],
+                    'Strategy Type': result['strategy_type']
+                })
+
+            export_df = pd.DataFrame(export_rows)
+            csv_data = export_df.to_csv(index=False)
+
+            st.download_button(
+                label="Download Contribution Schedule (CSV)",
+                data=csv_data,
+                file_name=f"ichra_{result['strategy_type']}_contributions.csv",
+                mime="text/csv",
+                key="strategy_csv_export"
+            )
+            st.caption(f"Export includes {len(export_rows)} employees")
+
+        # Clear button
+        if st.button("Clear All Strategy Results", key="clear_strategy_results"):
+            st.session_state.strategy_results = {}
+            st.rerun()
 
 st.markdown("---")
 
@@ -1536,54 +1871,109 @@ if 'affordability_analysis' in st.session_state and st.session_state.affordabili
         st.markdown("""
         **Strategy Types:**
 
-        1. **Flat Contribution** (Always included)
-           - Uses the HIGHEST required contribution across all employees
-           - Guarantees affordability for everyone
-           - Simplest to administer but may over-contribute to lower-cost employees
+        1. **Age-Based Contribution Tiers**
+           - Uses fixed age tiers that align with ICHRA/ACA rating patterns:
+             - **21** (standalone tier for age 21 exactly)
+             - **18-25** (includes age 21 for range calculations)
+             - **26-35**, **36-45**, **46-55**, **56-63**, **64+**
+           - **Base Contribution** = MAXIMUM required contribution within each tier
+           - This ensures all employees in the tier meet IRS affordability
+           - More cost-efficient than flat: younger employees typically need less
 
-        2. **Age-Banded** (If age variance exists)
-           - Groups employees by age into 2-4 tiers based on LCSP costs
-           - More cost-efficient: younger employees need less, older need more
-           - Only shown if coefficient of variation > 15%
-
-        3. **Location-Based** (If multi-state with variance)
+        2. **Location-Based** (If multi-state with variance)
            - Groups by state/rating area
            - Accounts for geographic premium differences
+           - **Base Contribution** = MAXIMUM required contribution per location
            - Only shown if location variance > 10%
 
-        **"Annual Cost" = Total employer spend for 100% affordability**
-        **"vs Current" = Comparison to your current ER spend (positive = savings, negative = increase)**
+        **How Base Contribution is Calculated:**
+        - For each employee, we calculate: `Min ER Contribution = LCSP - (9.96% × Monthly Income)`
+        - The **Base Contribution** for a tier is the MAXIMUM of all employees' min ER contributions in that tier
+        - This guarantees 100% affordability for everyone in the tier
+
+        **Family Multipliers (Optional):**
+        - EE (Employee Only): 1.0x base
+        - ES (Employee + Spouse): 1.5x base
+        - EC (Employee + Children): 1.3x base
+        - F (Family): 1.8x base
+
+        **Metrics:**
+        - **Annual Cost** = Total employer spend for 100% affordability
+        - **vs Current** = Comparison to your current ER spend (positive = savings, negative = increase)
         """)
 
     recommendations = analysis['recommendations']
     current_applied = st.session_state.contribution_settings.get('strategy_applied', None)
 
-    # Display each recommendation as a styled card
+    # Display each recommendation as a collapsed expander
     for idx, rec in enumerate(recommendations):
         is_active = current_applied == rec['strategy_type']
 
-        # Use Streamlit's native container with border
-        with st.container(border=True):
-            # Strategy header with name and badge
-            header_cols = st.columns([4, 1])
-            with header_cols[0]:
-                if is_active:
-                    st.markdown(f"#### ✅ {rec['name']}")
-                else:
-                    st.markdown(f"#### {rec['name']}")
-            with header_cols[1]:
-                if is_active:
-                    st.success("APPLIED")
+        # Build expander label with active indicator
+        expander_label = f"✅ {rec['name']}" if is_active else rec['name']
 
-            # Strategy details - use simple text format
-            if rec['strategy_type'] == 'flat':
-                st.write(f"${rec['contribution']:.0f}/month for all employees")
-            elif rec['strategy_type'] == 'age_banded':
-                tier_parts = [f"{tier['age_range']}: ${tier['contribution']:.0f}" for tier in rec['tiers']]
-                st.write("Age-based tiers: " + " | ".join(tier_parts))
+        with st.expander(expander_label, expanded=False):
+            # Applied badge
+            if is_active:
+                st.success("APPLIED")
+
+            # Strategy details - display as formatted table
+            if rec['strategy_type'] == 'age_banded':
+                st.markdown("##### Age-Based Contribution Tiers")
+
+                # Create a clean table for age tiers
+                tier_data = []
+                for tier in rec['tiers']:
+                    count = tier.get('count', 0)
+                    count_with_income = tier.get('count_with_income', count)
+                    # Show employees with income data if different from total
+                    if count_with_income != count and count > 0:
+                        emp_display = f"{count_with_income}/{count}"
+                    else:
+                        emp_display = count
+
+                    tier_data.append({
+                        'Age Tier': tier['age_range'],
+                        'Base Contribution': f"${tier['contribution']:,.2f}",
+                        'Employees': emp_display
+                    })
+
+                tier_df = pd.DataFrame(tier_data)
+                st.dataframe(
+                    tier_df,
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        'Age Tier': st.column_config.TextColumn('Age Tier', width='medium'),
+                        'Base Contribution': st.column_config.TextColumn('Base Contribution', width='medium'),
+                        'Employees': st.column_config.TextColumn('Employees', width='small', help='Employees with income data / Total employees')
+                    }
+                )
+
             elif rec['strategy_type'] == 'location_based':
-                tier_parts = [f"{tier['location']}: ${tier['contribution']:.0f}" for tier in rec['tiers']]
-                st.write("Location tiers: " + " | ".join(tier_parts))
+                st.markdown("##### Location-Based Contribution Tiers")
+
+                tier_data = []
+                for tier in rec['tiers']:
+                    tier_data.append({
+                        'Location': tier['location'],
+                        'Base Contribution': f"${tier['contribution']:,.0f}",
+                        'Employees': tier.get('count', 0)
+                    })
+
+                tier_df = pd.DataFrame(tier_data)
+                st.dataframe(
+                    tier_df,
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        'Location': st.column_config.TextColumn('Location', width='medium'),
+                        'Base Contribution': st.column_config.TextColumn('Base Contribution', width='medium'),
+                        'Employees': st.column_config.NumberColumn('Employees', width='small')
+                    }
+                )
+
+            st.markdown("")  # Spacing
 
             # Metrics row
             metric_cols = st.columns(4)
@@ -1596,18 +1986,31 @@ if 'affordability_analysis' in st.session_state and st.session_state.affordabili
                 else:
                     metric_cols[2].metric("vs Current", f"-${abs(savings_vs_current):,.0f}", delta="Increase", delta_color="inverse")
 
+            # Pros/Cons in a cleaner layout
+            st.markdown("")  # Spacing
+            col_pro, col_con = st.columns(2)
+            with col_pro:
+                st.markdown("**Pros:**")
+                for pro in rec['pros']:
+                    st.markdown(f"- {pro}")
+            with col_con:
+                st.markdown("**Cons:**")
+                for con in rec.get('cons', []):
+                    st.markdown(f"- {con}")
+
+            st.markdown("---")
+
             # Action row: checkbox and button
             action_cols = st.columns([3, 1])
             with action_cols[0]:
                 apply_multipliers = st.checkbox(
                     "Apply family multipliers (EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x)",
-                    value=True,
+                    value=False,
                     key=f"multiplier_{idx}"
                 )
             with action_cols[1]:
-                button_type = "secondary" if is_active else "primary"
                 button_label = "Re-apply" if is_active else "Apply Strategy"
-                if st.button(button_label, key=f"apply_{idx}", type=button_type):
+                if st.button(button_label, key=f"apply_{idx}", type="secondary"):
                     from affordability import StrategyApplicator
 
                     try:
@@ -1620,18 +2023,6 @@ if 'affordability_analysis' in st.session_state and st.session_state.affordabili
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error applying strategy: {e}")
-
-            # Details expander on its own line
-            with st.expander("Details"):
-                col_pro, col_con = st.columns(2)
-                with col_pro:
-                    st.markdown("**Pros:**")
-                    for pro in rec['pros']:
-                        st.write(f"✓ {pro}")
-                with col_con:
-                    st.markdown("**Cons:**")
-                    for con in rec.get('cons', []):
-                        st.write(f"⚠️ {con}")
 
             # INLINE APPLIED OUTPUT - Only show when THIS strategy is applied
             if is_active:
@@ -1705,13 +2096,79 @@ if 'affordability_analysis' in st.session_state and st.session_state.affordabili
                         assign_df = pd.DataFrame(assignment_data)
                         st.dataframe(assign_df, hide_index=True, width='stretch')
 
+                # CSV Export section
+                st.markdown("---")
+                st.markdown("##### Export Contribution Data")
+
+                # Build comprehensive export DataFrame
+                assignments = settings.get('employee_assignments', {})
+                if assignments:
+                    export_data = []
+                    for emp_id, assign in assignments.items():
+                        emp_row = census_df[
+                            (census_df['employee_id'].astype(str) == str(emp_id)) |
+                            (census_df.get('Employee Number', pd.Series()).astype(str) == str(emp_id))
+                        ] if 'employee_id' in census_df.columns or 'Employee Number' in census_df.columns else pd.DataFrame()
+
+                        if not emp_row.empty:
+                            emp = emp_row.iloc[0]
+                            first_name = emp.get('first_name') or emp.get('First Name', '')
+                            last_name = emp.get('last_name') or emp.get('Last Name', '')
+                            name = f"{first_name} {last_name}".strip() or emp_id
+                            family_status = emp.get('family_status') or emp.get('Family Status', 'EE')
+                            age = emp.get('age') or emp.get('ee_age', '')
+                            state = emp.get('state') or emp.get('Home State', '')
+                            rating_area = emp.get('rating_area_id', '')
+                            # zip_code is the canonical column name after census processing
+                            zip_code = emp.get('zip_code') or emp.get('home_zip') or emp.get('Home Zip', '')
+                        else:
+                            name = emp_id
+                            first_name = ''
+                            last_name = ''
+                            family_status = ''
+                            age = ''
+                            state = ''
+                            rating_area = ''
+                            zip_code = ''
+
+                        export_data.append({
+                            'Employee ID': emp_id,
+                            'First Name': first_name,
+                            'Last Name': last_name,
+                            'Age': age,
+                            'State': state,
+                            'ZIP': zip_code,
+                            'Rating Area': rating_area,
+                            'Family Status': family_status,
+                            'Contribution Class': assign['class_id'],
+                            'Monthly Contribution': assign['monthly_contribution'],
+                            'Annual Contribution': assign['annual_contribution']
+                        })
+
+                    export_df = pd.DataFrame(export_data)
+
+                    # Convert to CSV
+                    csv_data = export_df.to_csv(index=False)
+
+                    # Strategy name for filename
+                    strategy_name = settings.get('strategy_applied', 'contribution')
+
+                    st.download_button(
+                        label="Download Full Contribution Schedule (CSV)",
+                        data=csv_data,
+                        file_name=f"ichra_{strategy_name}_contributions.csv",
+                        mime="text/csv",
+                        key=f"export_csv_{idx}"
+                    )
+
+                    st.caption(f"Export includes {len(export_data)} employees with contribution assignments")
+
                 # Clear strategy button
                 if st.button("Clear Strategy", key=f"clear_{idx}"):
                     st.session_state.contribution_settings = {
                         'default_percentage': 75,
                         'by_class': {},
-                        'contribution_type': 'percentage',
-                        'flat_amounts': {'EE': 400, 'ES': 600, 'EC': 600, 'F': 800}
+                        'contribution_type': 'percentage'
                     }
                     st.rerun()
 
@@ -1760,16 +2217,6 @@ if 'affordability_analysis' in st.session_state and st.session_state.affordabili
 
 st.subheader("💰 ICHRA Budget Proposal")
 
-# Show status if strategy was applied
-if st.session_state.contribution_settings.get('contribution_type') == 'flat':
-    flat_amount = st.session_state.contribution_settings['flat_amounts'].get('EE', 0)
-    if flat_amount > 0:
-        st.success(f"""
-        ✅ **Contribution Strategy Applied:** ${flat_amount:.0f}/month flat contribution
-
-        Click "Calculate Budget" below to see what each employee can get with this contribution.
-        """)
-
 st.info("""
 **Calculate ICHRA Budget for All Employees**
 
@@ -1816,7 +2263,7 @@ if calculate_button:
                     pct = settings.get('default_percentage', 75)
                     employer_contribution = lcsp_premium * (pct / 100)
                     employee_cost = lcsp_premium - employer_contribution
-                elif contrib_type == 'class_based':
+                else:  # class_based
                     # Get contribution from employee assignment
                     emp_id_str = str(employee_id)
                     assignments = settings.get('employee_assignments', {})
@@ -1826,10 +2273,6 @@ if calculate_button:
                         # Fallback: employee not in assignments, use 0
                         employer_contribution = 0
                     employee_cost = max(0, lcsp_premium - employer_contribution)
-                else:  # flat
-                    flat_amt = settings.get('flat_amounts', {}).get(family_status, 400)
-                    employer_contribution = min(flat_amt, lcsp_premium)
-                    employee_cost = max(0, lcsp_premium - flat_amt)
 
                 # Store in contribution_analysis for Employer Summary
                 contribution_analysis[employee_id] = {
@@ -1905,12 +2348,10 @@ else:
     contrib_type = st.session_state.contribution_settings.get('contribution_type', 'percentage')
     if contrib_type == 'percentage':
         context_parts.append(f"Default contribution: {st.session_state.contribution_settings.get('default_percentage', 75)}%")
-    elif contrib_type == 'class_based':
+    else:  # class_based
         strategy = st.session_state.contribution_settings.get('strategy_applied', 'unknown')
         total_monthly = st.session_state.contribution_settings.get('total_monthly', 0)
         context_parts.append(f"Strategy: {strategy}, Total monthly: ${total_monthly:,.0f}")
-    elif 'flat_amounts' in st.session_state.contribution_settings:
-        context_parts.append(f"Flat amounts: {st.session_state.contribution_settings['flat_amounts']}")
 
     context = "\n".join(context_parts)
 

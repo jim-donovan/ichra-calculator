@@ -802,6 +802,13 @@ class CensusProcessor:
         Raises:
             ValueError: If required columns missing or data invalid
         """
+        import logging
+        import time
+
+        logging.info("=" * 60)
+        logging.info(f"CENSUS PARSE: Starting parse_new_census_format with {len(df)} rows")
+        parse_start = time.time()
+
         from constants import NEW_CENSUS_REQUIRED_COLUMNS, FAMILY_STATUS_CODES
         from queries import PlanQueries
 
@@ -814,7 +821,16 @@ class CensusProcessor:
         dependents = []
         errors = []
 
+        total_rows = len(df)
+        zip_lookup_times = []
+        logging.info(f"CENSUS PARSE: Beginning row iteration for {total_rows} rows")
+
         for idx, row in df.iterrows():
+            # Log progress every 10 rows or for first 5
+            if idx < 5 or idx % 10 == 0:
+                elapsed = time.time() - parse_start
+                logging.info(f"CENSUS PARSE: Processing row {idx+1}/{total_rows} ({elapsed:.1f}s elapsed)")
+
             try:
                 employee_number = str(row['Employee Number']).strip()
                 # Handle ZIP+4 format (e.g., "29654-7352" -> "29654")
@@ -847,7 +863,17 @@ class CensusProcessor:
                     continue
 
                 # Look up county and rating area from ZIP
+                if idx < 3:
+                    logging.info(f"CENSUS PARSE: About to call get_county_by_zip({home_zip}, {home_state})...")
+                zip_start = time.time()
                 county_result = PlanQueries.get_county_by_zip(db, home_zip, home_state)
+                if idx < 3:
+                    logging.info(f"CENSUS PARSE: get_county_by_zip returned in {time.time() - zip_start:.3f}s")
+                zip_elapsed = time.time() - zip_start
+                zip_lookup_times.append(zip_elapsed)
+
+                if idx < 5:
+                    logging.info(f"CENSUS PARSE: ZIP lookup for {home_zip} ({home_state}) took {zip_elapsed:.3f}s")
 
                 if county_result.empty:
                     errors.append(f"Row {idx+2}: ZIP code {home_zip} not found for state {home_state}")
@@ -978,14 +1004,25 @@ class CensusProcessor:
                 errors.append(f"Row {idx+2}: Unexpected error: {e}")
                 continue
 
+        # Log summary of row processing
+        total_elapsed = time.time() - parse_start
+        logging.info(f"CENSUS PARSE: Row iteration complete in {total_elapsed:.1f}s")
+        logging.info(f"CENSUS PARSE: Processed {len(employees)} employees, {len(dependents)} dependents, {len(errors)} errors")
+        if zip_lookup_times:
+            avg_zip = sum(zip_lookup_times) / len(zip_lookup_times)
+            total_zip = sum(zip_lookup_times)
+            logging.info(f"CENSUS PARSE: ZIP lookups - avg: {avg_zip:.3f}s, total: {total_zip:.1f}s")
+
         # Report errors if any
         if errors:
+            logging.warning(f"CENSUS PARSE: {len(errors)} validation errors found")
             error_msg = "\n".join(errors[:10])  # Show first 10 errors
             if len(errors) > 10:
                 error_msg += f"\n... and {len(errors) - 10} more errors"
             raise ValueError(f"Census validation errors:\n{error_msg}")
 
         # Create DataFrames
+        logging.info("CENSUS PARSE: Creating DataFrames...")
         employees_df = pd.DataFrame(employees)
         dependents_df = pd.DataFrame(dependents) if dependents else pd.DataFrame(
             columns=['dependent_id', 'employee_id', 'relationship', 'age', 'dob']
@@ -1443,10 +1480,7 @@ class CostAggregator:
         employee_contribution_pct: float,
         dependent_contribution_pct: float = None,
         dependent_contribution_strategy: str = "Same as employee",
-        dependent_contribution_amount: float = 0.0,
-        employee_contribution_type: str = "percentage",
-        employee_flat_amount: float = 0.0,
-        flat_by_family: Dict[str, float] = None
+        dependent_contribution_amount: float = 0.0
     ) -> Dict:
         """
         Calculate and aggregate ICHRA costs across multiple dimensions
@@ -1460,9 +1494,6 @@ class CostAggregator:
             dependent_contribution_pct: Employer contribution percentage for dependents
             dependent_contribution_strategy: How to handle dependent contributions
             dependent_contribution_amount: Fixed dollar amount for dependent contributions
-            employee_contribution_type: "percentage" or "flat" for employee contribution
-            employee_flat_amount: Fixed dollar amount for employee contribution (when type is "flat")
-            flat_by_family: Dict mapping family status (EE, ES, EC, F) to flat allowance amounts
 
         Returns:
             Dictionary containing:
@@ -1552,54 +1583,25 @@ class CostAggregator:
                 # Calculate employer contributions
                 total_premium = emp_premium + dep_premium
 
-                if employee_contribution_type == "flat" and flat_by_family:
-                    # Flat-by-family: single allowance covers entire household
-                    family_allowance = flat_by_family.get(family_status, flat_by_family.get('EE', 0))
-                    total_employer_contrib = min(family_allowance, total_premium)
-                    # For reporting, allocate to employee first, then dependents
-                    emp_employer_contrib = min(family_allowance, emp_premium)
-                    dep_employer_contrib = total_employer_contrib - emp_employer_contrib
-                elif employee_contribution_type == "flat":
-                    # Single flat amount: employer pays up to flat amount for employee, plus dependent strategy
-                    emp_employer_contrib = min(employee_flat_amount, emp_premium)
-                    # Determine dependent contribution value based on strategy
-                    if dependent_contribution_strategy == "Same as employee":
-                        # For flat employee contribution, "Same as employee" uses employee_contribution_pct
-                        # (Note: This is a bit ambiguous - should "Same" mean same flat $ or same % as when employee uses %?)
-                        # Using percentage to be consistent with percentage mode behavior
-                        dep_contrib_value = employee_contribution_pct
-                    elif dependent_contribution_strategy == "Different percentage":
-                        dep_contrib_value = dependent_contribution_pct
-                    else:  # "Fixed dollar amount" or "No contribution"
-                        dep_contrib_value = dependent_contribution_amount
+                # Percentage-based contribution
+                emp_employer_contrib = PremiumCalculator.calculate_employer_contribution(
+                    emp_premium, employee_contribution_pct
+                )
+                # Determine dependent contribution value based on strategy
+                if dependent_contribution_strategy == "Same as employee":
+                    dep_contrib_value = employee_contribution_pct  # Use same % as employee
+                elif dependent_contribution_strategy == "Different percentage":
+                    dep_contrib_value = dependent_contribution_pct
+                else:  # "Fixed dollar amount" or "No contribution"
+                    dep_contrib_value = dependent_contribution_amount
 
-                    dep_employer_contrib = PremiumCalculator.calculate_dependent_contribution(
-                        dep_premium,
-                        dependent_contribution_strategy,
-                        dep_contrib_value,
-                        len(family_deps)
-                    )
-                    total_employer_contrib = emp_employer_contrib + dep_employer_contrib
-                else:
-                    # Percentage-based contribution
-                    emp_employer_contrib = PremiumCalculator.calculate_employer_contribution(
-                        emp_premium, employee_contribution_pct
-                    )
-                    # Determine dependent contribution value based on strategy
-                    if dependent_contribution_strategy == "Same as employee":
-                        dep_contrib_value = employee_contribution_pct  # Use same % as employee
-                    elif dependent_contribution_strategy == "Different percentage":
-                        dep_contrib_value = dependent_contribution_pct
-                    else:  # "Fixed dollar amount" or "No contribution"
-                        dep_contrib_value = dependent_contribution_amount
-
-                    dep_employer_contrib = PremiumCalculator.calculate_dependent_contribution(
-                        dep_premium,
-                        dependent_contribution_strategy,
-                        dep_contrib_value,
-                        len(family_deps)
-                    )
-                    total_employer_contrib = emp_employer_contrib + dep_employer_contrib
+                dep_employer_contrib = PremiumCalculator.calculate_dependent_contribution(
+                    dep_premium,
+                    dependent_contribution_strategy,
+                    dep_contrib_value,
+                    len(family_deps)
+                )
+                total_employer_contrib = emp_employer_contrib + dep_employer_contrib
                 # Ensure employee cost never goes negative (employer can pay up to 100%)
                 total_employee_cost = max(0.0, total_premium - total_employer_contrib)
 

@@ -126,11 +126,8 @@ def get_employer_contribution(employee: dict) -> float:
 
         return 0.0
 
-    elif contribution_type == 'flat':
-        flat_amounts = settings.get('flat_amounts', {})
-        return float(flat_amounts.get(family_status, flat_amounts.get('EE', 400)))
-
     else:
+        # Percentage-based (default)
         return float(settings.get('default_percentage', 75))
 
 
@@ -271,7 +268,7 @@ def compare_current_vs_marketplace(employee_id: str, include_family: bool = True
             else:
                 premium = ee_premium
 
-            if settings.get('contribution_type') == 'flat' or settings.get('contribution_type') == 'class_based':
+            if settings.get('contribution_type') == 'class_based':
                 employer_pays = min(contribution, premium)
                 employee_pays = max(0, premium - contribution)
             else:
@@ -468,7 +465,7 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
                     WHEN v.csr_variation_type = 'Exchange variant (no CSR)' THEN 'On-Exchange'
                     ELSE 'Off-Exchange'
                 END as exchange_status,
-                ABS(r.individual_rate - %s) as rate_diff
+                ABS(r.individual_rate::numeric - %s) as rate_diff
             FROM rbis_insurance_plan_20251019202724 p
             JOIN rbis_insurance_plan_variant_20251019202724 v
                 ON p.hios_plan_id = v.hios_plan_id
@@ -565,8 +562,7 @@ if 'contribution_settings' not in st.session_state:
     st.session_state.contribution_settings = {
         'default_percentage': 75,
         'by_class': {},
-        'contribution_type': 'percentage',
-        'flat_amounts': {'EE': 400, 'ES': 600, 'EC': 600, 'F': 800}
+        'contribution_type': 'percentage'
     }
 
 # Get employee list for selector
@@ -708,11 +704,7 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
             col1, col2, col3 = st.columns(3)
 
             contrib_type = settings.get('contribution_type')
-            if contrib_type == 'flat':
-                flat_amt = settings['flat_amounts'].get(family_status, 400)
-                lcsp_er_pays = min(flat_amt, lcsp_premium)
-                lcsp_ee_pays = max(0, lcsp_premium - flat_amt)
-            elif contrib_type == 'class_based':
+            if contrib_type == 'class_based':
                 contribution = get_employer_contribution(employee)
                 lcsp_er_pays = min(contribution, lcsp_premium)
                 lcsp_ee_pays = max(0, lcsp_premium - contribution)
@@ -730,8 +722,6 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
 
             if contrib_type == 'class_based':
                 st.caption(f"Contribution: Class-Based - ${contribution:,.0f}/mo")
-            elif contrib_type == 'flat':
-                st.caption(f"Contribution: Flat Amount - ${flat_amt:,.0f}/mo ({family_status})")
             else:
                 pct = settings.get('default_percentage', 75)
                 st.caption(f"Contribution: {pct}% Employer / {100-pct}% Employee")
@@ -746,11 +736,7 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
             equiv_premium_str = equiv_data.get('monthly_premium', '$0.00')
             equiv_premium = float(equiv_premium_str.replace('$', '').replace(',', ''))
 
-            if settings.get('contribution_type') == 'flat':
-                flat_amt = settings['flat_amounts'].get(family_status, 400)
-                equiv_er_pays = min(flat_amt, equiv_premium)
-                equiv_ee_pays = max(0, equiv_premium - flat_amt)
-            elif settings.get('contribution_type') == 'class_based':
+            if settings.get('contribution_type') == 'class_based':
                 contribution = get_employer_contribution(employee)
                 equiv_er_pays = min(contribution, equiv_premium)
                 equiv_ee_pays = max(0, equiv_premium - contribution)

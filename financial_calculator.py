@@ -635,11 +635,31 @@ class FinancialSummaryCalculator:
 
     @staticmethod
     def count_total_lives(census_df: pd.DataFrame) -> int:
-        """Count total covered lives in census"""
+        """
+        Count total covered lives in census.
+
+        Counts employee + spouse (if ES or F) + all children with DOB data.
+        Unlike _get_rated_members(), this counts ALL covered lives, not just
+        the rated members used for premium calculation.
+        """
         total = 0
         for _, row in census_df.iterrows():
-            members = FinancialSummaryCalculator._get_rated_members(row)
-            total += len(members)
+            # Always count the employee
+            lives = 1
+
+            family_status = row.get('Family Status', row.get('family_status', 'EE'))
+
+            # Count spouse for ES (Employee + Spouse) or F (Family)
+            if family_status in ['ES', 'F']:
+                lives += 1
+
+            # Count all children with DOB data for EC (Employee + Children) or F (Family)
+            if family_status in ['EC', 'F']:
+                for col in ['Dep 2 DOB', 'Dep 3 DOB', 'Dep 4 DOB', 'Dep 5 DOB', 'Dep 6 DOB']:
+                    if col in row.index and pd.notna(row.get(col)) and str(row.get(col)).strip():
+                        lives += 1
+
+            total += lives
         return total
 
     # Tier multipliers for estimating family coverage costs

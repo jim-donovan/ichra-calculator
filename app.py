@@ -3,10 +3,22 @@ ICHRA Plan Calculator - Main Application
 Streamlit app for ICHRA benefits consultants to calculate and compare Individual marketplace plans
 """
 
-import streamlit as st
 import sys
 import os
+import logging
 from pathlib import Path
+
+# Configure logging BEFORE importing streamlit
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S',
+    force=True  # Override any existing config
+)
+print("[APP] Logging configured", flush=True)
+logging.info("APP STARTUP: Logging initialized")
+
+import streamlit as st
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))

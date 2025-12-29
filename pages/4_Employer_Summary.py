@@ -361,13 +361,6 @@ if contribution_type == 'class_based':
         for tier in settings['tiers']:
             st.markdown(f"- {tier['location']}: ${tier['contribution']:.0f}/mo")
 
-elif contribution_type == 'flat':
-    flat_amounts = settings.get('flat_amounts', {})
-    st.markdown("**Contribution Type:** Flat Dollar Amount")
-    st.markdown("**By Family Status:**")
-    for status, amount in flat_amounts.items():
-        st.markdown(f"- {status}: ${amount:,.2f}/mo")
-
 else:
     contribution_pct = settings.get('default_percentage', 75)
     st.markdown(f"**Contribution Type:** Percentage")

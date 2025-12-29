@@ -15,7 +15,7 @@ class DatabaseConnection:
     """Manages PostgreSQL database connections"""
 
     def __init__(self, host: str = "localhost", port: int = 5432,
-                 database: str = "pricing-proposal", user: Optional[str] = None):
+                 database: str = "ichra_data", user: Optional[str] = None):
         """
         Initialize database connection parameters
 
@@ -42,14 +42,20 @@ class DatabaseConnection:
         Returns:
             Database connection object
         """
+        import logging
+        import time
+
         if self._conn is None or self._conn.closed:
             try:
+                logging.info(f"DB CONNECT: Connecting to {self.database}@{self.host}:{self.port}...")
+                connect_start = time.time()
                 self._conn = psycopg2.connect(
                     host=self.host,
                     port=self.port,
                     database=self.database,
                     user=self.user
                 )
+                logging.info(f"DB CONNECT: Connected in {time.time() - connect_start:.2f}s")
             except psycopg2.Error as e:
                 import logging
                 import os
@@ -88,10 +94,27 @@ class DatabaseConnection:
         Returns:
             Pandas DataFrame with query results
         """
+        import logging
+        import time
+
+        # Log first 100 chars of query for debugging
+        query_preview = query.strip()[:100].replace('\n', ' ')
+        logging.debug(f"DB QUERY: {query_preview}...")
+
+        connect_start = time.time()
         conn = self.connect()
+        connect_time = time.time() - connect_start
+        if connect_time > 0.1:
+            logging.info(f"DB QUERY: Connection took {connect_time:.2f}s (slow)")
+
         try:
+            exec_start = time.time()
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(query, params)
+                exec_time = time.time() - exec_start
+                if exec_time > 1.0:
+                    logging.warning(f"DB QUERY: Slow query took {exec_time:.2f}s: {query_preview}...")
+
                 if cursor.description:  # Query returns data
                     columns = [desc[0] for desc in cursor.description]
                     data = cursor.fetchall()
@@ -102,12 +125,11 @@ class DatabaseConnection:
         except psycopg2.Error as e:
             import logging
             import os
-            # Only log detailed errors in debug mode to prevent info leakage
-            if os.environ.get('DEBUG', '').lower() == 'true':
-                logging.error(f"Query execution error: {e}")
-            else:
-                logging.error(f"Query execution error: {type(e).__name__}")
-            st.error("Database query error. Please try again or contact support.")
+            # Always log detailed errors for debugging
+            logging.error(f"Query execution error: {e}")
+            logging.error(f"Query: {query[:200]}...")
+            logging.error(f"Params: {params}")
+            st.error(f"Database query error: {e}")
             conn.rollback()
             raise
 

@@ -218,10 +218,6 @@ else:
                 strategy_name = settings.get('strategy_name', 'Class-Based')
                 total_annual = settings.get('total_annual', 0)
                 contrib_text = f"<b>Contribution Strategy:</b> {strategy_name} (Total Annual: ${total_annual:,.0f})"
-            elif contribution_type == 'flat':
-                flat_amounts = settings.get('flat_amounts', {})
-                ee_amount = flat_amounts.get('EE', 0)
-                contrib_text = f"<b>Employer Contribution:</b> Flat ${ee_amount:,.0f}/month (EE base)"
             else:
                 contribution_pct = settings.get('default_percentage', 75)
                 contrib_text = f"<b>Employer Contribution:</b> {contribution_pct}% of benchmark premium"

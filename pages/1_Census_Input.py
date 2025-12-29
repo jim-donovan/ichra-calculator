@@ -5,6 +5,16 @@ Handles employee census upload with ZIP codes, DOBs, and Family Status codes
 
 import streamlit as st
 import pandas as pd
+import logging
+import time
+
+# Configure logging to show in console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+
 from database import get_database_connection
 from utils import CensusProcessor, ContributionComparison
 from constants import FAMILY_STATUS_CODES
@@ -15,7 +25,10 @@ st.set_page_config(page_title="Census Input", page_icon="📊", layout="wide")
 
 # Initialize session state
 if 'db' not in st.session_state:
+    logging.info("SESSION: Initializing database connection...")
+    db_start = time.time()
     st.session_state.db = get_database_connection()
+    logging.info(f"SESSION: Database connection established in {time.time() - db_start:.2f}s")
 
 if 'census_df' not in st.session_state:
     st.session_state.census_df = None
@@ -368,6 +381,10 @@ else:
     if uploaded_file is not None:
         # Record this upload attempt
         st.session_state.upload_timestamps.append(current_time)
+        upload_start = time.time()
+        print(f"[UPLOAD] ======== Starting upload: {uploaded_file.name} ========", flush=True)
+        logging.info("=" * 60)
+        logging.info(f"FILE UPLOAD: Starting upload processing for '{uploaded_file.name}'")
 
         try:
             # Security validation for file upload
@@ -375,7 +392,9 @@ else:
             MAX_ROWS = 10000
 
             # Check file size
+            logging.info("FILE UPLOAD: Reading file bytes...")
             file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            logging.info(f"FILE UPLOAD: File size = {file_size_mb:.2f} MB")
             if file_size_mb > MAX_FILE_SIZE_MB:
                 st.error(f"❌ File too large: {file_size_mb:.1f}MB. Maximum allowed is {MAX_FILE_SIZE_MB}MB.")
                 st.stop()
@@ -387,9 +406,13 @@ else:
             import io
 
             # Read file content to detect delimiter
+            logging.info("FILE UPLOAD: Decoding file content...")
             try:
+                decode_start = time.time()
                 file_content = uploaded_file.getvalue().decode('utf-8')
+                logging.info(f"FILE UPLOAD: Decoded {len(file_content):,} chars in {time.time() - decode_start:.2f}s")
             except UnicodeDecodeError:
+                logging.error("FILE UPLOAD: UTF-8 decode failed")
                 st.error("❌ File encoding error. Please save the file as UTF-8 encoded CSV.")
                 st.stop()
 
@@ -403,12 +426,16 @@ else:
                 detected_delimiter = ','
 
             # Read with detected delimiter
+            logging.info(f"FILE UPLOAD: Reading CSV with delimiter '{repr(detected_delimiter)}'...")
             uploaded_file.seek(0)  # Reset file pointer
+            csv_start = time.time()
             census_raw = pd.read_csv(
                 io.StringIO(file_content),
                 dtype={'Home Zip': str},
                 sep=detected_delimiter
             )
+            csv_elapsed = time.time() - csv_start
+            logging.info(f"FILE UPLOAD: CSV parsed in {csv_elapsed:.2f}s - {len(census_raw)} rows, {len(census_raw.columns)} columns")
 
             # Show detected format
             delimiter_name = {',': 'comma', '\t': 'tab', ';': 'semicolon', '|': 'pipe'}.get(detected_delimiter, 'custom')
@@ -460,14 +487,19 @@ else:
 
             # Parse and validate
             st.info("🔄 Processing census data...")
+            logging.info("FILE UPLOAD: Starting census parsing...")
 
             with st.spinner("Validating data, looking up counties from ZIP codes, and extracting dependents..."):
                 try:
                     # Parse using new format
+                    parse_start = time.time()
+                    logging.info("FILE UPLOAD: Calling CensusProcessor.parse_new_census_format()...")
                     employees_df, dependents_df = CensusProcessor.parse_new_census_format(
                         census_raw,
                         st.session_state.db
                     )
+                    parse_elapsed = time.time() - parse_start
+                    logging.info(f"FILE UPLOAD: Census parsing complete in {parse_elapsed:.1f}s")
 
                     # Store in session state
                     st.session_state.census_df = employees_df

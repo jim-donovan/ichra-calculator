@@ -42,6 +42,45 @@ PLAN_TYPES = [
 # An ICHRA is affordable if employee's self-only LCSP cost ≤ 9.96% of household income
 AFFORDABILITY_THRESHOLD_2026 = 0.0996  # 9.96% of household income
 
+# ==============================================================================
+# ACA 3:1 AGE RATING CURVE
+# ==============================================================================
+# Source: CMS Market Rating Reforms, 45 CFR 147.102
+# Federal default age rating curve - ratio relative to age 21 (base = 1.000)
+# Age 21 = 1.000 (base), Age 64 = 3.000 (maximum allowed ratio)
+# These are the federal default age curve factors used by most states
+
+ACA_AGE_CURVE = {
+    # Children (0-20): All rated at 0.635 relative to age 21
+    0: 0.635, 1: 0.635, 2: 0.635, 3: 0.635, 4: 0.635,
+    5: 0.635, 6: 0.635, 7: 0.635, 8: 0.635, 9: 0.635,
+    10: 0.635, 11: 0.635, 12: 0.635, 13: 0.635, 14: 0.635,
+    15: 0.635, 16: 0.635, 17: 0.635, 18: 0.635, 19: 0.635,
+    20: 0.635,
+    # Young adults (21-24): Base rate at 1.000
+    21: 1.000, 22: 1.000, 23: 1.000, 24: 1.000,
+    # Adults (25-64): Gradual increase to 3.000
+    25: 1.004, 26: 1.024, 27: 1.048, 28: 1.087, 29: 1.119,
+    30: 1.135, 31: 1.159, 32: 1.183, 33: 1.198, 34: 1.214,
+    35: 1.222, 36: 1.230, 37: 1.238, 38: 1.246, 39: 1.262,
+    40: 1.278, 41: 1.302, 42: 1.325, 43: 1.357, 44: 1.397,
+    45: 1.444, 46: 1.500, 47: 1.563, 48: 1.635, 49: 1.706,
+    50: 1.786, 51: 1.865, 52: 1.952, 53: 2.040, 54: 2.135,
+    55: 2.230, 56: 2.333, 57: 2.437, 58: 2.548, 59: 2.603,
+    60: 2.714, 61: 2.810, 62: 2.873, 63: 2.952,
+    # Seniors (64+): Maximum ratio of 3.000
+    64: 3.000,
+}
+
+# Default family status multipliers for contribution calculations
+# These approximate the cost increase for adding family members
+DEFAULT_FAMILY_MULTIPLIERS = {
+    'EE': 1.0,   # Employee Only (baseline)
+    'ES': 1.5,   # Employee + Spouse (+50%)
+    'EC': 1.3,   # Employee + Children (+30%)
+    'F': 1.8,    # Family (+80%)
+}
+
 # All 50 US states + DC (full RBIS coverage)
 TARGET_STATES = [
     "AK",  # Alaska
