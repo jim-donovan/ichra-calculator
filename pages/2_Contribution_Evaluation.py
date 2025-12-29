@@ -1385,8 +1385,8 @@ if 'current_ee_monthly' in census_df.columns or 'current_er_monthly' in census_d
     if has_data_count > 0:
         has_contribution_data = True
         # Calculate totals
-        total_ee = ee_col.fillna(0).sum()
-        total_er = er_col.fillna(0).sum()
+        total_ee = pd.to_numeric(ee_col, errors='coerce').fillna(0).sum()
+        total_er = pd.to_numeric(er_col, errors='coerce').fillna(0).sum()
         total_premium = total_ee + total_er
 
         st.markdown("**📊 Current Group Plan Costs**")
