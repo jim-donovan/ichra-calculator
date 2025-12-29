@@ -683,11 +683,28 @@ def calculate_affordability_impact(
         'gap_closed': before['total_gap'] - total_gap,
     }
 
+    # Build list of unaffordable employees with details
+    unaffordable_employees = []
+    for emp_id, aff_data in employee_affordability.items():
+        if aff_data.get('has_income_data') and not aff_data.get('is_affordable'):
+            emp_contrib = employee_contributions.get(emp_id, {})
+            # Additional needed = gap between employee cost and max they should pay
+            additional_needed = max(0, aff_data.get('employee_cost', 0) - aff_data.get('max_employee_contribution', 0))
+            unaffordable_employees.append({
+                'employee_id': emp_id,
+                'name': emp_contrib.get('name', emp_id),
+                'gap': round(additional_needed, 2),
+                'additional_needed': round(additional_needed, 2),
+                'employee_cost': aff_data.get('employee_cost', 0),
+                'max_ee_contribution': aff_data.get('max_employee_contribution', 0),
+            })
+
     return {
         'before': before,
         'after': after,
         'delta': delta,
         'employee_affordability': employee_affordability,
+        'unaffordable_employees': unaffordable_employees,
     }
 
 

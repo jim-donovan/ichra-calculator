@@ -1446,31 +1446,59 @@ if current_status.get('affordable_at_current', 0) + current_status.get('needs_in
     with status_cols[0]:
         affordable_pct = (current_status.get('affordable_at_current', 0) /
                          (current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0)) * 100) if (current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0)) > 0 else 0
-        st.metric("Currently Affordable", f"{current_status.get('affordable_at_current', 0)}", f"{affordable_pct:.0f}%")
+        st.metric("Currently Affordable", f"{current_status.get('affordable_at_current', 0)}", f"{affordable_pct:.0f}%",
+                 help="Employees whose current employer contribution already meets the IRS 9.96% affordability safe harbor.")
     with status_cols[1]:
-        st.metric("Need Increase", current_status.get('needs_increase', 0))
+        needs_increase_count = current_status.get('needs_increase', 0)
+        st.metric("Need Increase", needs_increase_count,
+                 help="Employees requiring additional employer contributions to meet IRS affordability. See details below.")
     with status_cols[2]:
-        st.metric("Current ER Spend/yr", f"${current_status.get('current_er_spend_annual', 0):,.0f}")
+        st.metric("Current ER Spend/yr", f"${current_status.get('current_er_spend_annual', 0):,.0f}",
+                 help="Total annual employer spending on health benefits based on current census data.")
     with status_cols[3]:
-        st.metric("Gap to Close", f"${current_status.get('total_gap_annual', 0):,.0f}")
+        st.metric("Gap to Close", f"${current_status.get('total_gap_annual', 0):,.0f}",
+                 help="Additional annual employer spending needed to make ALL employees IRS-affordable. This is the minimum increase required.")
+
+    # Show which employees need increases
+    if needs_increase_count > 0:
+        lcsp_by_employee = aff_context.get('lcsp_data', {}).get('by_employee', {})
+        employees_needing_increase = []
+
+        for emp_id, emp_data in lcsp_by_employee.items():
+            if not emp_data.get('is_affordable', True):
+                gap = emp_data.get('gap', 0)
+                if gap > 0:
+                    employees_needing_increase.append({
+                        'Employee ID': emp_id,
+                        'Name': emp_data.get('name', 'N/A'),
+                        'State': emp_data.get('state', 'N/A'),
+                        'Age': emp_data.get('age', 'N/A'),
+                        'LCSP': f"${emp_data.get('lcsp', 0):,.0f}",
+                        'Current ER': f"${emp_data.get('current_er', 0):,.0f}",
+                        'Min Required': f"${emp_data.get('min_er', 0):,.0f}",
+                        'Gap': f"${gap:,.0f}/mo"
+                    })
+
+        if employees_needing_increase:
+            with st.expander(f"View {len(employees_needing_increase)} employees needing contribution increase", expanded=False):
+                st.dataframe(
+                    pd.DataFrame(employees_needing_increase),
+                    hide_index=True,
+                    width='stretch'
+                )
+                st.caption("Gap = minimum additional monthly employer contribution needed for IRS affordability")
 
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# STRATEGY CONFIGURATION TABS
+# STRATEGY CONFIGURATION
 # -----------------------------------------------------------------------------
 st.markdown("### Strategy Configuration")
-
-strategy_tab1, strategy_tab2, strategy_tab3 = st.tabs([
-    "Base Age + ACA 3:1 Curve",
-    "Percentage of LCSP",
-    "Fixed Age Tiers"
-])
 
 # Initialize strategy config in session state
 if 'strategy_config' not in st.session_state:
     st.session_state.strategy_config = {
-        'active_tab': 'base_age_curve',
+        'active_strategy': 'base_age_curve',
         'base_age': 21,
         'base_contribution': 400.0,
         'lcsp_percentage': 75,
@@ -1481,7 +1509,27 @@ if 'strategy_config' not in st.session_state:
         'high_cost_states': [],
     }
 
-with strategy_tab1:
+# Strategy selection with radio buttons (explicit selection tracking)
+STRATEGY_OPTIONS = {
+    'base_age_curve': 'Base Age + ACA 3:1 Curve',
+    'percentage_lcsp': 'Percentage of LCSP',
+    'fixed_age_tiers': 'Fixed Age Tiers'
+}
+
+selected_strategy = st.radio(
+    "Select contribution strategy",
+    options=list(STRATEGY_OPTIONS.keys()),
+    format_func=lambda x: STRATEGY_OPTIONS[x],
+    index=list(STRATEGY_OPTIONS.keys()).index(st.session_state.strategy_config.get('active_strategy', 'base_age_curve')),
+    key="strategy_selector",
+    horizontal=True
+)
+
+# Update active strategy based on radio selection
+st.session_state.strategy_config['active_strategy'] = selected_strategy
+
+# Show configuration for selected strategy only
+if selected_strategy == 'base_age_curve':
     st.markdown("""
     Set a base contribution at a reference age. The system scales contributions
     using the ACA 3:1 age curve (age 64 = 3x age 21).
@@ -1505,10 +1553,9 @@ with strategy_tab1:
             key="base_contribution_input"
         )
 
-    # Save to session state for button handler
+    # Save to session state
     st.session_state.strategy_config['base_age'] = base_age
     st.session_state.strategy_config['base_contribution'] = base_contribution
-    st.session_state.strategy_config['active_strategy'] = 'base_age_curve'
 
     # Preview curve scaling
     from constants import ACA_AGE_CURVE
@@ -1521,7 +1568,7 @@ with strategy_tab1:
         preview_data.append({"Age": age, "Contribution": f"${amount:,.0f}"})
     st.dataframe(pd.DataFrame(preview_data), hide_index=True, width='stretch')
 
-with strategy_tab2:
+elif selected_strategy == 'percentage_lcsp':
     st.markdown("""
     Each employee receives X% of their individual LCSP premium.
     Higher-cost employees get proportionally larger contributions.
@@ -1537,16 +1584,15 @@ with strategy_tab2:
         key="lcsp_pct_slider"
     )
 
-    # Save to session state for button handler
+    # Save to session state
     st.session_state.strategy_config['lcsp_percentage'] = lcsp_percentage
-    st.session_state.strategy_config['active_strategy'] = 'percentage_lcsp'
 
     st.info(f"""
     At **{lcsp_percentage}%**: Employees pay {100-lcsp_percentage}% of LCSP.
     For affordability, employee cost must be ≤ 9.96% of income.
     """)
 
-with strategy_tab3:
+elif selected_strategy == 'fixed_age_tiers':
     st.markdown("""
     Set fixed dollar amounts for each age tier.
     Employees are assigned based on their age.
@@ -1570,9 +1616,8 @@ with strategy_tab3:
                 key=f"tier_{tier}"
             )
 
-    # Save to session state for button handler
+    # Save to session state
     st.session_state.strategy_config['tier_amounts'] = tier_amounts
-    st.session_state.strategy_config['active_strategy'] = 'fixed_age_tiers'
 
 st.markdown("---")
 
@@ -1775,6 +1820,7 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
         # Progress bar
         employees_analyzed = after.get('employees_analyzed', 0)
         affordable_count = after.get('affordable_count', 0)
+        unaffordable_count = employees_analyzed - affordable_count
         if employees_analyzed > 0:
             aff_pct = affordable_count / employees_analyzed
             st.progress(aff_pct, text=f"Affordability: {aff_pct*100:.0f}% ({affordable_count}/{employees_analyzed} employees)")
@@ -1782,9 +1828,24 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
             if aff_pct >= 1.0:
                 st.success("All employees meet IRS affordability threshold")
             elif aff_pct >= 0.8:
-                st.warning(f"{employees_analyzed - affordable_count} employees still need higher contributions")
+                st.warning(f"{unaffordable_count} employee{'s' if unaffordable_count != 1 else ''} still need{'s' if unaffordable_count == 1 else ''} higher contributions")
             else:
-                st.error(f"Significant gap: {employees_analyzed - affordable_count} employees unaffordable")
+                st.error(f"Significant gap: {unaffordable_count} employee{'s' if unaffordable_count != 1 else ''} unaffordable")
+
+            # Show which employees are unaffordable
+            if unaffordable_count > 0:
+                unaffordable_employees = aff_impact.get('unaffordable_employees', [])
+                if unaffordable_employees:
+                    with st.expander(f"View {len(unaffordable_employees)} employee{'s' if len(unaffordable_employees) != 1 else ''} needing adjustment", expanded=False):
+                        unaff_data = []
+                        for emp in unaffordable_employees:
+                            unaff_data.append({
+                                'Employee': emp.get('name', emp.get('employee_id', 'N/A')),
+                                'Current Gap': f"${emp.get('gap', 0):,.0f}/mo",
+                                'Additional Needed': f"${emp.get('additional_needed', 0):,.0f}/mo"
+                            })
+                        if unaff_data:
+                            st.dataframe(pd.DataFrame(unaff_data), hide_index=True, width='stretch')
 
     # Expandable breakdown sections
     with st.expander("Age Tier Breakdown", expanded=False):
@@ -1866,7 +1927,9 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
     action_cols = st.columns(3)
 
     with action_cols[0]:
-        if st.button("Apply to Session", type="primary", key="apply_strategy_btn"):
+        st.markdown("**Save this strategy for use in subsequent pages:**")
+        if st.button("Use This Strategy →", type="primary", key="apply_strategy_btn",
+                    help="Saves calculated contributions to session. Results will appear on Employer Summary and later pages."):
             # Convert result to contribution_settings format
             emp_contribs = result.get('employee_contributions', {})
             st.session_state.contribution_settings = {
@@ -1910,7 +1973,7 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                 }
             st.session_state.contribution_analysis = contribution_analysis
 
-            st.success(f"Strategy applied! {len(contribution_analysis)} employees → View results on Employer Summary page")
+            st.success(f"✓ Strategy saved! {len(contribution_analysis)} employees assigned. Proceed to **Employer Summary** page to see results.")
             st.rerun()
 
     with action_cols[1]:
@@ -1943,8 +2006,10 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
             )
 
     with action_cols[2]:
-        if st.button("Clear Results", key="clear_strategy_results"):
+        if st.button("Clear & Start Over", key="clear_strategy_results",
+                    help="Clears calculated results so you can try a different strategy configuration."):
             st.session_state.strategy_results = {}
+            # Keep strategy_config intact so user doesn't lose their inputs
             st.rerun()
 
 # Note: The IRS Affordability Analysis is now integrated into the unified modeler above.
