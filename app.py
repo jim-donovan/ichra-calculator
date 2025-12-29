@@ -56,9 +56,14 @@ def check_authentication() -> bool:
     # Check environment variable first
     if os.environ.get('APP_PASSWORD'):
         configured_password = os.environ['APP_PASSWORD']
-    # Check Streamlit secrets
-    elif hasattr(st, 'secrets') and 'app' in st.secrets and 'password' in st.secrets['app']:
-        configured_password = st.secrets['app']['password']
+    # Check Streamlit secrets (wrap in try/except for Railway where secrets may not exist)
+    else:
+        try:
+            if hasattr(st, 'secrets') and 'app' in st.secrets and 'password' in st.secrets['app']:
+                configured_password = st.secrets['app']['password']
+        except Exception:
+            # No secrets file exists - that's fine, just skip
+            pass
 
     # If no password configured, allow access
     if not configured_password:

@@ -188,18 +188,19 @@ if has_individual_contribs:
 
                 st.caption(f"Based on LCSP for {employees_analyzed} employees")
             else:
-                st.info("Run contribution analysis on Page 2 to see proposed ICHRA costs")
+                st.info("Apply a contribution strategy on Page 2 to see proposed ICHRA costs")
         else:
             st.markdown("### Proposed ICHRA Budget")
             st.info("""
-            **Calculate ICHRA Budget First**
+            **Configure Contribution Strategy First**
 
-            Go to **2️⃣ Contribution Evaluation** and click **"Calculate Budget"** to:
-            - Calculate LCSP (Lowest Cost Silver Plan) for all employees
-            - Apply your contribution strategy
-            - Generate employer cost projections
+            Go to **2️⃣ Contribution Evaluation** and use the **Contribution Strategy Modeler** to:
+            1. Select a strategy (Base Age Curve, % of LCSP, or Fixed Tiers)
+            2. Configure strategy parameters and modifiers
+            3. Click **"Calculate"** to preview results
+            4. Click **"Apply to Session"** to save
 
-            This creates an ICHRA budget proposal based on the IRS affordability benchmark.
+            This creates an ICHRA budget proposal based on the IRS affordability benchmark (LCSP).
             """)
 
     # Show change metrics below both columns (full width)
