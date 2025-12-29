@@ -26,6 +26,26 @@ except ImportError:
 
 from database import get_database_connection
 
+
+def get_anthropic_api_key():
+    """Get Anthropic API key from environment or Streamlit secrets."""
+    # Check environment variable first
+    api_key = os.getenv('ANTHROPIC_API_KEY')
+    if api_key:
+        return api_key
+    # Check Streamlit secrets
+    try:
+        if hasattr(st, 'secrets') and 'anthropic' in st.secrets:
+            if 'api_key' in st.secrets['anthropic']:
+                return st.secrets['anthropic']['api_key']
+        # Also check top-level ANTHROPIC_API_KEY in secrets
+        if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+            return st.secrets['ANTHROPIC_API_KEY']
+    except Exception:
+        pass
+    return None
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -1201,9 +1221,9 @@ def get_evaluation_response(user_message: str, context: str) -> str:
     if not ANTHROPIC_AVAILABLE:
         return "AI evaluation requires the Anthropic library. Install with: pip install anthropic"
 
-    api_key = os.getenv('ANTHROPIC_API_KEY')
+    api_key = get_anthropic_api_key()
     if not api_key:
-        return "AI evaluation requires ANTHROPIC_API_KEY environment variable."
+        return "AI evaluation requires ANTHROPIC_API_KEY (set in environment or Streamlit secrets)."
 
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -2470,8 +2490,8 @@ st.subheader("🤖 AI Evaluation Assistant")
 
 if not ANTHROPIC_AVAILABLE:
     st.warning("AI features require the `anthropic` library. Install with: `pip install anthropic`")
-elif not os.getenv('ANTHROPIC_API_KEY'):
-    st.warning("Set ANTHROPIC_API_KEY environment variable to enable AI features.")
+elif not get_anthropic_api_key():
+    st.warning("Set ANTHROPIC_API_KEY in environment or Streamlit secrets to enable AI features.")
 else:
     # Build context for AI
     context_parts = [

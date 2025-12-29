@@ -27,6 +27,26 @@ from queries import PlanQueries
 load_dotenv()
 
 
+def get_anthropic_api_key():
+    """Get Anthropic API key from environment or Streamlit secrets."""
+    # Check environment variable first
+    api_key = os.getenv('ANTHROPIC_API_KEY')
+    if api_key and api_key != 'your_api_key_here':
+        return api_key
+    # Check Streamlit secrets
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and 'anthropic' in st.secrets:
+            if 'api_key' in st.secrets['anthropic']:
+                return st.secrets['anthropic']['api_key']
+        # Also check top-level ANTHROPIC_API_KEY in secrets
+        if hasattr(st, 'secrets') and 'ANTHROPIC_API_KEY' in st.secrets:
+            return st.secrets['ANTHROPIC_API_KEY']
+    except Exception:
+        pass
+    return None
+
+
 # ==============================================================================
 # LLM OUTPUT CLEANUP
 # ==============================================================================
@@ -1050,11 +1070,11 @@ class LLMPlanAnalyzer:
 
     def __init__(self):
         """Initialize Claude API client"""
-        api_key = os.getenv('ANTHROPIC_API_KEY')
-        if not api_key or api_key == 'your_api_key_here':
+        api_key = get_anthropic_api_key()
+        if not api_key:
             raise ValueError(
-                "ANTHROPIC_API_KEY not set in .env file. "
-                "Please add your API key from https://console.anthropic.com/settings/keys"
+                "ANTHROPIC_API_KEY not set. "
+                "Set in environment or Streamlit secrets (anthropic.api_key or ANTHROPIC_API_KEY)"
             )
 
         self.client = anthropic.Anthropic(api_key=api_key)
