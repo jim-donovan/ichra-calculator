@@ -94,10 +94,6 @@ def initialize_session_state():
 def main():
     """Main application entry point"""
 
-    # Check authentication first
-    if not check_authentication():
-        return
-
     # Initialize session state
     initialize_session_state()
 
