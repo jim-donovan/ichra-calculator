@@ -31,9 +31,14 @@ print(f"[DEBUG] st.secrets available: {hasattr(st, 'secrets')}", flush=True)
 try:
     print(f"[DEBUG] 'database' in secrets: {'database' in st.secrets}", flush=True)
     if 'database' in st.secrets:
-        print(f"[DEBUG] database keys: {list(st.secrets['database'].keys())}", flush=True)
-        print(f"[DEBUG] host: {st.secrets['database'].get('host', 'NOT SET')}", flush=True)
-        print(f"[DEBUG] port: {st.secrets['database'].get('port', 'NOT SET')}", flush=True)
+        db_sec = st.secrets['database']
+        print(f"[DEBUG] database keys: {list(db_sec.keys())}", flush=True)
+        print(f"[DEBUG] host: {db_sec['host'] if 'host' in db_sec else 'NOT SET'}", flush=True)
+        print(f"[DEBUG] port: {db_sec['port'] if 'port' in db_sec else 'NOT SET'}", flush=True)
+        print(f"[DEBUG] password exists: {'password' in db_sec}", flush=True)
+        if 'password' in db_sec:
+            pw = db_sec['password']
+            print(f"[DEBUG] password length: {len(pw) if pw else 0}", flush=True)
 except Exception as e:
     print(f"[DEBUG] Error reading secrets: {e}", flush=True)
 

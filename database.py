@@ -199,13 +199,16 @@ def get_database_connection():
     try:
         if hasattr(st, 'secrets') and 'database' in st.secrets:
             db_secrets = st.secrets['database']
+            # Use bracket notation for password - .get() may not work with Streamlit's AttrDict
+            password = db_secrets['password'] if 'password' in db_secrets else None
+            sslmode = db_secrets['sslmode'] if 'sslmode' in db_secrets else 'prefer'
             return DatabaseConnection(
                 host=db_secrets['host'],
                 port=db_secrets['port'],
                 database=db_secrets['name'],
                 user=db_secrets['user'],
-                password=db_secrets.get('password'),
-                sslmode=db_secrets.get('sslmode', 'prefer')
+                password=password,
+                sslmode=sslmode
             )
     except Exception:
         pass
