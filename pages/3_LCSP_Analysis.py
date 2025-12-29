@@ -1,8 +1,8 @@
 """
-Financial Summary Page - Multi-State ICHRA Comparison
+LCSP Analysis Page - Lowest Cost Silver Plan Comparison
 
-Compares current group plan costs to ICHRA marketplace scenarios.
-Allows user to select plans per state and calculate total workforce costs.
+Compares current group plan costs to 100% LCSP (Lowest Cost Silver Plan) premiums.
+Shows what it would cost if the employer covered 100% of each employee's LCSP.
 """
 
 import streamlit as st
@@ -14,7 +14,7 @@ from database import get_database_connection
 from financial_calculator import FinancialSummaryCalculator
 
 # Page config
-st.set_page_config(page_title="Financial Summary", page_icon="📊", layout="wide")
+st.set_page_config(page_title="LCSP Analysis", page_icon="📊", layout="wide")
 
 # =============================================================================
 # STYLING
@@ -25,8 +25,8 @@ st.set_page_config(page_title="Financial Summary", page_icon="📊", layout="wid
 # PAGE HEADER
 # =============================================================================
 
-st.title("📊 Financial Summary")
-st.markdown("Compare current group plan costs to ICHRA marketplace scenarios across all states.")
+st.title("📊 LCSP Analysis")
+st.markdown("Compare current group plan costs to 100% LCSP (Lowest Cost Silver Plan) premiums across all states.")
 
 # =============================================================================
 # VALIDATION
@@ -157,7 +157,7 @@ else:
             value=st.session_state.financial_summary.get('renewal_monthly') or 0.0,
             step=1000.0,
             format="%.0f",
-            help="Enter the total monthly renewal premium (EE + ER combined). This allows comparison of ICHRA costs vs renewal."
+            help="Enter the total monthly renewal premium (EE + ER combined). This allows comparison of LCSP costs vs renewal."
         )
         st.session_state.financial_summary['renewal_monthly'] = renewal_monthly if renewal_monthly > 0 else None
         st.session_state.financial_summary['renewal_source'] = 'manual' if renewal_monthly > 0 else None
@@ -191,7 +191,7 @@ if not states:
     st.error("No state data found in census")
     st.stop()
 
-st.markdown(f"Your workforce spans **{len(states)} states**. Calculate ICHRA costs using the lowest cost silver plan for each employee in their rating area.")
+st.markdown(f"Your workforce spans **{len(states)} states**. This shows the cost of covering 100% of each employee's Lowest Cost Silver Plan (LCSP) based on their rating area, age, and family status.")
 
 # =============================================================================
 # LCSP-BASED CALCULATION
@@ -216,7 +216,7 @@ results = st.session_state.financial_summary.get('results', {})
 if results and 'total_monthly' in results:
     st.markdown("---")
     st.subheader("📊 Financial Comparison")
-    st.caption("ICHRA costs calculated using the Lowest Cost Silver Plan (LCSP) for each employee based on their rating area, age, and family status.")
+    st.caption("100% LCSP = total cost to cover each employee's Lowest Cost Silver Plan based on their rating area, age, and family status.")
 
     # Main comparison metrics
     ichra_monthly = results['total_monthly']
@@ -258,8 +258,8 @@ if results and 'total_monthly' in results:
             st.caption("Set renewal amount above")
 
     with comp_col3:
-        metal_level = results.get('metal_level', 'Selected')
-        st.metric(f"ICHRA ({metal_level})", f"${ichra_monthly:,.0f}/mo")
+        metal_level = results.get('metal_level', 'Silver')
+        st.metric("100% LCSP", f"${ichra_monthly:,.0f}/mo")
         st.caption(f"${ichra_annual:,.0f}/year")
 
     # Row 2: Variance metrics (3 columns to align with row above)
@@ -268,14 +268,14 @@ if results and 'total_monthly' in results:
     with var_col1:
         if vs_current_monthly >= 0:
             st.metric(
-                "ICHRA Savings vs Current",
+                "LCSP Savings vs Current",
                 f"${vs_current_monthly:,.0f}/mo",
                 f"{vs_current_pct:.1f}%",
                 delta_color="normal"
             )
         else:
             st.metric(
-                "ICHRA vs Current",
+                "LCSP vs Current",
                 f"-${abs(vs_current_monthly):,.0f}/mo",
                 f"+{abs(vs_current_pct):.1f}%",
                 delta_color="inverse"
@@ -285,20 +285,20 @@ if results and 'total_monthly' in results:
         if has_renewal:
             if vs_renewal_monthly >= 0:
                 st.metric(
-                    "ICHRA Savings vs 2026 Renewal",
+                    "LCSP Savings vs 2026 Renewal",
                     f"${vs_renewal_monthly:,.0f}/mo",
                     f"{vs_renewal_pct:.1f}%",
                     delta_color="normal"
                 )
             else:
                 st.metric(
-                    "ICHRA vs 2026 Renewal",
+                    "LCSP vs 2026 Renewal",
                     f"-${abs(vs_renewal_monthly):,.0f}/mo",
                     f"+{abs(vs_renewal_pct):.1f}%",
                     delta_color="inverse"
                 )
 
-    # var_col3 intentionally left empty to align with ICHRA column above
+    # var_col3 intentionally left empty to align with LCSP column above
 
     # Detailed comparison table
     st.markdown("### Detailed Variance Analysis")
@@ -319,7 +319,7 @@ if results and 'total_monthly' in results:
             f"${renewal_annual:,.0f}"
         ]
 
-    table_data[f'ICHRA ({metal_level})'] = [
+    table_data['100% LCSP'] = [
         f"${ichra_monthly:,.0f}",
         f"${ichra_annual:,.0f}"
     ]
@@ -370,11 +370,11 @@ if results and 'total_monthly' in results:
     # Savings Heatmap by Age and Family Status
     if results.get('employee_details') and has_renewal:
         with st.expander("🗺️ Savings Heatmap by Age & Family Status", expanded=True):
-            st.markdown("**Monthly savings per employee** comparing 2026 Renewal vs ICHRA. Green = savings, Red = increase.")
+            st.markdown("**Monthly savings per employee** comparing 2026 Renewal vs LCSP. Green = savings, Red = increase.")
 
             detail_df = pd.DataFrame(results['employee_details'])
 
-            # Calculate savings for each employee (renewal - ICHRA = savings)
+            # Calculate savings for each employee (renewal - LCSP = savings)
             detail_df['savings'] = detail_df['projected_2026_premium'] - detail_df['estimated_tier_premium']
 
             # Create age bands for cleaner display
@@ -505,7 +505,7 @@ if results and 'total_monthly' in results:
 
                 fig.update_layout(
                     title=dict(
-                        text="Average Monthly Savings: 2026 Renewal vs ICHRA",
+                        text="Average Monthly Savings: 2026 Renewal vs LCSP",
                         font=dict(size=16)
                     ),
                     xaxis_title="Family Status",
@@ -546,7 +546,7 @@ if results and 'total_monthly' in results:
     # Employee Impact Analysis - categorize by savings/breakeven/increase
     if results.get('employee_details') and has_renewal:
         with st.expander("👥 Employee Impact Analysis", expanded=True):
-            st.markdown("**How does ICHRA impact each employee?** Comparing 2026 Renewal vs ICHRA costs.")
+            st.markdown("**How does 100% LCSP compare for each employee?** Comparing 2026 Renewal vs LCSP costs.")
 
             impact_df = pd.DataFrame(results['employee_details'])
             impact_df['savings'] = impact_df['projected_2026_premium'] - impact_df['estimated_tier_premium']
@@ -712,13 +712,13 @@ if results and 'total_monthly' in results:
             'lcsp_plan_name': f'{metal_level} LCSP Plan Name',
             'lcsp_ee_rate': f'2026 {metal_level} LCSP (EE Only)',
             'tier_multiplier': 'Tier Multiplier',
-            'estimated_tier_premium': '2026 Estimated ICHRA Contribution',
+            'estimated_tier_premium': '2026 LCSP Tier Premium',
             'current_ee_monthly': '2025 Current EE Monthly',
             'current_er_monthly': '2025 Current ER Monthly',
             'current_total_monthly': '2025 Current Total Monthly',
-            'savings_vs_2025': '2025 Savings (Current - ICHRA)',
+            'savings_vs_2025': '2025 Savings (Current - LCSP)',
             'projected_2026_premium': '2026 Projected Renewal',
-            'savings_vs_2026': '2026 Savings (Renewal - ICHRA)'
+            'savings_vs_2026': '2026 Savings (Renewal - LCSP)'
         })
 
         csv_data = detail_df.to_csv(index=False)

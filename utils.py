@@ -1973,10 +1973,10 @@ class ContributionComparison:
         total_er = 0.0
 
         if 'current_ee_monthly' in census_df.columns:
-            total_ee = census_df['current_ee_monthly'].fillna(0).sum()
+            total_ee = pd.to_numeric(census_df['current_ee_monthly'], errors='coerce').fillna(0).sum()
 
         if 'current_er_monthly' in census_df.columns:
-            total_er = census_df['current_er_monthly'].fillna(0).sum()
+            total_er = pd.to_numeric(census_df['current_er_monthly'], errors='coerce').fillna(0).sum()
 
         # Count employees with any contribution data
         employees_with_data = 0
