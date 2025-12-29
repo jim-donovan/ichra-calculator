@@ -26,7 +26,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from constants import APP_CONFIG, PAGE_NAMES
 from database import get_database_connection, test_connection
 
-
+def get_cloudflare_user():
+    """Get authenticated user from Cloudflare Zero Trust headers."""
+    import streamlit as st
+    try:
+        # Check for Cloudflare Access header
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        headers = _get_websocket_headers()
+        if headers:
+            return headers.get('Cf-Access-Authenticated-User-Email')
+    except Exception:
+        pass
+    return None
 
 def check_authentication() -> bool:
     """
