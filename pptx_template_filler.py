@@ -226,7 +226,7 @@ class PPTXTemplateFiller:
         if not self.template_path.exists():
             raise FileNotFoundError(
                 f"Template not found: {self.template_path}\n"
-                f"Please create the template with {placeholder} syntax."
+                f"Please create the template with {{placeholder}} syntax."
             )
 
         # Load template
