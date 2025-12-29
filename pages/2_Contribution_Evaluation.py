@@ -1485,6 +1485,11 @@ with strategy_tab1:
             key="base_contribution_input"
         )
 
+    # Save to session state for button handler
+    st.session_state.strategy_config['base_age'] = base_age
+    st.session_state.strategy_config['base_contribution'] = base_contribution
+    st.session_state.strategy_config['active_strategy'] = 'base_age_curve'
+
     # Preview curve scaling
     from constants import ACA_AGE_CURVE
     base_ratio = ACA_AGE_CURVE.get(base_age, 1.0)
@@ -1495,7 +1500,6 @@ with strategy_tab1:
         amount = base_contribution * (ratio / base_ratio)
         preview_data.append({"Age": age, "Contribution": f"${amount:,.0f}"})
     st.dataframe(pd.DataFrame(preview_data), hide_index=True, width='stretch')
-    active_strategy = 'base_age_curve'
 
 with strategy_tab2:
     st.markdown("""
@@ -1513,11 +1517,14 @@ with strategy_tab2:
         key="lcsp_pct_slider"
     )
 
+    # Save to session state for button handler
+    st.session_state.strategy_config['lcsp_percentage'] = lcsp_percentage
+    st.session_state.strategy_config['active_strategy'] = 'percentage_lcsp'
+
     st.info(f"""
     At **{lcsp_percentage}%**: Employees pay {100-lcsp_percentage}% of LCSP.
     For affordability, employee cost must be ≤ 9.96% of income.
     """)
-    active_strategy = 'percentage_lcsp'
 
 with strategy_tab3:
     st.markdown("""
@@ -1542,7 +1549,10 @@ with strategy_tab3:
                 step=25.0,
                 key=f"tier_{tier}"
             )
-    active_strategy = 'fixed_age_tiers'
+
+    # Save to session state for button handler
+    st.session_state.strategy_config['tier_amounts'] = tier_amounts
+    st.session_state.strategy_config['active_strategy'] = 'fixed_age_tiers'
 
 st.markdown("---")
 
@@ -1568,6 +1578,10 @@ with modifier_cols[1]:
         value=st.session_state.strategy_config.get('apply_location_adjustment', False),
         key="apply_location_adj"
     )
+
+# Save modifier values to session state
+st.session_state.strategy_config['apply_family_multipliers'] = apply_family_multipliers
+st.session_state.strategy_config['apply_location_adjustment'] = apply_location_adjustment
 
 # Location adjustment configuration
 if apply_location_adjustment:
@@ -1606,6 +1620,10 @@ if apply_location_adjustment:
                 key="high_cost_states_select"
             )
 
+        # Save location adjustment values to session state
+        st.session_state.strategy_config['high_cost_adjustment'] = high_cost_adjustment
+        st.session_state.strategy_config['high_cost_states'] = high_cost_states
+
 st.markdown("---")
 
 # Initialize strategy results state if needed
@@ -1629,46 +1647,48 @@ if st.button("Calculate Contributions", type="primary", key="calc_strategy_btn")
         try:
             calculator = ContributionStrategyCalculator(st.session_state.db, census_df)
 
-            # Determine which tab is active based on last selected values
-            # Note: Streamlit tabs don't provide a direct way to know which is active,
-            # so we use the session state or default to the first tab
-            strategy_type = st.session_state.get('last_calculated_strategy', 'base_age_curve')
+            # Read all strategy values from session state (set by tabs and modifiers above)
+            cfg = st.session_state.strategy_config
+            strategy_type = cfg.get('active_strategy', 'base_age_curve')
 
-            # Build location adjustments dict
+            # Read modifier values from session state
+            use_family_mult = cfg.get('apply_family_multipliers', True)
+            use_location_adj = cfg.get('apply_location_adjustment', False)
+
+            # Build location adjustments dict from session state
             location_adjustments = {}
-            if apply_location_adjustment:
-                for state in high_cost_states if 'high_cost_states' in dir() else []:
-                    location_adjustments[state] = high_cost_adjustment if 'high_cost_adjustment' in dir() else 100.0
+            if use_location_adj:
+                high_cost_adj = cfg.get('high_cost_adjustment', 100.0)
+                high_cost_list = cfg.get('high_cost_states', [])
+                for state in high_cost_list:
+                    location_adjustments[state] = high_cost_adj
 
-            # Build config based on strategy type
-            if strategy_type == "base_age_curve" or 'base_age' in dir():
+            # Build config based on active strategy (set when user interacts with tabs)
+            if strategy_type == "base_age_curve":
                 config = StrategyConfig(
                     strategy_type=StratType.BASE_AGE_CURVE,
-                    base_age=base_age if 'base_age' in dir() else 21,
-                    base_contribution=base_contribution if 'base_contribution' in dir() else 400.0,
-                    apply_family_multipliers=apply_family_multipliers,
-                    apply_location_adjustment=apply_location_adjustment,
+                    base_age=cfg.get('base_age', 21),
+                    base_contribution=cfg.get('base_contribution', 400.0),
+                    apply_family_multipliers=use_family_mult,
+                    apply_location_adjustment=use_location_adj,
                     location_adjustments=location_adjustments
                 )
-                st.session_state['last_calculated_strategy'] = 'base_age_curve'
-            elif strategy_type == "percentage_lcsp" or 'lcsp_percentage' in dir():
+            elif strategy_type == "percentage_lcsp":
                 config = StrategyConfig(
                     strategy_type=StratType.PERCENTAGE_LCSP,
-                    lcsp_percentage=lcsp_percentage if 'lcsp_percentage' in dir() else 75,
-                    apply_family_multipliers=apply_family_multipliers,
-                    apply_location_adjustment=apply_location_adjustment,
+                    lcsp_percentage=cfg.get('lcsp_percentage', 75),
+                    apply_family_multipliers=use_family_mult,
+                    apply_location_adjustment=use_location_adj,
                     location_adjustments=location_adjustments
                 )
-                st.session_state['last_calculated_strategy'] = 'percentage_lcsp'
-            else:
+            else:  # fixed_age_tiers
                 config = StrategyConfig(
                     strategy_type=StratType.FIXED_AGE_TIERS,
-                    tier_amounts=tier_amounts if 'tier_amounts' in dir() else {},
-                    apply_family_multipliers=apply_family_multipliers,
-                    apply_location_adjustment=apply_location_adjustment,
+                    tier_amounts=cfg.get('tier_amounts', {}),
+                    apply_family_multipliers=use_family_mult,
+                    apply_location_adjustment=use_location_adj,
                     location_adjustments=location_adjustments
                 )
-                st.session_state['last_calculated_strategy'] = 'fixed_age_tiers'
 
             result = calculator.calculate_strategy(config)
 

@@ -26,6 +26,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 from constants import APP_CONFIG, PAGE_NAMES
 from database import get_database_connection, test_connection
 
+# DEBUG: Show secrets status
+print(f"[DEBUG] st.secrets available: {hasattr(st, 'secrets')}", flush=True)
+try:
+    print(f"[DEBUG] 'database' in secrets: {'database' in st.secrets}", flush=True)
+    if 'database' in st.secrets:
+        print(f"[DEBUG] database keys: {list(st.secrets['database'].keys())}", flush=True)
+        print(f"[DEBUG] host: {st.secrets['database'].get('host', 'NOT SET')}", flush=True)
+        print(f"[DEBUG] port: {st.secrets['database'].get('port', 'NOT SET')}", flush=True)
+except Exception as e:
+    print(f"[DEBUG] Error reading secrets: {e}", flush=True)
+
 
 def check_authentication() -> bool:
     """
