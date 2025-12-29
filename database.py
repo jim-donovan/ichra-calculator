@@ -15,7 +15,8 @@ class DatabaseConnection:
     """Manages PostgreSQL database connections"""
 
     def __init__(self, host: str = "localhost", port: int = 5432,
-                 database: str = "ichra_data", user: Optional[str] = None):
+                 database: str = "ichra_data", user: Optional[str] = None,
+                 password: Optional[str] = None, sslmode: Optional[str] = None):
         """
         Initialize database connection parameters
 
@@ -24,6 +25,8 @@ class DatabaseConnection:
             port: Database port
             database: Database name
             user: Database user
+            password: Database password (required for remote connections)
+            sslmode: SSL mode ('require', 'prefer', 'disable', etc.)
         """
         self.host = host
         self.port = port
@@ -32,6 +35,8 @@ class DatabaseConnection:
         import os
         import getpass
         self.user = user or os.environ.get('DB_USER') or getpass.getuser()
+        self.password = password or os.environ.get('DB_PASSWORD')
+        self.sslmode = sslmode or os.environ.get('DB_SSLMODE')
         self._conn = None
         self._engine = None
 
@@ -49,12 +54,17 @@ class DatabaseConnection:
             try:
                 logging.info(f"DB CONNECT: Connecting to {self.database}@{self.host}:{self.port}...")
                 connect_start = time.time()
-                self._conn = psycopg2.connect(
-                    host=self.host,
-                    port=self.port,
-                    database=self.database,
-                    user=self.user
-                )
+                connect_params = {
+                    'host': self.host,
+                    'port': self.port,
+                    'database': self.database,
+                    'user': self.user
+                }
+                if self.password:
+                    connect_params['password'] = self.password
+                if self.sslmode:
+                    connect_params['sslmode'] = self.sslmode
+                self._conn = psycopg2.connect(**connect_params)
                 logging.info(f"DB CONNECT: Connected in {time.time() - connect_start:.2f}s")
             except psycopg2.Error as e:
                 import logging
@@ -79,7 +89,16 @@ class DatabaseConnection:
         """
         if self._engine is None:
             # Explicitly use psycopg2 driver for compatibility
-            connection_string = f"postgresql+psycopg2://{self.user}@{self.host}:{self.port}/{self.database}"
+            from urllib.parse import quote_plus
+            if self.password:
+                # URL-encode password to handle special characters
+                encoded_password = quote_plus(self.password)
+                connection_string = f"postgresql+psycopg2://{self.user}:{encoded_password}@{self.host}:{self.port}/{self.database}"
+            else:
+                connection_string = f"postgresql+psycopg2://{self.user}@{self.host}:{self.port}/{self.database}"
+            # Add SSL mode as query parameter if specified
+            if self.sslmode:
+                connection_string += f"?sslmode={self.sslmode}"
             self._engine = create_engine(connection_string)
         return self._engine
 
@@ -147,18 +166,52 @@ def get_database_connection():
     Returns:
         DatabaseConnection instance
     """
-    # Check if running on Streamlit Cloud or Railway
-    if hasattr(st, 'secrets') and 'database' in st.secrets:
-        # Use secrets for deployed environment
-        return DatabaseConnection(
-            host=st.secrets['database']['host'],
-            port=st.secrets['database']['port'],
-            database=st.secrets['database']['name'],
-            user=st.secrets['database']['user']
-        )
-    else:
-        # Use local defaults for development
-        return DatabaseConnection()
+    import os
+
+    # Option 1: Check Railway/environment variables first
+    if os.environ.get('DATABASE_URL') or os.environ.get('DB_HOST'):
+        # Railway provides DATABASE_URL, or use individual env vars
+        if os.environ.get('DATABASE_URL'):
+            # Parse DATABASE_URL (postgres://user:pass@host:port/dbname)
+            import urllib.parse
+            url = urllib.parse.urlparse(os.environ['DATABASE_URL'])
+            return DatabaseConnection(
+                host=url.hostname,
+                port=url.port or 5432,
+                database=url.path[1:],  # Remove leading /
+                user=url.username,
+                password=url.password,
+                sslmode=os.environ.get('DB_SSLMODE', 'prefer')
+            )
+        else:
+            # Individual environment variables
+            return DatabaseConnection(
+                host=os.environ.get('DB_HOST', 'localhost'),
+                port=int(os.environ.get('DB_PORT', 5432)),
+                database=os.environ.get('DB_NAME', 'ichra_data'),
+                user=os.environ.get('DB_USER'),
+                password=os.environ.get('DB_PASSWORD'),
+                sslmode=os.environ.get('DB_SSLMODE', 'prefer')
+            )
+
+    # Option 2: Check Streamlit secrets (for Streamlit Cloud)
+    # Wrap in try/except because st.secrets throws if no secrets file exists
+    try:
+        if hasattr(st, 'secrets') and 'database' in st.secrets:
+            db_secrets = st.secrets['database']
+            return DatabaseConnection(
+                host=db_secrets['host'],
+                port=db_secrets['port'],
+                database=db_secrets['name'],
+                user=db_secrets['user'],
+                password=db_secrets.get('password'),
+                sslmode=db_secrets.get('sslmode', 'prefer')
+            )
+    except Exception:
+        pass
+
+    # Option 3: Use local defaults for development
+    return DatabaseConnection()
 
 
 def test_connection():

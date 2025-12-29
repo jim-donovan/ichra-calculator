@@ -1063,3 +1063,154 @@ class StrategyApplicator:
 
         # Default fallback
         return (0, 99)
+
+
+def load_affordability_context(
+    census_df: pd.DataFrame,
+    db: DatabaseConnection
+) -> dict:
+    """
+    Load all affordability-related data upfront for the unified contribution modeler.
+
+    This function combines workforce summary, LCSP data, and current affordability
+    status into a single context object that the UI can reference without
+    additional database queries.
+
+    Args:
+        census_df: Employee census DataFrame
+        db: DatabaseConnection instance
+
+    Returns:
+        Dict with:
+        {
+            'loaded': True,
+            'workforce': {
+                'total_employees': int,
+                'employees_with_income': int,
+                'avg_age': float,
+                'states': list[str],
+            },
+            'lcsp_data': {
+                'avg': float,
+                'min': float,
+                'max': float,
+                'by_employee': {emp_id: {lcsp, state, age, monthly_income, ...}}
+            },
+            'current_status': {
+                'affordable_at_current': int,
+                'needs_increase': int,
+                'current_er_spend_annual': float,
+                'total_gap_annual': float,
+            }
+        }
+    """
+    from financial_calculator import FinancialSummaryCalculator
+
+    # Calculate LCSP for all employees
+    lcsp_result = FinancialSummaryCalculator.calculate_lcsp_scenario(
+        census_df=census_df,
+        db=db,
+        metal_level='Silver'
+    )
+
+    employee_details = lcsp_result.get('employee_details', [])
+
+    # Build by_employee lookup and collect stats
+    by_employee = {}
+    lcsps = []
+    ages = []
+    states = set()
+    employees_with_income = 0
+    affordable_count = 0
+    needs_increase = 0
+    current_er_spend = 0.0
+    total_gap = 0.0
+
+    for emp in employee_details:
+        emp_id = str(emp.get('employee_id', ''))
+
+        # Get corresponding census row for income data
+        census_row = census_df[
+            (census_df.get('employee_id', pd.Series()).astype(str) == emp_id) |
+            (census_df.get('Employee Number', pd.Series()).astype(str) == emp_id)
+        ]
+
+        monthly_income = None
+        current_er_contribution = 0
+        if not census_row.empty:
+            row = census_row.iloc[0]
+            # Try to get monthly income
+            income_raw = row.get('monthly_income') or row.get('Monthly Income')
+            if income_raw is not None and not pd.isna(income_raw):
+                if isinstance(income_raw, (int, float)):
+                    monthly_income = float(income_raw)
+                else:
+                    monthly_income = parse_currency(str(income_raw))
+
+            # Try to get current ER contribution
+            er_raw = row.get('current_er_monthly') or row.get('Current ER Monthly')
+            if er_raw is not None and not pd.isna(er_raw):
+                if isinstance(er_raw, (int, float)):
+                    current_er_contribution = float(er_raw)
+                else:
+                    parsed = parse_currency(str(er_raw))
+                    if parsed is not None:
+                        current_er_contribution = parsed
+
+        lcsp_ee_rate = emp.get('lcsp_ee_rate', 0) or 0
+        ee_age = emp.get('ee_age', 0)
+        state = emp.get('state', '')
+
+        by_employee[emp_id] = {
+            'lcsp': lcsp_ee_rate,
+            'state': state,
+            'age': ee_age,
+            'monthly_income': monthly_income,
+            'current_er_contribution': current_er_contribution,
+            'rating_area': emp.get('rating_area', ''),
+            'family_status': emp.get('family_status', 'EE'),
+        }
+
+        lcsps.append(lcsp_ee_rate)
+        if ee_age:
+            ages.append(int(ee_age))
+        if state:
+            states.add(state)
+
+        # Track current ER spend
+        current_er_spend += current_er_contribution * 12
+
+        # Calculate affordability status if income exists
+        if monthly_income and monthly_income > 0:
+            employees_with_income += 1
+            max_ee = monthly_income * AFFORDABILITY_THRESHOLD_2026
+            min_er = max(0, lcsp_ee_rate - max_ee)
+
+            if current_er_contribution >= min_er:
+                affordable_count += 1
+            else:
+                needs_increase += 1
+                gap = min_er - current_er_contribution
+                total_gap += gap * 12
+
+    return {
+        'loaded': True,
+        'workforce': {
+            'total_employees': len(employee_details),
+            'employees_with_income': employees_with_income,
+            'avg_age': np.mean(ages) if ages else 0,
+            'states': sorted(list(states)),
+        },
+        'lcsp_data': {
+            'avg': np.mean(lcsps) if lcsps else 0,
+            'min': min(lcsps) if lcsps else 0,
+            'max': max(lcsps) if lcsps else 0,
+            'by_employee': by_employee,
+        },
+        'current_status': {
+            'affordable_at_current': affordable_count,
+            'needs_increase': needs_increase,
+            'current_er_spend_annual': round(current_er_spend, 2),
+            'total_gap_annual': round(total_gap, 2),
+        }
+    }

@@ -5,9 +5,10 @@ Supports multiple contribution strategy types:
 1. Base Age + ACA 3:1 Curve - Scale contributions by age using federal age curve
 2. Percentage of LCSP - X% of per-employee LCSP
 3. Fixed Age Tiers - Fixed amounts per age tier
-4. Custom - Manual dollar amounts per class
 
-All strategies support optional family status multipliers.
+All strategies support:
+- Optional family status multipliers (EE, ES, EC, F)
+- Optional location adjustments (flat $ add-on by state)
 """
 
 from enum import Enum
@@ -25,7 +26,6 @@ class StrategyType(Enum):
     BASE_AGE_CURVE = "base_age_curve"      # Base age + ACA 3:1 curve
     PERCENTAGE_LCSP = "percentage_lcsp"     # X% of per-employee LCSP
     FIXED_AGE_TIERS = "fixed_age_tiers"     # Fixed amounts per age tier
-    CUSTOM = "custom"                        # Manual dollar amounts per class
 
 
 # Fixed age tiers for FIXED_AGE_TIERS strategy
@@ -50,6 +50,10 @@ class StrategyConfig:
     apply_family_multipliers: bool = True
     family_multipliers: Dict[str, float] = field(default_factory=lambda: DEFAULT_FAMILY_MULTIPLIERS.copy())
 
+    # Location adjustment (add-on modifier for any strategy)
+    apply_location_adjustment: bool = False
+    location_adjustments: Dict[str, float] = field(default_factory=dict)  # {"CA": 100, "NY": 100, ...}
+
     # BASE_AGE_CURVE specific
     base_age: int = 21                      # Default base age
     base_contribution: float = 0.0          # Dollar amount for base age
@@ -60,9 +64,6 @@ class StrategyConfig:
     # FIXED_AGE_TIERS specific
     tier_amounts: Dict[str, float] = field(default_factory=dict)  # {"21": 300, "18-25": 320, ...}
 
-    # CUSTOM specific
-    custom_classes: List[Dict] = field(default_factory=list)  # Manual class definitions
-
     def __post_init__(self):
         """Generate default name if not provided"""
         if not self.name:
@@ -72,8 +73,6 @@ class StrategyConfig:
                 self.name = f"{self.lcsp_percentage:.0f}% of Per-Employee LCSP"
             elif self.strategy_type == StrategyType.FIXED_AGE_TIERS:
                 self.name = "Fixed Age Tiers"
-            elif self.strategy_type == StrategyType.CUSTOM:
-                self.name = "Custom Contribution Classes"
 
 
 class ContributionStrategyCalculator:
@@ -109,15 +108,19 @@ class ContributionStrategyCalculator:
             - by_family_status: dict (summary by family status)
         """
         if config.strategy_type == StrategyType.BASE_AGE_CURVE:
-            return self._calculate_base_age_curve(config)
+            result = self._calculate_base_age_curve(config)
         elif config.strategy_type == StrategyType.PERCENTAGE_LCSP:
-            return self._calculate_percentage_lcsp(config)
+            result = self._calculate_percentage_lcsp(config)
         elif config.strategy_type == StrategyType.FIXED_AGE_TIERS:
-            return self._calculate_fixed_age_tiers(config)
-        elif config.strategy_type == StrategyType.CUSTOM:
-            return self._calculate_custom(config)
+            result = self._calculate_fixed_age_tiers(config)
         else:
             raise ValueError(f"Unknown strategy type: {config.strategy_type}")
+
+        # Apply location adjustments if enabled
+        if config.apply_location_adjustment and config.location_adjustments:
+            result = self._apply_location_adjustments(result, config.location_adjustments)
+
+        return result
 
     def _get_employee_lcsps(self) -> Dict[str, Dict]:
         """
@@ -145,6 +148,7 @@ class ContributionStrategyCalculator:
             emp_id = str(emp_detail.get('employee_id', ''))
             self._lcsp_cache[emp_id] = {
                 'lcsp_ee_rate': emp_detail.get('lcsp_ee_rate', 0),
+                'lcsp_tier_premium': emp_detail.get('estimated_tier_premium', 0),  # Full family LCSP
                 'lcsp_plan_name': emp_detail.get('lcsp_plan_name'),
                 'state': emp_detail.get('state'),
                 'rating_area': emp_detail.get('rating_area'),
@@ -229,6 +233,7 @@ class ContributionStrategyCalculator:
                 'monthly_contribution': round(final_amount, 2),
                 'annual_contribution': round(final_amount * 12, 2),
                 'lcsp_ee_rate': lcsp_data.get('lcsp_ee_rate', 0),
+                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),  # Full family LCSP
                 'rating_area': lcsp_data.get('rating_area', ''),
             }
             total_monthly += final_amount
@@ -312,6 +317,7 @@ class ContributionStrategyCalculator:
                 'family_status': family_status,
                 'age_ratio': emp_ratio,
                 'lcsp_ee_rate': lcsp_ee_rate,
+                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),  # Full family LCSP
                 'lcsp_percentage': config.lcsp_percentage,
                 'base_contribution': round(base_amount, 2),
                 'family_multiplier': multipliers.get(family_status, 1.0),
@@ -404,6 +410,7 @@ class ContributionStrategyCalculator:
                 'monthly_contribution': round(final_amount, 2),
                 'annual_contribution': round(final_amount * 12, 2),
                 'lcsp_ee_rate': lcsp_data.get('lcsp_ee_rate', 0),
+                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),  # Full family LCSP
                 'rating_area': lcsp_data.get('rating_area', ''),
             }
             total_monthly += final_amount
@@ -436,110 +443,53 @@ class ContributionStrategyCalculator:
             'by_family_status': by_family_status,
         }
 
-    def _calculate_custom(self, config: StrategyConfig) -> Dict[str, Any]:
+    def _apply_location_adjustments(
+        self,
+        result: Dict[str, Any],
+        location_adjustments: Dict[str, float]
+    ) -> Dict[str, Any]:
         """
-        Custom Strategy.
+        Apply location-based adjustments to strategy result.
 
-        User defines custom classes with specific dollar amounts.
-        Each class has criteria (age range, state, family status) and a contribution amount.
+        Location adjustments are flat dollar amounts added on top of the base
+        strategy calculation. This allows for geographic cost-of-living adjustments.
+
+        Args:
+            result: Strategy result from _calculate_* methods
+            location_adjustments: {state_code: adjustment_amount} e.g., {"CA": 100, "NY": 100}
+
+        Returns:
+            Modified result with location adjustments applied
         """
-        custom_classes = config.custom_classes or []
-        multipliers = config.family_multipliers if config.apply_family_multipliers else {'EE': 1.0, 'ES': 1.0, 'EC': 1.0, 'F': 1.0}
-
-        employee_lcsps = self._get_employee_lcsps()
-
-        employee_contributions = {}
+        employee_contributions = result.get('employee_contributions', {})
         total_monthly = 0.0
-        by_age_tier = {}
-        by_family_status = {}
+        by_state = {}
 
-        def match_employee_to_class(emp_age: int, emp_state: str, emp_family_status: str) -> Optional[Dict]:
-            """Find the first matching custom class for an employee"""
-            for cls in custom_classes:
-                criteria = cls.get('criteria', {})
-                # Check age range if specified
-                if 'age_min' in criteria and emp_age < criteria['age_min']:
-                    continue
-                if 'age_max' in criteria and emp_age > criteria['age_max']:
-                    continue
-                # Check state if specified
-                if 'state' in criteria and criteria['state'] != emp_state:
-                    continue
-                # Check family status if specified
-                if 'family_status' in criteria and criteria['family_status'] != emp_family_status:
-                    continue
-                return cls
-            return None
+        for emp_id, contrib in employee_contributions.items():
+            state = contrib.get('state', '')
+            adjustment = location_adjustments.get(state, 0)
 
-        for _, emp in self.census_df.iterrows():
-            emp_id = str(emp.get('employee_id') or emp.get('Employee Number', ''))
-            emp_age = emp.get('age') or emp.get('ee_age')
-            if emp_age is None or pd.isna(emp_age):
-                emp_age = 30
-            emp_age = int(emp_age)
+            # Add location adjustment
+            contrib['location_adjustment'] = adjustment
+            new_monthly = contrib.get('monthly_contribution', 0) + adjustment
+            contrib['monthly_contribution'] = round(new_monthly, 2)
+            contrib['annual_contribution'] = round(new_monthly * 12, 2)
 
-            family_status = str(emp.get('family_status') or emp.get('Family Status', 'EE')).upper()
-            if family_status not in multipliers:
-                family_status = 'EE'
+            total_monthly += new_monthly
 
-            state = str(emp.get('state') or emp.get('Home State', '')).upper()
+            # Track by state
+            if state not in by_state:
+                by_state[state] = {'count': 0, 'total_monthly': 0.0, 'adjustment': adjustment}
+            by_state[state]['count'] += 1
+            by_state[state]['total_monthly'] += new_monthly
 
-            # Find matching class
-            matched_class = match_employee_to_class(emp_age, state, family_status)
-            if matched_class:
-                base_amount = matched_class.get('contribution', 0)
-                class_name = matched_class.get('name', 'Custom')
-            else:
-                base_amount = 0
-                class_name = 'Unmatched'
+        # Update totals
+        result['total_monthly'] = round(total_monthly, 2)
+        result['total_annual'] = round(total_monthly * 12, 2)
+        result['by_state'] = by_state
+        result['config']['location_adjustments'] = location_adjustments
 
-            # Apply family multiplier
-            final_amount = base_amount * multipliers.get(family_status, 1.0)
-
-            lcsp_data = employee_lcsps.get(emp_id, {})
-
-            employee_contributions[emp_id] = {
-                'age': emp_age,
-                'state': state,
-                'family_status': family_status,
-                'class_name': class_name,
-                'base_contribution': round(base_amount, 2),
-                'family_multiplier': multipliers.get(family_status, 1.0),
-                'monthly_contribution': round(final_amount, 2),
-                'annual_contribution': round(final_amount * 12, 2),
-                'lcsp_ee_rate': lcsp_data.get('lcsp_ee_rate', 0),
-                'rating_area': lcsp_data.get('rating_area', ''),
-            }
-            total_monthly += final_amount
-
-            # Aggregate by age tier (for reference)
-            age_tier = self._get_age_tier(emp_age)
-            if age_tier not in by_age_tier:
-                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0}
-            by_age_tier[age_tier]['count'] += 1
-            by_age_tier[age_tier]['total_monthly'] += final_amount
-
-            # Aggregate by family status
-            if family_status not in by_family_status:
-                by_family_status[family_status] = {'count': 0, 'total_monthly': 0.0}
-            by_family_status[family_status]['count'] += 1
-            by_family_status[family_status]['total_monthly'] += final_amount
-
-        return {
-            'strategy_type': config.strategy_type.value,
-            'strategy_name': config.name,
-            'config': {
-                'custom_classes': custom_classes,
-                'apply_family_multipliers': config.apply_family_multipliers,
-                'family_multipliers': multipliers,
-            },
-            'employee_contributions': employee_contributions,
-            'total_monthly': round(total_monthly, 2),
-            'total_annual': round(total_monthly * 12, 2),
-            'employees_covered': len(employee_contributions),
-            'by_age_tier': by_age_tier,
-            'by_family_status': by_family_status,
-        }
+        return result
 
     def get_average_lcsp_by_age(self) -> Dict[int, float]:
         """
@@ -618,6 +568,161 @@ class ContributionStrategyCalculator:
             'by_state': by_state,
             'by_family_status': by_family_status,
         }
+
+
+def calculate_affordability_impact(
+    strategy_result: Dict[str, Any],
+    affordability_context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Calculate IRS affordability impact for a proposed contribution strategy.
+
+    An ICHRA is "affordable" if the employee's required contribution for self-only
+    LCSP does not exceed 9.96% of their household income (2026 threshold).
+
+    Args:
+        strategy_result: Output from ContributionStrategyCalculator.calculate_strategy()
+        affordability_context: Dict containing:
+            - lcsp_data.by_employee: {emp_id: {lcsp, monthly_income, ...}}
+            - current_status: {affordable_at_current, total_gap_annual, current_er_spend_annual}
+
+    Returns:
+        Dict with affordability impact metrics:
+            - before: {affordable_count, affordable_pct, annual_spend, total_gap}
+            - after: {affordable_count, affordable_pct, annual_spend, total_gap}
+            - delta: {employees_gained, spend_change, gap_closed}
+            - employee_affordability: {emp_id: {is_affordable, employee_cost, affordability_margin}}
+    """
+    from constants import AFFORDABILITY_THRESHOLD_2026
+
+    threshold = AFFORDABILITY_THRESHOLD_2026  # 0.0996
+
+    employee_contributions = strategy_result.get('employee_contributions', {})
+    lcsp_data = affordability_context.get('lcsp_data', {}).get('by_employee', {})
+    current_status = affordability_context.get('current_status', {})
+
+    # Before metrics (from context)
+    before = {
+        'affordable_count': current_status.get('affordable_at_current', 0),
+        'affordable_pct': 0,
+        'annual_spend': current_status.get('current_er_spend_annual', 0),
+        'total_gap': current_status.get('total_gap_annual', 0),
+    }
+
+    # Calculate after metrics
+    affordable_count = 0
+    total_gap = 0.0
+    total_proposed_spend = strategy_result.get('total_annual', 0)
+    employee_affordability = {}
+    employees_analyzed = 0
+
+    for emp_id, contrib in employee_contributions.items():
+        emp_lcsp_data = lcsp_data.get(emp_id, {})
+        monthly_income = emp_lcsp_data.get('monthly_income', 0)
+        lcsp_premium = contrib.get('lcsp_ee_rate', 0) or emp_lcsp_data.get('lcsp', 0)
+        monthly_contribution = contrib.get('monthly_contribution', 0)
+
+        # Skip employees without income data for affordability calculation
+        if not monthly_income or monthly_income <= 0:
+            employee_affordability[emp_id] = {
+                'is_affordable': None,
+                'has_income_data': False,
+                'employee_cost': None,
+                'affordability_margin': None,
+            }
+            continue
+
+        employees_analyzed += 1
+
+        # Calculate employee's out-of-pocket cost
+        employee_cost = max(0, lcsp_premium - monthly_contribution)
+
+        # Max employee should pay (9.96% of income)
+        max_employee_contribution = monthly_income * threshold
+
+        # Is it affordable?
+        is_affordable = employee_cost <= max_employee_contribution
+
+        # Affordability margin (positive = room to spare, negative = shortfall)
+        affordability_margin = max_employee_contribution - employee_cost
+
+        if is_affordable:
+            affordable_count += 1
+        else:
+            # Gap is how much more ER needs to contribute
+            gap = employee_cost - max_employee_contribution
+            total_gap += gap * 12  # Annualize
+
+        employee_affordability[emp_id] = {
+            'is_affordable': is_affordable,
+            'has_income_data': True,
+            'employee_cost': round(employee_cost, 2),
+            'max_employee_contribution': round(max_employee_contribution, 2),
+            'affordability_margin': round(affordability_margin, 2),
+            'monthly_contribution': round(monthly_contribution, 2),
+            'lcsp_premium': round(lcsp_premium, 2),
+            'monthly_income': round(monthly_income, 2),
+        }
+
+    # Calculate percentages
+    before_total = before.get('affordable_count', 0) + current_status.get('needs_increase', 0)
+    before['affordable_pct'] = (before['affordable_count'] / before_total * 100) if before_total > 0 else 0
+
+    after = {
+        'affordable_count': affordable_count,
+        'affordable_pct': (affordable_count / employees_analyzed * 100) if employees_analyzed > 0 else 0,
+        'annual_spend': total_proposed_spend,
+        'total_gap': round(total_gap, 2),
+        'employees_analyzed': employees_analyzed,
+    }
+
+    # Calculate delta
+    delta = {
+        'employees_gained': affordable_count - before['affordable_count'],
+        'spend_change': total_proposed_spend - before['annual_spend'],
+        'gap_closed': before['total_gap'] - total_gap,
+    }
+
+    return {
+        'before': before,
+        'after': after,
+        'delta': delta,
+        'employee_affordability': employee_affordability,
+    }
+
+
+def get_high_cost_states(
+    workforce_summary: Dict[str, Any],
+    threshold_pct: float = 15.0
+) -> List[str]:
+    """
+    Identify states with LCSP premiums significantly above average.
+
+    A state is "high-cost" if its average LCSP exceeds the overall workforce
+    average by more than the threshold percentage.
+
+    Args:
+        workforce_summary: Output from ContributionStrategyCalculator.get_workforce_summary()
+        threshold_pct: Percentage above average to qualify as "high-cost" (default 15%)
+
+    Returns:
+        List of state codes considered high-cost (e.g., ['CA', 'NY', 'MA'])
+    """
+    by_state = workforce_summary.get('by_state', {})
+    overall_avg = workforce_summary.get('avg_lcsp', 0)
+
+    if not overall_avg or overall_avg <= 0:
+        return []
+
+    threshold = overall_avg * (1 + threshold_pct / 100)
+
+    high_cost = []
+    for state, data in by_state.items():
+        avg_lcsp = data.get('avg_lcsp', 0)
+        if avg_lcsp > threshold:
+            high_cost.append(state)
+
+    return sorted(high_cost)
 
 
 if __name__ == "__main__":
