@@ -16,6 +16,7 @@ from financial_calculator import FinancialSummaryCalculator
 # Page config
 st.set_page_config(page_title="LCSP Analysis", page_icon="📊", layout="wide")
 
+
 # =============================================================================
 # STYLING
 # =============================================================================
@@ -259,7 +260,8 @@ if results and 'total_monthly' in results:
 
     with comp_col3:
         metal_level = results.get('metal_level', 'Silver')
-        st.metric("100% LCSP", f"${ichra_monthly:,.0f}/mo")
+        st.metric("100% LCSP", f"${ichra_monthly:,.0f}/mo",
+                 help="Total cost if the employer paid 100% of each employee's Lowest Cost Silver Plan. This is a benchmark for comparison — actual ICHRA contributions may be less.")
         st.caption(f"${ichra_annual:,.0f}/year")
 
     # Row 2: Variance metrics (3 columns to align with row above)
@@ -271,14 +273,16 @@ if results and 'total_monthly' in results:
                 "LCSP Savings vs Current",
                 f"${vs_current_monthly:,.0f}/mo",
                 f"{vs_current_pct:.1f}%",
-                delta_color="normal"
+                delta_color="normal",
+                help="100% LCSP costs LESS than your current plan. This is the monthly savings if you switched."
             )
         else:
             st.metric(
-                "LCSP vs Current",
-                f"-${abs(vs_current_monthly):,.0f}/mo",
-                f"+{abs(vs_current_pct):.1f}%",
-                delta_color="inverse"
+                "LCSP Increase vs Current",
+                f"+${abs(vs_current_monthly):,.0f}/mo",
+                f"{abs(vs_current_pct):.1f}% more",
+                delta_color="inverse",
+                help="100% LCSP costs MORE than your current plan. This is the additional monthly cost if you covered 100% of everyone's LCSP."
             )
 
     with var_col2:
@@ -288,17 +292,30 @@ if results and 'total_monthly' in results:
                     "LCSP Savings vs 2026 Renewal",
                     f"${vs_renewal_monthly:,.0f}/mo",
                     f"{vs_renewal_pct:.1f}%",
-                    delta_color="normal"
+                    delta_color="normal",
+                    help="100% LCSP costs LESS than your projected 2026 renewal. This is the monthly savings if you switched."
                 )
             else:
                 st.metric(
-                    "LCSP vs 2026 Renewal",
-                    f"-${abs(vs_renewal_monthly):,.0f}/mo",
-                    f"+{abs(vs_renewal_pct):.1f}%",
-                    delta_color="inverse"
+                    "LCSP Increase vs 2026 Renewal",
+                    f"+${abs(vs_renewal_monthly):,.0f}/mo",
+                    f"{abs(vs_renewal_pct):.1f}% more",
+                    delta_color="inverse",
+                    help="100% LCSP costs MORE than your projected 2026 renewal. This is the additional monthly cost if you covered 100% of everyone's LCSP."
                 )
 
-    # var_col3 intentionally left empty to align with LCSP column above
+    with var_col3:
+        # Calculate and show average LCSP
+        employee_details = results.get('employee_details', [])
+        if employee_details:
+            lcsp_rates = [e.get('lcsp_ee_rate', 0) for e in employee_details if e.get('lcsp_ee_rate')]
+            if lcsp_rates:
+                avg_lcsp = sum(lcsp_rates) / len(lcsp_rates)
+                st.metric(
+                    "📊 Avg LCSP",
+                    f"${avg_lcsp:,.0f}/mo",
+                    help="Average Lowest Cost Silver Plan premium per employee. Useful for budgeting ICHRA contributions."
+                )
 
     # Detailed comparison table
     st.markdown("### Detailed Variance Analysis")

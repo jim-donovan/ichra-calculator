@@ -49,6 +49,7 @@ except ImportError:
 
 st.set_page_config(page_title="Export Results", page_icon="📄", layout="wide")
 
+
 # Initialize session state
 if 'db' not in st.session_state:
     st.session_state.db = get_database_connection()
@@ -227,50 +228,67 @@ else:
 
             # Cost Summary (if individual contributions available)
             if has_individual_contribs:
-                elements.append(Paragraph("Current vs Proposed Cost Summary", heading_style))
+                elements.append(Paragraph("Premium Comparison", heading_style))
 
                 contrib_totals = ContributionComparison.aggregate_contribution_totals(census_df)
 
-                # Calculate proposed totals from analysis
-                proposed_er_monthly = 0.0
-                proposed_ee_monthly = 0.0
-                employees_analyzed = 0
+                # Get ICHRA budget from strategy results (the authoritative source)
+                strategy_results = st.session_state.get('strategy_results', {})
+                if strategy_results.get('calculated', False):
+                    result = strategy_results.get('result', {})
+                    proposed_ichra_monthly = result.get('total_monthly', 0)
+                    proposed_ichra_annual = result.get('total_annual', 0)
+                    employees_analyzed = result.get('employees_covered', 0)
+                else:
+                    # Fallback to contribution_analysis
+                    proposed_ichra_monthly = sum(
+                        analysis.get('ichra_analysis', {}).get('employer_contribution', 0)
+                        for analysis in contribution_analysis.values()
+                    )
+                    proposed_ichra_annual = proposed_ichra_monthly * 12
+                    employees_analyzed = len(contribution_analysis)
 
-                for emp_id, analysis in contribution_analysis.items():
-                    if 'ichra_analysis' in analysis and analysis['ichra_analysis']:
-                        proposed_er_monthly += analysis['ichra_analysis'].get('employer_contribution', 0)
-                        proposed_ee_monthly += analysis['ichra_analysis'].get('employee_cost', 0)
-                        employees_analyzed += 1
+                # Current TOTAL premium (ER + EE) for apples-to-apples comparison
+                current_er_monthly = contrib_totals['total_current_er_monthly']
+                current_er_annual = contrib_totals['total_current_er_annual']
+                current_ee_monthly = contrib_totals['total_current_ee_monthly']
+                current_ee_annual = contrib_totals['total_current_ee_annual']
+                current_total_monthly = current_er_monthly + current_ee_monthly
+                current_total_annual = current_er_annual + current_ee_annual
 
+                # Calculate change (total premium vs ICHRA)
+                change_annual = proposed_ichra_annual - current_total_annual
+                change_pct = (change_annual / current_total_annual * 100) if current_total_annual > 0 else 0
+
+                # Headline savings/cost message
+                if change_annual < 0:
+                    savings_text = f"<b>Annual Savings: {DataFormatter.format_currency(abs(change_annual))} ({abs(change_pct):.0f}% reduction)</b>"
+                    elements.append(Paragraph(savings_text, ParagraphStyle('Savings', parent=styles['Normal'], textColor=colors.HexColor('#228B22'), fontSize=12)))
+                elif change_annual > 0:
+                    cost_text = f"<b>Additional Cost: {DataFormatter.format_currency(change_annual)}/year ({change_pct:.0f}% increase)</b>"
+                    elements.append(Paragraph(cost_text, ParagraphStyle('Cost', parent=styles['Normal'], textColor=colors.HexColor('#CC0000'), fontSize=12)))
+                else:
+                    elements.append(Paragraph("<b>Cost Neutral</b>", styles['Normal']))
+                elements.append(Spacer(1, 0.15*inch))
+
+                # Simple comparison table - using TOTALS
                 cost_table_data = [
-                    ['Metric', 'Current Group Plan', 'Proposed ICHRA', 'Change'],
+                    ['', 'Current Total Premium', 'Proposed ICHRA', 'Change'],
                     [
-                        'ER Monthly',
-                        DataFormatter.format_currency(contrib_totals['total_current_er_monthly']),
-                        DataFormatter.format_currency(proposed_er_monthly) if employees_analyzed > 0 else 'N/A',
-                        DataFormatter.format_currency(proposed_er_monthly - contrib_totals['total_current_er_monthly'], include_sign=True) if employees_analyzed > 0 else 'N/A'
+                        'Annual',
+                        DataFormatter.format_currency(current_total_annual),
+                        DataFormatter.format_currency(proposed_ichra_annual),
+                        DataFormatter.format_currency(change_annual, include_sign=True)
                     ],
                     [
-                        'ER Annual',
-                        DataFormatter.format_currency(contrib_totals['total_current_er_annual']),
-                        DataFormatter.format_currency(proposed_er_monthly * 12) if employees_analyzed > 0 else 'N/A',
-                        DataFormatter.format_currency((proposed_er_monthly - contrib_totals['total_current_er_monthly']) * 12, include_sign=True) if employees_analyzed > 0 else 'N/A'
-                    ],
-                    [
-                        'EE Monthly',
-                        DataFormatter.format_currency(contrib_totals['total_current_ee_monthly']),
-                        DataFormatter.format_currency(proposed_ee_monthly) if employees_analyzed > 0 else 'N/A',
-                        DataFormatter.format_currency(proposed_ee_monthly - contrib_totals['total_current_ee_monthly'], include_sign=True) if employees_analyzed > 0 else 'N/A'
-                    ],
-                    [
-                        'EE Annual',
-                        DataFormatter.format_currency(contrib_totals['total_current_ee_annual']),
-                        DataFormatter.format_currency(proposed_ee_monthly * 12) if employees_analyzed > 0 else 'N/A',
-                        DataFormatter.format_currency((proposed_ee_monthly - contrib_totals['total_current_ee_monthly']) * 12, include_sign=True) if employees_analyzed > 0 else 'N/A'
+                        'Monthly',
+                        DataFormatter.format_currency(current_total_monthly),
+                        DataFormatter.format_currency(proposed_ichra_monthly),
+                        DataFormatter.format_currency(proposed_ichra_monthly - current_total_monthly, include_sign=True)
                     ],
                 ]
 
-                cost_table = Table(cost_table_data, colWidths=[1.5*inch, 1.75*inch, 1.75*inch, 1.5*inch])
+                cost_table = Table(cost_table_data, colWidths=[1.3*inch, 1.75*inch, 1.75*inch, 1.5*inch])
                 cost_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f77b4')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -285,7 +303,7 @@ else:
 
                 elements.append(cost_table)
                 elements.append(Spacer(1, 0.1*inch))
-                elements.append(Paragraph(f"<i>Based on {employees_analyzed} employees with completed analysis</i>", styles['Normal']))
+                elements.append(Paragraph(f"<i>Current Total = ER + EE premium. Based on {employees_analyzed} employees.</i>", styles['Normal']))
                 elements.append(Spacer(1, 0.25*inch))
 
             # Employee Detail (if enabled)
@@ -293,7 +311,7 @@ else:
                 elements.append(PageBreak())
                 elements.append(Paragraph("Employee-Level Cost Comparison", heading_style))
 
-                detail_table_data = [['Employee ID', 'Family', 'Current ER', 'ICHRA ER', 'ER Change']]
+                detail_table_data = [['Employee ID', 'Family', 'Current Total', 'Proposed ICHRA', 'Change']]
 
                 for emp_id, analysis in contribution_analysis.items():
                     emp_data = census_df[census_df['employee_id'] == emp_id]
@@ -301,20 +319,31 @@ else:
                         continue
 
                     emp = emp_data.iloc[0]
+                    # Get current ER and EE to calculate total
                     current_er = emp.get('current_er_monthly')
-                    ichra_data = analysis.get('ichra_analysis', {})
-                    proposed_er = ichra_data.get('employer_contribution', 0)
+                    current_ee = emp.get('current_ee_monthly')
 
-                    er_change = None
-                    if pd.notna(current_er):
-                        er_change = proposed_er - current_er
+                    # Calculate current total (ER + EE)
+                    current_total = None
+                    if pd.notna(current_er) or pd.notna(current_ee):
+                        er_val = current_er if pd.notna(current_er) else 0
+                        ee_val = current_ee if pd.notna(current_ee) else 0
+                        current_total = er_val + ee_val
+
+                    ichra_data = analysis.get('ichra_analysis', {})
+                    proposed_ichra = ichra_data.get('employer_contribution', 0)
+
+                    # Calculate change vs total premium
+                    change = None
+                    if current_total is not None:
+                        change = proposed_ichra - current_total
 
                     detail_table_data.append([
                         str(emp_id)[:15],
                         emp.get('family_status', 'EE'),
-                        DataFormatter.format_currency(current_er) if pd.notna(current_er) else 'N/A',
-                        DataFormatter.format_currency(proposed_er),
-                        DataFormatter.format_currency(er_change, include_sign=True) if er_change is not None else 'N/A'
+                        DataFormatter.format_currency(current_total) if current_total is not None else 'N/A',
+                        DataFormatter.format_currency(proposed_ichra),
+                        DataFormatter.format_currency(change, include_sign=True) if change is not None else 'N/A'
                     ])
 
                 detail_table = Table(detail_table_data, colWidths=[1.5*inch, 0.75*inch, 1.25*inch, 1.25*inch, 1.25*inch])
@@ -331,6 +360,8 @@ else:
                 ]))
 
                 elements.append(detail_table)
+                elements.append(Spacer(1, 0.1*inch))
+                elements.append(Paragraph("<i>Current Total = ER + EE premium per employee (monthly)</i>", styles['Normal']))
                 elements.append(Spacer(1, 0.25*inch))
 
             # Demographics Summary (if enabled)
@@ -532,46 +563,44 @@ with col2:
         if has_individual_contribs:
             contrib_totals = ContributionComparison.aggregate_contribution_totals(census_df)
 
-            # Calculate proposed totals
-            proposed_er_monthly = 0.0
-            proposed_ee_monthly = 0.0
-            employees_analyzed = 0
+            # Get ICHRA budget from strategy results (the authoritative source)
+            strategy_results = st.session_state.get('strategy_results', {})
+            if strategy_results.get('calculated', False):
+                result = strategy_results.get('result', {})
+                proposed_ichra_monthly = result.get('total_monthly', 0)
+                proposed_ichra_annual = result.get('total_annual', 0)
+                employees_analyzed = result.get('employees_covered', 0)
+            else:
+                # Fallback to contribution_analysis
+                proposed_ichra_monthly = sum(
+                    analysis.get('ichra_analysis', {}).get('employer_contribution', 0)
+                    for analysis in contribution_analysis.values()
+                )
+                proposed_ichra_annual = proposed_ichra_monthly * 12
+                employees_analyzed = len(contribution_analysis)
 
-            for emp_id, analysis in contribution_analysis.items():
-                if 'ichra_analysis' in analysis and analysis['ichra_analysis']:
-                    proposed_er_monthly += analysis['ichra_analysis'].get('employer_contribution', 0)
-                    proposed_ee_monthly += analysis['ichra_analysis'].get('employee_cost', 0)
-                    employees_analyzed += 1
+            # ER to ER comparison (what employer pays)
+            current_er_monthly = contrib_totals['total_current_er_monthly']
+            current_er_annual = contrib_totals['total_current_er_annual']
+            change_annual = proposed_ichra_annual - current_er_annual
 
             summary_rows.append({
-                'metric': 'Total Employees',
-                'current_group': len(census_df),
+                'metric': 'Employees',
+                'current_er_spend': len(census_df),
                 'proposed_ichra': employees_analyzed,
                 'change': ''
             })
             summary_rows.append({
-                'metric': 'ER Monthly Total',
-                'current_group': contrib_totals['total_current_er_monthly'],
-                'proposed_ichra': proposed_er_monthly,
-                'change': proposed_er_monthly - contrib_totals['total_current_er_monthly'] if employees_analyzed > 0 else ''
+                'metric': 'Annual Employer Cost',
+                'current_er_spend': current_er_annual,
+                'proposed_ichra': proposed_ichra_annual,
+                'change': change_annual
             })
             summary_rows.append({
-                'metric': 'ER Annual Total',
-                'current_group': contrib_totals['total_current_er_annual'],
-                'proposed_ichra': proposed_er_monthly * 12,
-                'change': (proposed_er_monthly - contrib_totals['total_current_er_monthly']) * 12 if employees_analyzed > 0 else ''
-            })
-            summary_rows.append({
-                'metric': 'EE Monthly Total',
-                'current_group': contrib_totals['total_current_ee_monthly'],
-                'proposed_ichra': proposed_ee_monthly,
-                'change': proposed_ee_monthly - contrib_totals['total_current_ee_monthly'] if employees_analyzed > 0 else ''
-            })
-            summary_rows.append({
-                'metric': 'EE Annual Total',
-                'current_group': contrib_totals['total_current_ee_annual'],
-                'proposed_ichra': proposed_ee_monthly * 12,
-                'change': (proposed_ee_monthly - contrib_totals['total_current_ee_monthly']) * 12 if employees_analyzed > 0 else ''
+                'metric': 'Monthly Employer Cost',
+                'current_er_spend': current_er_monthly,
+                'proposed_ichra': proposed_ichra_monthly,
+                'change': proposed_ichra_monthly - current_er_monthly
             })
         else:
             summary_rows.append({

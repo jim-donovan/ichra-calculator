@@ -53,6 +53,7 @@ PPTX_TEMPLATE_PATH = Path(__file__).parent.parent / 'templates' / 'glove_proposa
 # Page config
 st.set_page_config(page_title="Proposal Generator", page_icon="📑", layout="wide")
 
+
 # Initialize session state
 if 'db' not in st.session_state:
     st.session_state.db = get_database_connection()
@@ -248,10 +249,10 @@ with st.expander("📌 Cover & Overview (Slides 1-2)", expanded=True):
         renewal_pct = st.number_input(
             "Renewal Increase %",
             value=float(proposal_data.renewal_percentage) if proposal_data.renewal_percentage else 0.0,
-            min_value=0.0,
-            max_value=100.0,
+            min_value=-50.0,
+            max_value=200.0,
             format="%.1f",
-            help="Expected renewal increase percentage"
+            help="Renewal increase percentage vs current ER spend"
         )
         proposal_data.renewal_percentage = renewal_pct
 
@@ -348,7 +349,7 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
     cost_col1, cost_col2 = st.columns(2)
 
     with cost_col1:
-        st.markdown("**Current Group Plan Costs:**")
+        st.markdown("**Current Group Plan Costs (2025):**")
 
         current_er_monthly = st.number_input(
             "Current ER Monthly Total",
@@ -368,10 +369,17 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
         proposal_data.current_ee_monthly = current_ee_monthly
         proposal_data.current_ee_annual = current_ee_monthly * 12
 
+        # Recalculate ER/EE split percentages
+        current_total_monthly = current_er_monthly + current_ee_monthly
+        if current_total_monthly > 0:
+            proposal_data.er_contribution_pct = current_er_monthly / current_total_monthly
+            proposal_data.ee_contribution_pct = current_ee_monthly / current_total_monthly
+
         st.metric(
             "Current Total Annual",
             f"${(proposal_data.current_er_annual + proposal_data.current_ee_annual):,.0f}"
         )
+        st.caption(f"ER share: {proposal_data.er_contribution_pct*100:.1f}%")
 
     with cost_col2:
         st.markdown("**Proposed ICHRA Costs:**")
@@ -387,18 +395,62 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
 
         st.metric("Proposed ER Annual", f"${proposal_data.proposed_er_annual:,.0f}")
 
-        # Calculate savings
+        # Recalculate projected renewal ER
+        if proposal_data.renewal_monthly > 0:
+            proposal_data.projected_er_monthly_2026 = proposal_data.renewal_monthly * proposal_data.er_contribution_pct
+            proposal_data.projected_er_annual_2026 = proposal_data.projected_er_monthly_2026 * 12
+
+        # Calculate savings vs RENEWAL ER (the correct comparison)
+        if proposal_data.projected_er_annual_2026 > 0:
+            proposal_data.savings_vs_renewal_er = proposal_data.projected_er_annual_2026 - proposal_data.proposed_er_annual
+            proposal_data.savings_vs_renewal_er_pct = (proposal_data.savings_vs_renewal_er / proposal_data.projected_er_annual_2026) * 100
+
+        # Also calculate delta vs current ER (for transparency)
         if proposal_data.current_er_annual > 0:
+            proposal_data.delta_vs_current_er = proposal_data.proposed_er_annual - proposal_data.current_er_annual
+            proposal_data.delta_vs_current_er_pct = (proposal_data.delta_vs_current_er / proposal_data.current_er_annual) * 100
+
+            # Keep annual_savings for backwards compatibility (vs current ER)
             proposal_data.annual_savings = proposal_data.current_er_annual - proposal_data.proposed_er_annual
             proposal_data.savings_percentage = (proposal_data.annual_savings / proposal_data.current_er_annual) * 100
 
-            savings_color = "normal" if proposal_data.annual_savings >= 0 else "inverse"
-            st.metric(
-                "Potential Annual Savings",
-                f"${proposal_data.annual_savings:,.0f}",
-                delta=f"{proposal_data.savings_percentage:.1f}%",
-                delta_color=savings_color
-            )
+    # Show all three comparisons clearly
+    st.markdown("---")
+    st.markdown("**EMPLOYER COST COMPARISON:**")
+
+    compare_cols = st.columns(3)
+
+    with compare_cols[0]:
+        st.markdown("**Current ER (2025)**")
+        st.markdown(f"${proposal_data.current_er_annual:,.0f}/yr")
+
+    with compare_cols[1]:
+        st.markdown("**Projected Renewal ER (2026)**")
+        if proposal_data.projected_er_annual_2026 > 0:
+            st.markdown(f"${proposal_data.projected_er_annual_2026:,.0f}/yr")
+        else:
+            st.markdown("N/A")
+
+    with compare_cols[2]:
+        st.markdown("**Proposed ICHRA**")
+        st.markdown(f"${proposal_data.proposed_er_annual:,.0f}/yr")
+
+    st.markdown("---")
+    result_cols = st.columns(2)
+
+    with result_cols[0]:
+        st.markdown("**vs Current ER:**")
+        if proposal_data.delta_vs_current_er > 0:
+            st.warning(f"+${proposal_data.delta_vs_current_er:,.0f} (+{proposal_data.delta_vs_current_er_pct:.1f}%)")
+        else:
+            st.success(f"${proposal_data.delta_vs_current_er:,.0f} ({proposal_data.delta_vs_current_er_pct:.1f}%)")
+
+    with result_cols[1]:
+        st.markdown("**🎯 vs Renewal ER (PRIMARY):**")
+        if proposal_data.savings_vs_renewal_er >= 0:
+            st.success(f"SAVES ${proposal_data.savings_vs_renewal_er:,.0f} ({proposal_data.savings_vs_renewal_er_pct:.1f}%)")
+        else:
+            st.warning(f"Costs ${abs(proposal_data.savings_vs_renewal_er):,.0f} more")
 
 with st.expander("📊 ICHRA Evaluation Workflow (Slide 13 - Final)", expanded=False):
     st.caption("This slide is appended at the end of the presentation")
@@ -545,6 +597,20 @@ with generate_col1:
                 can_generate = False
 
     if st.button(button_label, type="primary", width="stretch", disabled=not can_generate):
+        # Validate proposal data before generating
+        errors, warnings = proposal_data.validate()
+
+        if errors:
+            st.error("**Validation Errors - Cannot generate proposal:**")
+            for error in errors:
+                st.error(f"• {error}")
+            st.stop()
+
+        if warnings:
+            st.warning("**Data Warnings (proposal will still generate):**")
+            for warning in warnings:
+                st.warning(f"• {warning}")
+
         # Reset email result
         st.session_state.email_result = None
 

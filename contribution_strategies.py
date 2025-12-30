@@ -362,7 +362,13 @@ class ContributionStrategyCalculator:
 
         User specifies dollar amounts for each age tier.
         Tiers: 21, 18-25, 26-35, 36-45, 46-55, 56-63, 64+
+
+        Auto-affordability: If employee has income data, contribution is automatically
+        bumped to min_affordable if tier_amount would be unaffordable (9.96% threshold).
         """
+        from constants import AFFORDABILITY_THRESHOLD_2026
+        from utils import parse_currency
+
         tier_amounts = config.tier_amounts or {}
         multipliers = config.family_multipliers if config.apply_family_multipliers else {'EE': 1.0, 'ES': 1.0, 'EC': 1.0, 'F': 1.0}
 
@@ -372,6 +378,7 @@ class ContributionStrategyCalculator:
         total_monthly = 0.0
         by_age_tier = {}
         by_family_status = {}
+        employees_affordability_adjusted = 0
 
         for _, emp in self.census_df.iterrows():
             emp_id = str(emp.get('employee_id') or emp.get('Employee Number', ''))
@@ -386,9 +393,44 @@ class ContributionStrategyCalculator:
 
             state = str(emp.get('state') or emp.get('Home State', '')).upper()
 
+            # Get LCSP data first (needed for affordability calc)
+            lcsp_data = employee_lcsps.get(emp_id, {})
+            lcsp_ee_rate = lcsp_data.get('lcsp_ee_rate', 0) or 0
+
             # Get tier for this employee's age
             age_tier = self._get_age_tier(emp_age)
-            base_amount = tier_amounts.get(age_tier, 0)
+            tier_amount = tier_amounts.get(age_tier, 0)
+
+            # Check for income data to calculate min_affordable
+            monthly_income_raw = emp.get('monthly_income') or emp.get('Monthly Income')
+            monthly_income = None
+            min_affordable = None
+            affordability_adjusted = False
+
+            if monthly_income_raw is not None and not pd.isna(monthly_income_raw):
+                # Parse income (handle currency strings)
+                if isinstance(monthly_income_raw, (int, float)):
+                    monthly_income = float(monthly_income_raw)
+                else:
+                    monthly_income = parse_currency(str(monthly_income_raw))
+
+                if monthly_income and monthly_income > 0 and lcsp_ee_rate > 0:
+                    # Calculate min_affordable: LCSP - (income × 9.96%) + $1 buffer
+                    max_ee = monthly_income * AFFORDABILITY_THRESHOLD_2026
+                    min_affordable_raw = max(0, lcsp_ee_rate - max_ee)
+                    min_affordable = min_affordable_raw + 1.0 if min_affordable_raw > 0 else 0
+
+                    # Use higher of tier amount or min_affordable
+                    if min_affordable > tier_amount:
+                        base_amount = min_affordable
+                        affordability_adjusted = True
+                        employees_affordability_adjusted += 1
+                    else:
+                        base_amount = tier_amount
+                else:
+                    base_amount = tier_amount
+            else:
+                base_amount = tier_amount
 
             # Get age ratio from ACA curve for reference
             emp_age_clamped = min(max(emp_age, 0), 64)
@@ -397,29 +439,32 @@ class ContributionStrategyCalculator:
             # Apply family multiplier
             final_amount = base_amount * multipliers.get(family_status, 1.0)
 
-            lcsp_data = employee_lcsps.get(emp_id, {})
-
             employee_contributions[emp_id] = {
                 'age': emp_age,
                 'state': state,
                 'family_status': family_status,
                 'age_ratio': emp_ratio,
                 'age_tier': age_tier,
+                'tier_amount': round(tier_amount, 2),
+                'min_affordable': round(min_affordable, 2) if min_affordable is not None else None,
+                'affordability_adjusted': affordability_adjusted,
                 'base_contribution': round(base_amount, 2),
                 'family_multiplier': multipliers.get(family_status, 1.0),
                 'monthly_contribution': round(final_amount, 2),
                 'annual_contribution': round(final_amount * 12, 2),
-                'lcsp_ee_rate': lcsp_data.get('lcsp_ee_rate', 0),
-                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),  # Full family LCSP
+                'lcsp_ee_rate': lcsp_ee_rate,
+                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),
                 'rating_area': lcsp_data.get('rating_area', ''),
             }
             total_monthly += final_amount
 
             # Aggregate by age tier
             if age_tier not in by_age_tier:
-                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0, 'tier_amount': base_amount}
+                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0, 'tier_amount': tier_amount, 'adjusted_count': 0}
             by_age_tier[age_tier]['count'] += 1
             by_age_tier[age_tier]['total_monthly'] += final_amount
+            if affordability_adjusted:
+                by_age_tier[age_tier]['adjusted_count'] += 1
 
             # Aggregate by family status
             if family_status not in by_family_status:
@@ -439,6 +484,7 @@ class ContributionStrategyCalculator:
             'total_monthly': round(total_monthly, 2),
             'total_annual': round(total_monthly * 12, 2),
             'employees_covered': len(employee_contributions),
+            'employees_affordability_adjusted': employees_affordability_adjusted,
             'by_age_tier': by_age_tier,
             'by_family_status': by_family_status,
         }
@@ -683,20 +729,38 @@ def calculate_affordability_impact(
         'gap_closed': before['total_gap'] - total_gap,
     }
 
-    # Build list of unaffordable employees with details
+    # Build list of unaffordable employees with details for adjustment table
     unaffordable_employees = []
     for emp_id, aff_data in employee_affordability.items():
         if aff_data.get('has_income_data') and not aff_data.get('is_affordable'):
             emp_contrib = employee_contributions.get(emp_id, {})
-            # Additional needed = gap between employee cost and max they should pay
-            additional_needed = max(0, aff_data.get('employee_cost', 0) - aff_data.get('max_employee_contribution', 0))
+            monthly_income = aff_data.get('monthly_income', 0)
+            lcsp_premium = aff_data.get('lcsp_premium', 0)
+            max_ee = aff_data.get('max_employee_contribution', 0)
+            current_contribution = aff_data.get('monthly_contribution', 0)
+
+            # Minimum employer contribution needed for affordability
+            # min_affordable = LCSP - (income × 9.96%) + $1 buffer for rounding safety
+            min_affordable_exact = max(0, lcsp_premium - max_ee)
+            min_affordable = min_affordable_exact + 1.0 if min_affordable_exact > 0 else 0
+
+            # Gap = how much more ER needs to contribute beyond current
+            gap = max(0, min_affordable - current_contribution)
+
             unaffordable_employees.append({
                 'employee_id': emp_id,
                 'name': emp_contrib.get('name', emp_id),
-                'gap': round(additional_needed, 2),
-                'additional_needed': round(additional_needed, 2),
+                'age': emp_contrib.get('age', ''),
+                'family_status': emp_contrib.get('family_status', 'EE'),
+                'monthly_income': round(monthly_income, 2),
+                'lcsp_ee_rate': round(lcsp_premium, 2),
+                'current_contribution': round(current_contribution, 2),
+                'min_affordable': round(min_affordable, 2),
+                'gap': round(gap, 2),
+                'max_ee_contribution': round(max_ee, 2),
+                # Legacy fields for backwards compatibility
+                'additional_needed': round(gap, 2),
                 'employee_cost': aff_data.get('employee_cost', 0),
-                'max_ee_contribution': aff_data.get('max_employee_contribution', 0),
             })
 
     return {

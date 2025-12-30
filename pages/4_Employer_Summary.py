@@ -5,8 +5,6 @@ Aggregate cost analysis and census demographics for ICHRA contribution evaluatio
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import sys
 from pathlib import Path
 
@@ -18,6 +16,7 @@ from database import get_database_connection
 
 
 st.set_page_config(page_title="Employer Summary", page_icon="📊", layout="wide")
+
 
 # Initialize session state
 if 'db' not in st.session_state:
@@ -101,158 +100,203 @@ else:
 st.markdown("---")
 
 # ============================================================================
-# CURRENT VS PROPOSED ICHRA CONTRIBUTIONS
+# CONTRIBUTION SETTINGS SUMMARY
+# ============================================================================
+
+st.subheader("⚙️ Contribution Settings")
+
+settings = st.session_state.contribution_settings
+contribution_type = settings.get('contribution_type', 'percentage')
+
+if contribution_type == 'class_based':
+    strategy_name = settings.get('strategy_name', 'Class-Based')
+    st.markdown(f"**Strategy:** {strategy_name}")
+    st.markdown(f"**Total Monthly:** ${settings.get('total_monthly', 0):,.2f}")
+    st.markdown(f"**Total Annual:** ${settings.get('total_annual', 0):,.2f}")
+    st.markdown(f"**Employees Assigned:** {settings.get('employees_assigned', 0)}")
+
+    if settings.get('apply_family_multipliers'):
+        st.markdown("**Family Multipliers:** Enabled (EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x)")
+
+    # Show tier summary if available
+    if settings.get('strategy_applied') == 'age_banded' and settings.get('tiers'):
+        st.markdown("**Age Tiers:**")
+        for tier in settings['tiers']:
+            st.markdown(f"- {tier['age_range']}: ${tier['contribution']:.0f}/mo")
+    elif settings.get('strategy_applied') == 'location_based' and settings.get('tiers'):
+        st.markdown("**Location Tiers:**")
+        for tier in settings['tiers']:
+            st.markdown(f"- {tier['location']}: ${tier['contribution']:.0f}/mo")
+
+else:
+    contribution_pct = settings.get('default_percentage', 75)
+    st.markdown("**Contribution Type:** Percentage")
+    st.markdown(f"**Employer Contribution:** {contribution_pct}%")
+
+    if 'by_class' in settings and settings['by_class']:
+        st.markdown("**By Employee Class:**")
+        for class_name, pct in settings['by_class'].items():
+            st.markdown(f"- {class_name}: {pct}%")
+
+st.markdown("---")
+
+# ============================================================================
+# ICHRA COST IMPACT - Total premium comparison (apples to apples)
 # ============================================================================
 
 if has_individual_contribs:
-    st.subheader("💰 Current Group Plan vs Proposed ICHRA Contributions")
+    from financial_calculator import FinancialSummaryCalculator
 
     # Get contribution totals
     contrib_totals = ContributionComparison.aggregate_contribution_totals(census_df)
+    strategy_results = st.session_state.get('strategy_results', {})
+    has_strategy = strategy_results.get('calculated', False)
 
-    # Get contribution settings
-    contribution_pct = st.session_state.contribution_settings.get('default_percentage', 75)
+    if has_strategy:
+        result = strategy_results.get('result', {})
+        proposed_annual = result.get('total_annual', 0)
+        proposed_monthly = result.get('total_monthly', 0)
+        employees_covered = result.get('employees_covered', 0)
+        strategy_name = result.get('strategy_name', 'Applied Strategy')
 
-    # Build summary table
-    col1, col2 = st.columns(2)
+        # Current costs (2025)
+        current_er_annual = contrib_totals['total_current_er_annual']
+        current_ee_annual = contrib_totals['total_current_ee_annual']
+        current_total_annual = current_er_annual + current_ee_annual
+        current_er_monthly = contrib_totals['total_current_er_monthly']
+        current_ee_monthly = contrib_totals['total_current_ee_monthly']
+        current_total_monthly = current_er_monthly + current_ee_monthly
 
-    with col1:
-        st.markdown("### Current Group Plan Costs")
-        st.metric(
-            "Current ER Monthly",
-            DataFormatter.format_currency(contrib_totals['total_current_er_monthly']),
-            help="Sum of all employer contributions from census"
-        )
-        st.metric(
-            "Current ER Annual",
-            DataFormatter.format_currency(contrib_totals['total_current_er_annual'])
-        )
-        st.metric(
-            "Current EE Monthly",
-            DataFormatter.format_currency(contrib_totals['total_current_ee_monthly']),
-            help="Sum of all employee contributions from census"
-        )
-
-        # Calculate and display average EE Monthly
-        if contrib_totals['employees_with_data'] > 0:
-            current_ee_avg = contrib_totals['total_current_ee_monthly'] / contrib_totals['employees_with_data']
-            st.caption(f"Current EE Monthly Average: {DataFormatter.format_currency(current_ee_avg)}")
-
-        st.metric(
-            "Current EE Annual",
-            DataFormatter.format_currency(contrib_totals['total_current_ee_annual'])
-        )
-
-        st.caption(f"Based on {contrib_totals['employees_with_data']} employees with contribution data")
-
-    with col2:
-        # Check if contribution analysis has been run
-        if st.session_state.contribution_analysis:
-            st.markdown("### Proposed ICHRA Budget")
-            st.caption("💡 Based on Lowest Cost Silver Plan (LCSP) — IRS affordability benchmark")
-
-            # Calculate proposed totals from contribution analysis
-            proposed_er_monthly = 0.0
-            proposed_ee_monthly = 0.0
-            employees_analyzed = 0
-
-            for emp_id, analysis in st.session_state.contribution_analysis.items():
-                if 'ichra_analysis' in analysis and analysis['ichra_analysis']:
-                    proposed_er_monthly += analysis['ichra_analysis'].get('employer_contribution', 0)
-                    proposed_ee_monthly += analysis['ichra_analysis'].get('employee_cost', 0)
-                    employees_analyzed += 1
-
-            if employees_analyzed > 0:
-                st.metric(
-                    "Proposed ER Monthly",
-                    DataFormatter.format_currency(proposed_er_monthly)
-                )
-                st.metric(
-                    "Proposed ER Annual",
-                    DataFormatter.format_currency(proposed_er_monthly * 12)
-                )
-                st.metric(
-                    "Proposed EE Monthly",
-                    DataFormatter.format_currency(proposed_ee_monthly)
-                )
-
-                # Calculate and display average EE Monthly
-                if employees_analyzed > 0:
-                    proposed_ee_avg = proposed_ee_monthly / employees_analyzed
-                    st.caption(f"Proposed EE Monthly Average: {DataFormatter.format_currency(proposed_ee_avg)}")
-
-                st.metric(
-                    "Proposed EE Annual",
-                    DataFormatter.format_currency(proposed_ee_monthly * 12)
-                )
-
-                st.caption(f"Based on LCSP for {employees_analyzed} employees")
-            else:
-                st.info("Apply a contribution strategy on Page 2 to see proposed ICHRA costs")
+        # 2026 Renewal TOTAL premium (from census or financial summary)
+        renewal_total_annual = 0
+        renewal_total_monthly = 0
+        if 'financial_summary' in st.session_state and st.session_state.financial_summary.get('renewal_monthly'):
+            renewal_total_monthly = st.session_state.financial_summary['renewal_monthly']
+            renewal_total_annual = renewal_total_monthly * 12
         else:
-            st.markdown("### Proposed ICHRA Budget")
-            st.info("""
-            **Configure Contribution Strategy First**
+            projected_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
+            if projected_data['has_data']:
+                renewal_total_monthly = projected_data['total_monthly']
+                renewal_total_annual = projected_data['total_annual']
 
-            Go to **2️⃣ Contribution Evaluation** and use the **Contribution Strategy Modeler** to:
-            1. Select a strategy (Base Age Curve, % of LCSP, or Fixed Tiers)
-            2. Configure strategy parameters and modifiers
-            3. Click **"Calculate"** to preview results
-            4. Click **"Apply to Session"** to save
+        # Calculate ER/EE split percentages from current costs
+        er_pct = current_er_monthly / current_total_monthly if current_total_monthly > 0 else 0.60
+        ee_pct = current_ee_monthly / current_total_monthly if current_total_monthly > 0 else 0.40
 
-            This creates an ICHRA budget proposal based on the IRS affordability benchmark (LCSP).
-            """)
+        # PROJECT the 2026 ER contribution using same split ratio
+        # This is the KEY metric - what would employer pay at renewal
+        projected_er_monthly_2026 = renewal_total_monthly * er_pct
+        projected_er_annual_2026 = projected_er_monthly_2026 * 12
+        projected_ee_monthly_2026 = renewal_total_monthly * ee_pct
+        projected_ee_annual_2026 = projected_ee_monthly_2026 * 12
 
-    # Show change metrics below both columns (full width)
-    if st.session_state.contribution_analysis:
-        # Calculate proposed totals (need to recalculate outside col2 context)
-        proposed_er_monthly = sum(
-            analysis['ichra_analysis'].get('employer_contribution', 0)
-            for analysis in st.session_state.contribution_analysis.values()
-            if 'ichra_analysis' in analysis and analysis['ichra_analysis']
-        )
-        proposed_ee_monthly = sum(
-            analysis['ichra_analysis'].get('employee_cost', 0)
-            for analysis in st.session_state.contribution_analysis.values()
-            if 'ichra_analysis' in analysis and analysis['ichra_analysis']
-        )
+        # Calculate all comparisons
+        # 1. vs Current ER (employer-to-employer, same year baseline)
+        delta_vs_current_er = proposed_annual - current_er_annual
+        delta_vs_current_er_pct = (delta_vs_current_er / current_er_annual * 100) if current_er_annual > 0 else 0
 
-        # Calculate changes
-        er_change_monthly = proposed_er_monthly - contrib_totals['total_current_er_monthly']
-        er_change_annual = er_change_monthly * 12
-        ee_change_monthly = proposed_ee_monthly - contrib_totals['total_current_ee_monthly']
-        ee_change_annual = ee_change_monthly * 12
+        # 2. vs Projected Renewal ER - THE PRIMARY SALES COMPARISON
+        savings_vs_renewal_er = projected_er_annual_2026 - proposed_annual
+        savings_vs_renewal_er_pct = (savings_vs_renewal_er / projected_er_annual_2026 * 100) if projected_er_annual_2026 > 0 else 0
 
+        # 3. vs Renewal Total (for context - apples to oranges but big number)
+        savings_vs_renewal_total = renewal_total_annual - proposed_annual
+        savings_vs_renewal_total_pct = (savings_vs_renewal_total / renewal_total_annual * 100) if renewal_total_annual > 0 else 0
+
+        st.info("💡 **Key insight:** ICHRA is employer contribution only. 'vs Renewal ER' shows what you save by switching to ICHRA instead of accepting the renewal. 'vs Renewal Total' includes employee premiums and appears larger but isn't an apples-to-apples comparison.")
+
+            # === HEADLINE: EMPLOYER COST COMPARISON ===
+        st.subheader("💰 Employer Cost Comparison")
+
+        # === DETAILED SUMMARY ===
         st.markdown("---")
-        st.markdown("### Cost Impact Analysis")
+        summary_cols = st.columns(3)
 
-        col_a, col_b = st.columns(2)
+        with summary_cols[0]:
+            st.metric("Current ER (2025)", DataFormatter.format_currency(current_er_annual),
+                     help=f"Current employer contribution ({er_pct*100:.1f}% of total)")
 
-        with col_a:
-            er_change_color = "normal" if er_change_annual < 0 else "inverse"
+        with summary_cols[1]:
+            if projected_er_annual_2026 > 0:
+                st.metric("Projected Renewal ER", DataFormatter.format_currency(projected_er_annual_2026),
+                         help=f"2026 renewal × {er_pct*100:.1f}% ER share")
+            else:
+                st.metric("Projected Renewal ER", "N/A")
+
+        with summary_cols[2]:
+            st.metric("Proposed ICHRA", DataFormatter.format_currency(proposed_annual),
+                     help="Total employer ICHRA budget")
+             
+        st.caption("Comparing ICHRA to Current → Renewal ER")
+
+        # Three comparison cards side by side
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
             st.metric(
-                "Proposed ER Change (Annual)",
-                DataFormatter.format_currency(er_change_annual, include_sign=True),
-                delta=f"{er_change_annual:+,.0f}",
-                delta_color=er_change_color
+                label="ICHRA vs Current ER Annual Cost",
+                value=f"${abs(delta_vs_current_er):,.0f}",
+                delta=f"{delta_vs_current_er_pct:+.1f}%",
+                delta_color="inverse"  # red if positive (costs more)
             )
+            if delta_vs_current_er > 0:
+                st.caption("ICHRA costs more than current")
+            else:
+                st.caption("ICHRA saves vs current")
 
-        with col_b:
-            ee_change_color = "normal" if ee_change_annual < 0 else "inverse"
+        with col2:
+            # PRIMARY COMPARISON - make it stand out
             st.metric(
-                "Proposed EE Change (Annual)",
-                DataFormatter.format_currency(ee_change_annual, include_sign=True),
-                delta=f"{ee_change_annual:+,.0f}",
-                delta_color=ee_change_color
+                label="ICHRA vs Accepting Renewal ER Annual Cost",
+                value=f"${savings_vs_renewal_er:,.0f}" if savings_vs_renewal_er >= 0 else f"-${abs(savings_vs_renewal_er):,.0f}",
+                delta=f"{savings_vs_renewal_er_pct:.1f}% savings" if savings_vs_renewal_er >= 0 else f"{savings_vs_renewal_er_pct:.1f}%",
+                delta_color="normal" if savings_vs_renewal_er >= 0 else "inverse"
             )
+            st.caption("**Primary comparison** - avoiding the renewal")
 
-        # Interpretation
-        if er_change_annual < 0:
-            st.success(f"💰 Potential annual employer savings of **{DataFormatter.format_currency(abs(er_change_annual))}** under ICHRA")
-        elif er_change_annual > 0:
-            st.warning(f"⚠️ ICHRA would cost employers **{DataFormatter.format_currency(er_change_annual)}** more annually")
-        else:
-            st.info("ICHRA employer costs approximately the same as current plan")
+        with col3:
+            st.metric(
+                label="ICHRA Annual Savings vs Renewal ER",
+                value=f"${savings_vs_renewal_total:,.0f}" if savings_vs_renewal_total >= 0 else f"-${abs(savings_vs_renewal_total):,.0f}",
+                delta=f"{savings_vs_renewal_total_pct:.1f}%",
+                delta_color="normal" if savings_vs_renewal_total >= 0 else "inverse"
+            )
+            st.caption("Total premium comparison*")
+
+        # === DETAILS IN EXPANDER ===
+        with st.expander("View cost breakdown details"):
+            st.caption(f"Strategy: {strategy_name} · {employees_covered} employees · ER share: {er_pct*100:.1f}%")
+
+            detail_col1, detail_col2, detail_col3 = st.columns(3)
+
+            with detail_col1:
+                st.markdown("**Current (2025)**")
+                st.write(f"- ER: {DataFormatter.format_currency(current_er_annual)}/yr")
+                st.write(f"- EE: {DataFormatter.format_currency(current_ee_annual)}/yr")
+                st.write(f"- **Total**: {DataFormatter.format_currency(current_total_annual)}/yr")
+
+            with detail_col2:
+                st.markdown("**2026 Renewal (Projected)**")
+                st.write(f"- ER: {DataFormatter.format_currency(projected_er_annual_2026)}/yr")
+                st.write(f"- EE: {DataFormatter.format_currency(projected_ee_annual_2026)}/yr")
+                st.write(f"- **Total**: {DataFormatter.format_currency(renewal_total_annual)}/yr")
+                st.caption(f"+{((renewal_total_annual/current_total_annual)-1)*100:.1f}% increase" if current_total_annual > 0 else "")
+
+            with detail_col3:
+                st.markdown("**Proposed ICHRA**")
+                avg_per_emp = proposed_monthly / employees_covered if employees_covered > 0 else 0
+                st.write(f"- ER Budget: {DataFormatter.format_currency(proposed_annual)}/yr")
+                st.write(f"- Avg/Employee: {DataFormatter.format_currency(avg_per_emp)}/mo")
+                st.write(f"- Employees: {employees_covered}")
+
+    else:
+        # No strategy applied yet
+        st.subheader("💰 Employer Cost Impact")
+        st.info("""
+        **Configure a contribution strategy to see cost comparison**
+
+        Go to **Contribution Evaluation** → Use the Strategy Modeler → Click **"Use This Strategy"**
+        """)
 
     # Detailed employee breakdown
     if st.session_state.contribution_analysis:
@@ -330,195 +374,6 @@ else:
     - Aggregate savings analysis
     - ROI calculations
     """)
-
-st.markdown("---")
-
-# ============================================================================
-# CONTRIBUTION SETTINGS SUMMARY
-# ============================================================================
-
-st.subheader("⚙️ Contribution Settings")
-
-settings = st.session_state.contribution_settings
-contribution_type = settings.get('contribution_type', 'percentage')
-
-if contribution_type == 'class_based':
-    strategy_name = settings.get('strategy_name', 'Class-Based')
-    st.markdown(f"**Strategy:** {strategy_name}")
-    st.markdown(f"**Total Monthly:** ${settings.get('total_monthly', 0):,.2f}")
-    st.markdown(f"**Total Annual:** ${settings.get('total_annual', 0):,.2f}")
-    st.markdown(f"**Employees Assigned:** {settings.get('employees_assigned', 0)}")
-
-    if settings.get('apply_family_multipliers'):
-        st.markdown("**Family Multipliers:** Enabled (EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x)")
-
-    # Show tier summary if available
-    if settings.get('strategy_applied') == 'age_banded' and settings.get('tiers'):
-        st.markdown("**Age Tiers:**")
-        for tier in settings['tiers']:
-            st.markdown(f"- {tier['age_range']}: ${tier['contribution']:.0f}/mo")
-    elif settings.get('strategy_applied') == 'location_based' and settings.get('tiers'):
-        st.markdown("**Location Tiers:**")
-        for tier in settings['tiers']:
-            st.markdown(f"- {tier['location']}: ${tier['contribution']:.0f}/mo")
-
-else:
-    contribution_pct = settings.get('default_percentage', 75)
-    st.markdown(f"**Contribution Type:** Percentage")
-    st.markdown(f"**Employer Contribution:** {contribution_pct}%")
-
-    if 'by_class' in settings and settings['by_class']:
-        st.markdown("**By Employee Class:**")
-        for class_name, pct in settings['by_class'].items():
-            st.markdown(f"- {class_name}: {pct}%")
-
-st.markdown("---")
-
-# ============================================================================
-# CENSUS DEMOGRAPHICS
-# ============================================================================
-
-st.subheader("👥 Census Demographics")
-
-# Employee age distribution
-col1, col2 = st.columns(2)
-
-with col1:
-    # Age distribution
-    age_bins = [0, 30, 40, 50, 60, 100]
-    age_labels = ['Under 30', '30-39', '40-49', '50-59', '60+']
-
-    age_col = 'employee_age' if 'employee_age' in census_df.columns else 'age'
-    census_with_age_group = census_df.copy()
-    census_with_age_group['age_group'] = pd.cut(
-        census_with_age_group[age_col],
-        bins=age_bins,
-        labels=age_labels,
-        right=False
-    )
-
-    age_dist = census_with_age_group['age_group'].value_counts().sort_index()
-
-    fig = px.pie(
-        values=age_dist.values,
-        names=age_dist.index,
-        title='Employee Age Distribution'
-    )
-
-    st.plotly_chart(fig, width="stretch")
-
-with col2:
-    # State distribution
-    state_dist = census_df['state'].value_counts()
-
-    fig = px.bar(
-        x=state_dist.index,
-        y=state_dist.values,
-        title='Employees by State',
-        labels={'x': 'State', 'y': 'Number of Employees'}
-    )
-
-    st.plotly_chart(fig, width="stretch")
-
-# Family status distribution
-if 'family_status' in census_df.columns:
-    st.markdown("### Family Status Distribution")
-
-    from constants import FAMILY_STATUS_CODES
-
-    family_counts = census_df['family_status'].value_counts()
-
-    # Create display labels
-    family_labels = [f"{code} ({FAMILY_STATUS_CODES.get(code, code)})" for code in family_counts.index]
-
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        fig = px.pie(
-            values=family_counts.values,
-            names=family_labels,
-            title='Employees by Family Status'
-        )
-        st.plotly_chart(fig, width="stretch")
-
-    with col2:
-        st.markdown("**Family Status Breakdown:**")
-        for code, count in family_counts.items():
-            pct = count / len(census_df) * 100
-            desc = FAMILY_STATUS_CODES.get(code, code)
-            st.markdown(f"- **{code}** ({desc}): {count} ({pct:.1f}%)")
-
-# Dependent demographics (if present)
-if has_dependents:
-    st.markdown("### Dependent Demographics")
-
-    dep_col1, dep_col2 = st.columns(2)
-
-    with dep_col1:
-        # Dependent relationship breakdown
-        rel_counts = dependents_df['relationship'].value_counts()
-
-        fig = px.pie(
-            values=rel_counts.values,
-            names=[rel.title() + 's' for rel in rel_counts.index],
-            title='Dependents by Relationship'
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-    with dep_col2:
-        # Dependent age distribution
-        dependents_with_age_group = dependents_df.copy()
-
-        # Use different age bins for dependents (more granular for children)
-        dep_age_bins = [0, 5, 13, 18, 21, 30, 40, 50, 100]
-        dep_age_labels = ['0-4', '5-12', '13-17', '18-20', '21-29', '30-39', '40-49', '50+']
-
-        dependents_with_age_group['age_group'] = pd.cut(
-            dependents_with_age_group['age'],
-            bins=dep_age_bins,
-            labels=dep_age_labels,
-            right=False
-        )
-
-        dep_age_dist = dependents_with_age_group['age_group'].value_counts().sort_index()
-
-        fig = px.bar(
-            x=dep_age_dist.index,
-            y=dep_age_dist.values,
-            title='Dependent Age Distribution',
-            labels={'x': 'Age Group', 'y': 'Number of Dependents'}
-        )
-
-        st.plotly_chart(fig, width="stretch")
-
-# Rating area distribution
-st.markdown("### Geographic Distribution")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    # Rating areas by state
-    ra_counts = census_df.groupby(['state', 'rating_area_id']).size().reset_index(name='count')
-    ra_counts = ra_counts.sort_values(['state', 'rating_area_id'])
-
-    st.markdown("**Employees by Rating Area:**")
-    st.dataframe(ra_counts, width="stretch", hide_index=True)
-
-with col2:
-    # County distribution (top 10)
-    county_counts = census_df['county'].value_counts().head(10)
-
-    fig = px.bar(
-        x=county_counts.values,
-        y=county_counts.index,
-        orientation='h',
-        title='Top 10 Counties by Employee Count',
-        labels={'x': 'Number of Employees', 'y': 'County'}
-    )
-    fig.update_layout(yaxis={'categoryorder': 'total ascending'})
-
-    st.plotly_chart(fig, width="stretch")
 
 # ============================================================================
 # NAVIGATION

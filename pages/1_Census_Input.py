@@ -23,6 +23,7 @@ from constants import FAMILY_STATUS_CODES
 # Page config
 st.set_page_config(page_title="Census Input", page_icon="📊", layout="wide")
 
+
 # Initialize session state
 if 'db' not in st.session_state:
     logging.info("SESSION: Initializing database connection...")
@@ -153,7 +154,7 @@ if st.session_state.census_df is not None:
 
     st.markdown("---")
 
-    tab1, tab2, tab3 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography"])
+    tab1, tab2, tab3, tab4 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography", "📊 Demographics"])
 
     with tab1:
         st.markdown("### 📊 Employee Demographics")
@@ -349,6 +350,135 @@ if st.session_state.census_df is not None:
         county_counts = employees_df.groupby(['state', 'county']).size().reset_index(name='count')
         county_counts = county_counts.sort_values('count', ascending=False)
         st.dataframe(county_counts, width="stretch")
+
+    with tab4:
+        import plotly.express as px
+
+        # Age distribution chart
+        st.markdown("### Age Distribution")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            age_bins = [0, 30, 40, 50, 60, 100]
+            age_labels = ['Under 30', '30-39', '40-49', '50-59', '60+']
+
+            age_col = 'employee_age' if 'employee_age' in employees_df.columns else 'age'
+            census_with_age_group = employees_df.copy()
+            census_with_age_group['age_group'] = pd.cut(
+                census_with_age_group[age_col],
+                bins=age_bins,
+                labels=age_labels,
+                right=False
+            )
+
+            age_dist = census_with_age_group['age_group'].value_counts().sort_index()
+
+            fig = px.pie(
+                values=age_dist.values,
+                names=age_dist.index,
+                title='Employee Age Distribution'
+            )
+            st.plotly_chart(fig, width='stretch')
+
+        with col2:
+            # State distribution bar chart
+            state_dist = employees_df['state'].value_counts()
+
+            fig = px.bar(
+                x=state_dist.index,
+                y=state_dist.values,
+                title='Employees by State',
+                labels={'x': 'State', 'y': 'Number of Employees'}
+            )
+            st.plotly_chart(fig, width='stretch')
+
+        # Family status distribution
+        if 'family_status' in employees_df.columns:
+            st.markdown("### Family Status Distribution")
+
+            family_counts = employees_df['family_status'].value_counts()
+            family_labels = [f"{code} ({FAMILY_STATUS_CODES.get(code, code)})" for code in family_counts.index]
+
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                fig = px.pie(
+                    values=family_counts.values,
+                    names=family_labels,
+                    title='Employees by Family Status'
+                )
+                st.plotly_chart(fig, width='stretch')
+
+            with col2:
+                st.markdown("**Family Status Breakdown:**")
+                for code, count in family_counts.items():
+                    pct = count / len(employees_df) * 100
+                    desc = FAMILY_STATUS_CODES.get(code, code)
+                    st.markdown(f"- **{code}** ({desc}): {count} ({pct:.1f}%)")
+
+        # Dependent demographics (if present)
+        if not dependents_df.empty:
+            st.markdown("### Dependent Demographics")
+
+            dep_col1, dep_col2 = st.columns(2)
+
+            with dep_col1:
+                rel_counts = dependents_df['relationship'].value_counts()
+
+                fig = px.pie(
+                    values=rel_counts.values,
+                    names=[rel.title() + 's' for rel in rel_counts.index],
+                    title='Dependents by Relationship'
+                )
+                st.plotly_chart(fig, width='stretch')
+
+            with dep_col2:
+                dependents_with_age_group = dependents_df.copy()
+
+                dep_age_bins = [0, 5, 13, 18, 21, 30, 40, 50, 100]
+                dep_age_labels = ['0-4', '5-12', '13-17', '18-20', '21-29', '30-39', '40-49', '50+']
+
+                dependents_with_age_group['age_group'] = pd.cut(
+                    dependents_with_age_group['age'],
+                    bins=dep_age_bins,
+                    labels=dep_age_labels,
+                    right=False
+                )
+
+                dep_age_dist = dependents_with_age_group['age_group'].value_counts().sort_index()
+
+                fig = px.bar(
+                    x=dep_age_dist.index,
+                    y=dep_age_dist.values,
+                    title='Dependent Age Distribution',
+                    labels={'x': 'Age Group', 'y': 'Number of Dependents'}
+                )
+                st.plotly_chart(fig, width='stretch')
+
+        # Rating area distribution
+        st.markdown("### Geographic Distribution")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            ra_counts = employees_df.groupby(['state', 'rating_area_id']).size().reset_index(name='count')
+            ra_counts = ra_counts.sort_values(['state', 'rating_area_id'])
+
+            st.markdown("**Employees by Rating Area:**")
+            st.dataframe(ra_counts, width='stretch', hide_index=True)
+
+        with col2:
+            county_counts = employees_df['county'].value_counts().head(10)
+
+            fig = px.bar(
+                x=county_counts.values,
+                y=county_counts.index,
+                orientation='h',
+                title='Top 10 Counties by Employee Count',
+                labels={'x': 'Number of Employees', 'y': 'County'}
+            )
+            fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig, width='stretch')
 
 else:
     # No census loaded - show file uploader
@@ -554,7 +684,7 @@ else:
                     st.markdown("---")
                     st.subheader("📊 Census Summary")
 
-                    tab1, tab2, tab3 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography"])
+                    tab1, tab2, tab3, tab4 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography", "📊 Demographics"])
 
                     with tab1:
                         st.markdown("### 📊 Employee Demographics")
@@ -750,6 +880,135 @@ else:
                         county_counts = employees_df.groupby(['state', 'county']).size().reset_index(name='count')
                         county_counts = county_counts.sort_values('count', ascending=False)
                         st.dataframe(county_counts, width="stretch")
+
+                    with tab4:
+                        import plotly.express as px
+
+                        # Age distribution chart
+                        st.markdown("### Age Distribution")
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            age_bins = [0, 30, 40, 50, 60, 100]
+                            age_labels = ['Under 30', '30-39', '40-49', '50-59', '60+']
+
+                            age_col = 'employee_age' if 'employee_age' in employees_df.columns else 'age'
+                            census_with_age_group = employees_df.copy()
+                            census_with_age_group['age_group'] = pd.cut(
+                                census_with_age_group[age_col],
+                                bins=age_bins,
+                                labels=age_labels,
+                                right=False
+                            )
+
+                            age_dist = census_with_age_group['age_group'].value_counts().sort_index()
+
+                            fig = px.pie(
+                                values=age_dist.values,
+                                names=age_dist.index,
+                                title='Employee Age Distribution'
+                            )
+                            st.plotly_chart(fig, width='stretch')
+
+                        with col2:
+                            # State distribution bar chart
+                            state_dist = employees_df['state'].value_counts()
+
+                            fig = px.bar(
+                                x=state_dist.index,
+                                y=state_dist.values,
+                                title='Employees by State',
+                                labels={'x': 'State', 'y': 'Number of Employees'}
+                            )
+                            st.plotly_chart(fig, width='stretch')
+
+                        # Family status distribution
+                        if 'family_status' in employees_df.columns:
+                            st.markdown("### Family Status Distribution")
+
+                            family_counts = employees_df['family_status'].value_counts()
+                            family_labels = [f"{code} ({FAMILY_STATUS_CODES.get(code, code)})" for code in family_counts.index]
+
+                            col1, col2 = st.columns([2, 1])
+
+                            with col1:
+                                fig = px.pie(
+                                    values=family_counts.values,
+                                    names=family_labels,
+                                    title='Employees by Family Status'
+                                )
+                                st.plotly_chart(fig, width='stretch')
+
+                            with col2:
+                                st.markdown("**Family Status Breakdown:**")
+                                for code, count in family_counts.items():
+                                    pct = count / len(employees_df) * 100
+                                    desc = FAMILY_STATUS_CODES.get(code, code)
+                                    st.markdown(f"- **{code}** ({desc}): {count} ({pct:.1f}%)")
+
+                        # Dependent demographics (if present)
+                        if not dependents_df.empty:
+                            st.markdown("### Dependent Demographics")
+
+                            dep_col1, dep_col2 = st.columns(2)
+
+                            with dep_col1:
+                                rel_counts = dependents_df['relationship'].value_counts()
+
+                                fig = px.pie(
+                                    values=rel_counts.values,
+                                    names=[rel.title() + 's' for rel in rel_counts.index],
+                                    title='Dependents by Relationship'
+                                )
+                                st.plotly_chart(fig, width='stretch')
+
+                            with dep_col2:
+                                dependents_with_age_group = dependents_df.copy()
+
+                                dep_age_bins = [0, 5, 13, 18, 21, 30, 40, 50, 100]
+                                dep_age_labels = ['0-4', '5-12', '13-17', '18-20', '21-29', '30-39', '40-49', '50+']
+
+                                dependents_with_age_group['age_group'] = pd.cut(
+                                    dependents_with_age_group['age'],
+                                    bins=dep_age_bins,
+                                    labels=dep_age_labels,
+                                    right=False
+                                )
+
+                                dep_age_dist = dependents_with_age_group['age_group'].value_counts().sort_index()
+
+                                fig = px.bar(
+                                    x=dep_age_dist.index,
+                                    y=dep_age_dist.values,
+                                    title='Dependent Age Distribution',
+                                    labels={'x': 'Age Group', 'y': 'Number of Dependents'}
+                                )
+                                st.plotly_chart(fig, width='stretch')
+
+                        # Rating area distribution
+                        st.markdown("### Geographic Distribution")
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            ra_counts = employees_df.groupby(['state', 'rating_area_id']).size().reset_index(name='count')
+                            ra_counts = ra_counts.sort_values(['state', 'rating_area_id'])
+
+                            st.markdown("**Employees by Rating Area:**")
+                            st.dataframe(ra_counts, width='stretch', hide_index=True)
+
+                        with col2:
+                            county_counts = employees_df['county'].value_counts().head(10)
+
+                            fig = px.bar(
+                                x=county_counts.values,
+                                y=county_counts.index,
+                                orientation='h',
+                                title='Top 10 Counties by Employee Count',
+                                labels={'x': 'Number of Employees', 'y': 'County'}
+                            )
+                            fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+                            st.plotly_chart(fig, width='stretch')
 
                     # Navigation
                     st.markdown("---")

@@ -194,11 +194,13 @@ class PDFProposalRenderer:
         """Cover slide - teal background with client name and stats"""
         self._draw_background('teal_bg')
 
-        # Client name (large, cream)
-        self.c.setFont('Helvetica-Bold', 72)
+        # Client name (large, cream) - limit width to avoid overlap with right stats
+        client_name_upper = self.data.client_name.upper()
+        # Reduce font size for long names
+        name_font_size = 72 if len(client_name_upper) <= 12 else (56 if len(client_name_upper) <= 18 else 42)
+        self.c.setFont('Helvetica-Bold', name_font_size)
         self.c.setFillColor(HexColor(COLORS['cream_text']))
-        self.c.drawString(0.75 * inch, self.PAGE_HEIGHT - 1.5 * inch,
-                         self.data.client_name.upper())
+        self.c.drawString(0.75 * inch, self.PAGE_HEIGHT - 1.5 * inch, client_name_upper)
 
         # "is at a" (cream)
         self.c.setFont('Helvetica-Bold', 36)
@@ -214,45 +216,48 @@ class PDFProposalRenderer:
         self.c.setFillColor(HexColor(COLORS['cream_text']))
         self.c.drawString(0.75 * inch, self.PAGE_HEIGHT - 3.9 * inch, "in the road")
 
-        # Right side stats
-        right_x = 7 * inch
+        # Right side stats (positioned to fit within page)
+        right_x = 6.5 * inch
 
         # Renewal percentage
         if self.data.renewal_percentage > 0:
-            self.c.setFont('Helvetica-Bold', 96)
+            self.c.setFont('Helvetica-Bold', 72)
             self.c.setFillColor(HexColor(COLORS['light_teal']))
-            self.c.drawString(right_x, self.PAGE_HEIGHT - 2 * inch,
-                             f"{self.data.renewal_percentage:.0f}")
-            self.c.setFont('Helvetica-Bold', 48)
-            self.c.drawString(right_x + 130, self.PAGE_HEIGHT - 1.7 * inch, "%")
+            pct_str = f"{self.data.renewal_percentage:.0f}"
+            self.c.drawString(right_x, self.PAGE_HEIGHT - 2 * inch, pct_str)
+            num_width = self.c.stringWidth(pct_str, 'Helvetica-Bold', 72)
+            self.c.setFont('Helvetica-Bold', 36)
+            self.c.drawString(right_x + num_width + 5, self.PAGE_HEIGHT - 1.8 * inch, "%")
 
             # Description
-            self.c.setFont('Helvetica', 16)
+            self.c.setFont('Helvetica', 14)
             self.c.setFillColor(HexColor(COLORS['cream_text']))
             self.c.drawString(right_x, self.PAGE_HEIGHT - 2.4 * inch,
-                             "renewal isn't a budget")
+                             "renewal isn't a budget problem.")
             self.c.drawString(right_x, self.PAGE_HEIGHT - 2.65 * inch,
-                             "problem. It's a shakedown.")
+                             "It's a shakedown.")
 
         # Total renewal cost
         if self.data.total_renewal_cost > 0:
             cost_display = f"${self.data.total_renewal_cost/1_000_000:.1f}" if self.data.total_renewal_cost >= 1_000_000 else f"${self.data.total_renewal_cost/1000:.0f}K"
-            self.c.setFont('Helvetica-Bold', 72)
+            self.c.setFont('Helvetica-Bold', 56)
             self.c.setFillColor(HexColor(COLORS['light_teal']))
             self.c.drawString(right_x, self.PAGE_HEIGHT - 4 * inch, cost_display)
 
             if self.data.total_renewal_cost >= 1_000_000:
-                self.c.setFont('Helvetica-Bold', 36)
-                self.c.drawString(right_x + 160, self.PAGE_HEIGHT - 3.8 * inch, "M")
+                cost_width = self.c.stringWidth(cost_display, 'Helvetica-Bold', 56)
+                self.c.setFont('Helvetica-Bold', 28)
+                self.c.drawString(right_x + cost_width + 5, self.PAGE_HEIGHT - 3.85 * inch, "M")
 
-            self.c.setFont('Helvetica', 16)
+            self.c.setFont('Helvetica', 14)
             self.c.setFillColor(HexColor(COLORS['cream_text']))
-            self.c.drawString(right_x, self.PAGE_HEIGHT - 4.4 * inch, "cost of staying put.")
+            self.c.drawString(right_x, self.PAGE_HEIGHT - 4.35 * inch, "cost of staying put.")
 
         # Question at bottom
-        self.c.setFont('Courier-Bold', 18)
+        self.c.setFont('Courier-Bold', 16)
         self.c.setFillColor(HexColor(COLORS['mint']))
-        self.c.drawString(right_x, 1.2 * inch, f"CAN {self.data.client_name.upper()}")
+        client_upper = self.data.client_name.upper()[:20]  # Truncate long names
+        self.c.drawString(right_x, 1.2 * inch, f"CAN {client_upper}")
         self.c.drawString(right_x, 0.9 * inch, "SURVIVE THAT?")
 
     # =========================================================================
@@ -313,10 +318,10 @@ class PDFProposalRenderer:
         self.c.drawString(left_x, 1.2 * inch, "YOUR RENEWAL NOTICE SHOULDN'T")
         self.c.drawString(left_x, 0.85 * inch, "FEEL LIKE A RANSOM NOTE.")
 
-        # Right side - renewal distribution chart
-        chart_x = 6.5 * inch
+        # Right side - renewal distribution chart (fits within 10.5" max)
+        chart_x = 6 * inch
         chart_y = self.PAGE_HEIGHT - 2 * inch
-        chart_w = 4 * inch
+        chart_w = 4.3 * inch
         chart_h = 4.5 * inch
 
         # Chart background
@@ -466,10 +471,10 @@ class PDFProposalRenderer:
             self.c.setFont('Helvetica', 12)
             self.c.drawString(3 * inch, y + 10, desc)
 
-        # Healthcare burden card (right side)
-        card_x = 7.5 * inch
+        # Healthcare burden card (right side - fits within 10.5" max)
+        card_x = 7 * inch
         card_y = self.PAGE_HEIGHT - 5 * inch
-        card_w = 3 * inch
+        card_w = 3.2 * inch
         card_h = 2.5 * inch
 
         # White outer card
@@ -579,19 +584,19 @@ class PDFProposalRenderer:
         self.c.setFillColor(HexColor(COLORS['chart_gray']))
         self.c.drawString(6 * inch, self.PAGE_HEIGHT - 3 * inch, "[Map visualization would appear here]")
 
-        # Bottom insight
+        # Bottom insight (fits within page)
         insight_y = 1 * inch
-        self._draw_rounded_rect(5.5 * inch, insight_y, 5 * inch, 0.8 * inch, 10, COLORS['light_teal'])
+        self._draw_rounded_rect(5 * inch, insight_y, 5.3 * inch, 0.8 * inch, 10, COLORS['light_teal'])
 
         if self.data.top_states:
             top_state = self.data.top_states[0]
             top_pct = (top_state['count'] / self.data.employee_count * 100) if self.data.employee_count > 0 else 0
 
-            self.c.setFont('Helvetica-Bold', 11)
+            self.c.setFont('Helvetica-Bold', 10)
             self.c.setFillColor(HexColor(COLORS['dark_text']))
-            insight_text = f"{top_pct:.0f}% of your workforce is in {top_state['state']}, but you've got people scattered across {self.data.total_states} states."
-            self.c.drawString(5.7 * inch, insight_y + 45, insight_text[:60])
-            self.c.drawString(5.7 * inch, insight_y + 25, f"That's {self.data.total_states} different insurance markets, {self.data.total_states} different cost structures.")
+            insight_text = f"{top_pct:.0f}% of workforce in {top_state['state']}, people in {self.data.total_states} states."
+            self.c.drawString(5.2 * inch, insight_y + 45, insight_text)
+            self.c.drawString(5.2 * inch, insight_y + 25, f"That's {self.data.total_states} different insurance markets and cost structures.")
 
     # =========================================================================
     # Slide 9: Census Data - Population Overview
@@ -705,39 +710,44 @@ class PDFProposalRenderer:
             self.c.setFillColor(HexColor(COLORS['teal_text']))
             self.c.drawString(donut_cx + 1.8 * inch, y + 3, pct)
 
-        # Right side - Cost cards
-        cost_x = 7.5 * inch
-        cost_y = self.PAGE_HEIGHT - 3 * inch
+        # Right side - Cost cards (3 cards, 1.3" wide each with 0.1" gap, starting at 6.8")
+        card_w = 1.3 * inch
+        card_h = 1.4 * inch
+        card_gap = 0.1 * inch
+        cost_x = 6.8 * inch
+        cost_y = self.PAGE_HEIGHT - 3.2 * inch
 
         # Current EE
-        self._draw_rounded_rect(cost_x, cost_y, 1.5 * inch, 1.5 * inch, 10, COLORS['maroon_card'])
+        self._draw_rounded_rect(cost_x, cost_y, card_w, card_h, 10, COLORS['maroon_card'])
         self.c.setFont('Helvetica', 9)
         self.c.setFillColor(HexColor(COLORS['cream_text']))
-        self.c.drawString(cost_x + 10, cost_y + 1.2 * inch, "CURRENT EE")
+        self.c.drawString(cost_x + 10, cost_y + card_h - 20, "CURRENT EE")
         self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(cost_x + 10, cost_y + 0.85 * inch, f"${self.data.current_ee_annual:,.0f}")
+        self.c.drawString(cost_x + 10, cost_y + card_h - 45, f"${self.data.current_ee_annual:,.0f}")
         self.c.setFont('Helvetica', 9)
-        self.c.drawString(cost_x + 10, cost_y + 0.65 * inch, "Annual")
+        self.c.drawString(cost_x + 10, cost_y + card_h - 60, "Annual")
 
         # Current ER
-        self._draw_rounded_rect(cost_x + 1.6 * inch, cost_y, 1.5 * inch, 1.5 * inch, 10, COLORS['teal_bg'])
+        er_x = cost_x + card_w + card_gap
+        self._draw_rounded_rect(er_x, cost_y, card_w, card_h, 10, COLORS['teal_bg'])
         self.c.setFont('Helvetica', 9)
         self.c.setFillColor(HexColor(COLORS['cream_text']))
-        self.c.drawString(cost_x + 1.7 * inch, cost_y + 1.2 * inch, "CURRENT ER")
+        self.c.drawString(er_x + 10, cost_y + card_h - 20, "CURRENT ER")
         self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(cost_x + 1.7 * inch, cost_y + 0.85 * inch, f"${self.data.current_er_annual:,.0f}")
+        self.c.drawString(er_x + 10, cost_y + card_h - 45, f"${self.data.current_er_annual:,.0f}")
         self.c.setFont('Helvetica', 9)
-        self.c.drawString(cost_x + 1.7 * inch, cost_y + 0.65 * inch, "Annual")
+        self.c.drawString(er_x + 10, cost_y + card_h - 60, "Annual")
 
         # Total
-        self._draw_rounded_rect(cost_x + 3.2 * inch, cost_y, 1.5 * inch, 1.5 * inch, 10, COLORS['dark_card'])
+        total_x = er_x + card_w + card_gap
+        self._draw_rounded_rect(total_x, cost_y, card_w, card_h, 10, COLORS['dark_card'])
         self.c.setFont('Helvetica', 9)
         self.c.setFillColor(HexColor(COLORS['cream_text']))
-        self.c.drawString(cost_x + 3.3 * inch, cost_y + 1.2 * inch, "TOTAL")
+        self.c.drawString(total_x + 10, cost_y + card_h - 20, "TOTAL")
         self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(cost_x + 3.3 * inch, cost_y + 0.85 * inch, f"${self.data.current_total_annual:,.0f}")
+        self.c.drawString(total_x + 10, cost_y + card_h - 45, f"${self.data.current_total_annual:,.0f}")
         self.c.setFont('Helvetica', 9)
-        self.c.drawString(cost_x + 3.3 * inch, cost_y + 0.65 * inch, f"${self.data.current_total_monthly:,.0f}/mo")
+        self.c.drawString(total_x + 10, cost_y + card_h - 60, f"${self.data.current_total_monthly:,.0f}/mo")
 
     # =========================================================================
     # Slide 10: ICHRA Analysis
@@ -750,19 +760,19 @@ class PDFProposalRenderer:
         # Section header
         self._draw_section_header("ICHRA ANALYSIS", self.PAGE_HEIGHT - 0.6 * inch)
 
-        # Main title
-        self.c.setFont('Helvetica-Bold', 32)
+        # Main title (two lines to prevent overflow)
+        self.c.setFont('Helvetica-Bold', 28)
         self.c.setFillColor(HexColor(COLORS['dark_text']))
-        self.c.drawString(0.5 * inch, self.PAGE_HEIGHT - 1.3 * inch, f"WHAT {self.data.client_name.upper()} PAYS AT DIFFERENT")
+        self.c.drawString(0.5 * inch, self.PAGE_HEIGHT - 1.2 * inch, f"WHAT {self.data.client_name.upper()} PAYS AT DIFFERENT")
         self.c.setFillColor(HexColor(COLORS['teal_text']))
-        self.c.drawString(0.5 * inch + self.c.stringWidth(f"WHAT {self.data.client_name.upper()} PAYS AT DIFFERENT", 'Helvetica-Bold', 32) + 10,
-                         self.PAGE_HEIGHT - 1.3 * inch, "ALLOWANCE LEVELS")
+        self.c.drawString(0.5 * inch, self.PAGE_HEIGHT - 1.6 * inch, "ALLOWANCE LEVELS")
 
-        # Three allowance cards
-        card_width = 3.2 * inch
-        card_height = 2.8 * inch
-        card_y = self.PAGE_HEIGHT - 4.5 * inch
-        card_spacing = 0.2 * inch
+        # Three allowance cards (sized to fit within 11" page width)
+        card_width = 3.0 * inch
+        card_height = 2.5 * inch
+        card_y = self.PAGE_HEIGHT - 4.3 * inch
+        card_spacing = 0.25 * inch
+        # Total: 0.5" margin + 3 cards × 3.0" + 2 gaps × 0.25" = 0.5 + 9.0 + 0.5 = 10.0"
 
         # Calculate savings at different levels (simplified)
         proposed_monthly = self.data.proposed_er_monthly
@@ -826,60 +836,78 @@ class PDFProposalRenderer:
                 self.c.setFillColor(HexColor(COLORS['light_teal']))
                 self.c.drawString(x + 20, card_y + 30, f"{savings_pct:.0f}%")
 
-        # Bottom row - Cost comparison cards
-        bottom_y = 0.75 * inch
-        bottom_h = 1.8 * inch
+        # Bottom row - Cost comparison cards (4 cards fit within 10" usable width)
+        bottom_y = 0.6 * inch
+        bottom_h = 1.6 * inch
+        bottom_card_w = 2.3 * inch
+        bottom_gap = 0.1 * inch
+        # Layout: 0.5" + 4 cards × 2.3" + 3 gaps × 0.1" = 0.5 + 9.2 + 0.3 = 10.0"
 
-        # Cost Impact Analysis
-        self._draw_rounded_rect(0.5 * inch, bottom_y, 3 * inch, bottom_h, 15, '#FFFFFF')
-        self.c.setFont('Helvetica-Bold', 12)
-        self.c.setFillColor(HexColor(COLORS['teal_text']))
-        self.c.drawString(0.7 * inch, bottom_y + bottom_h - 25, "Cost Impact Analysis")
-
-        self.c.setFont('Helvetica', 9)
+        # Card 1: Current ER
+        card1_x = 0.5 * inch
+        self._draw_rounded_rect(card1_x, bottom_y, bottom_card_w, bottom_h, 12, '#FFFFFF')
+        self.c.setFont('Helvetica-Bold', 10)
         self.c.setFillColor(HexColor(COLORS['dark_text']))
-        self.c.drawString(0.7 * inch, bottom_y + bottom_h - 50, "PROPOSED ER CHARGE (ANNUAL)")
+        self.c.drawString(card1_x + 10, bottom_y + bottom_h - 18, "Current ER (2025)")
 
-        self.c.setFont('Helvetica-Bold', 18)
-        self.c.setFillColor(HexColor(COLORS['coral'] if 'coral' in COLORS else 'teal_text'))
-        savings_display = f"-${abs(self.data.annual_savings):,.2f}" if self.data.annual_savings > 0 else f"${abs(self.data.annual_savings):,.2f}"
-        self.c.drawString(0.7 * inch, bottom_y + bottom_h - 75, savings_display)
-
-        # Current Group Plan
-        self._draw_rounded_rect(3.7 * inch, bottom_y, 3.2 * inch, bottom_h, 15, '#FFFFFF')
-        self.c.setFont('Helvetica-Bold', 12)
-        self.c.setFillColor(HexColor(COLORS['dark_text']))
-        self.c.drawString(3.9 * inch, bottom_y + bottom_h - 25, "$ Current Group Plan")
-
-        self.c.setFont('Helvetica', 9)
-        self.c.setFillColor(HexColor(COLORS['dark_text']))
-        self.c.drawString(3.9 * inch, bottom_y + bottom_h - 50, "CURRENT ER MONTHLY")
         self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(3.9 * inch, bottom_y + bottom_h - 70, f"${self.data.current_er_monthly:,.2f}")
-
-        self.c.setFont('Helvetica', 9)
-        self.c.drawString(3.9 * inch, bottom_y + 60, "CURRENT ER ANNUAL")
-        self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(3.9 * inch, bottom_y + 40, f"${self.data.current_er_annual:,.2f}")
-
-        # Proposed ICHRA Budget
-        self._draw_rounded_rect(7.1 * inch, bottom_y, 3.5 * inch, bottom_h, 15, COLORS['teal_bg'])
-        self.c.setFont('Helvetica-Bold', 12)
-        self.c.setFillColor(HexColor(COLORS['cream_text']))
-        self.c.drawString(7.3 * inch, bottom_y + bottom_h - 25, "Proposed ICHRA Budget")
-
+        self.c.setFillColor(HexColor(COLORS['maroon_text']))
+        self.c.drawString(card1_x + 10, bottom_y + bottom_h - 40, f"${self.data.current_er_annual:,.0f}")
         self.c.setFont('Helvetica', 8)
-        self.c.drawString(7.3 * inch, bottom_y + bottom_h - 40, "Based on Lowest Cost Silver Plan (LCSP) 95% affordability benchmark")
+        self.c.setFillColor(HexColor(COLORS['dark_text']))
+        self.c.drawString(card1_x + 10, bottom_y + bottom_h - 55, "annual")
 
-        self.c.setFont('Helvetica', 9)
-        self.c.drawString(7.3 * inch, bottom_y + bottom_h - 60, "PROPOSED ER MONTHLY")
-        self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(7.3 * inch, bottom_y + bottom_h - 80, f"${self.data.proposed_er_monthly:,.2f}")
+        # Card 2: Projected Renewal ER (NEW - the key metric)
+        card2_x = card1_x + bottom_card_w + bottom_gap
+        self._draw_rounded_rect(card2_x, bottom_y, bottom_card_w, bottom_h, 12, COLORS['maroon_card'])
+        self.c.setFont('Helvetica-Bold', 10)
+        self.c.setFillColor(HexColor(COLORS['cream_text']))
+        self.c.drawString(card2_x + 10, bottom_y + bottom_h - 18, "Renewal ER (2026)")
 
-        self.c.setFont('Helvetica', 9)
-        self.c.drawString(7.3 * inch, bottom_y + 55, "PROPOSED ER ANNUAL")
         self.c.setFont('Helvetica-Bold', 14)
-        self.c.drawString(7.3 * inch, bottom_y + 35, f"${self.data.proposed_er_annual:,.2f}")
+        self.c.drawString(card2_x + 10, bottom_y + bottom_h - 40, f"${self.data.projected_er_annual_2026:,.0f}")
+        self.c.setFont('Helvetica', 8)
+        self.c.drawString(card2_x + 10, bottom_y + bottom_h - 55, f"{self.data.er_contribution_pct*100:.0f}% of renewal")
+
+        # Card 3: Proposed ICHRA
+        card3_x = card2_x + bottom_card_w + bottom_gap
+        self._draw_rounded_rect(card3_x, bottom_y, bottom_card_w, bottom_h, 12, COLORS['teal_bg'])
+        self.c.setFont('Helvetica-Bold', 10)
+        self.c.setFillColor(HexColor(COLORS['cream_text']))
+        self.c.drawString(card3_x + 10, bottom_y + bottom_h - 18, "Proposed ICHRA")
+
+        self.c.setFont('Helvetica-Bold', 14)
+        self.c.drawString(card3_x + 10, bottom_y + bottom_h - 40, f"${self.data.proposed_er_annual:,.0f}")
+        self.c.setFont('Helvetica', 8)
+        self.c.drawString(card3_x + 10, bottom_y + bottom_h - 55, "annual budget")
+
+        # Card 4: Savings vs Renewal ER (THE PRIMARY COMPARISON)
+        card4_x = card3_x + bottom_card_w + bottom_gap
+        # Green background for savings, red for cost increase
+        savings_bg = COLORS['teal_text'] if self.data.savings_vs_renewal_er >= 0 else COLORS['maroon_card']
+        self._draw_rounded_rect(card4_x, bottom_y, bottom_card_w, bottom_h, 12, savings_bg)
+        self.c.setFont('Helvetica-Bold', 10)
+        self.c.setFillColor(HexColor(COLORS['cream_text']))
+        self.c.drawString(card4_x + 10, bottom_y + bottom_h - 18, "🎯 vs Renewal ER")
+
+        self.c.setFont('Helvetica-Bold', 14)
+        if self.data.savings_vs_renewal_er >= 0:
+            self.c.drawString(card4_x + 10, bottom_y + bottom_h - 40, f"${self.data.savings_vs_renewal_er:,.0f}")
+            self.c.setFont('Helvetica', 8)
+            self.c.drawString(card4_x + 10, bottom_y + bottom_h - 55, f"SAVES {self.data.savings_vs_renewal_er_pct:.1f}%")
+        else:
+            self.c.drawString(card4_x + 10, bottom_y + bottom_h - 40, f"+${abs(self.data.savings_vs_renewal_er):,.0f}")
+            self.c.setFont('Helvetica', 8)
+            self.c.drawString(card4_x + 10, bottom_y + bottom_h - 55, f"{abs(self.data.savings_vs_renewal_er_pct):.1f}% more")
+
+        # Add note about current ER comparison below cards
+        self.c.setFont('Helvetica', 7)
+        self.c.setFillColor(HexColor(COLORS['dark_text']))
+        if self.data.delta_vs_current_er > 0:
+            note_text = f"Note: ICHRA is ${self.data.delta_vs_current_er:,.0f} MORE than current ER, but ${self.data.savings_vs_renewal_er:,.0f} LESS than accepting renewal"
+        else:
+            note_text = f"ICHRA saves ${abs(self.data.delta_vs_current_er):,.0f} vs current AND ${self.data.savings_vs_renewal_er:,.0f} vs renewal"
+        self.c.drawString(0.5 * inch, bottom_y - 15, note_text)
 
     # =========================================================================
     # Slide: ICHRA Evaluation Workflow
@@ -894,15 +922,15 @@ class PDFProposalRenderer:
         self.c.setFillColor(HexColor(COLORS['dark_text']))
         self.c.drawString(0.75 * inch, self.PAGE_HEIGHT - 1 * inch, "ICHRA evaluation workflow")
 
-        # Layout constants
-        left_col_x = 1 * inch
-        mid_col_x = 4.5 * inch
-        right_col_x = 8 * inch
+        # Layout constants (adjusted to fit within 10.5" usable width)
+        left_col_x = 0.75 * inch
+        mid_col_x = 4 * inch
+        right_col_x = 7.5 * inch
 
-        card_width = 2.5 * inch
-        card_height = 1.3 * inch
-        badge_width = 1.4 * inch
-        badge_height = 0.4 * inch
+        card_width = 2.4 * inch
+        card_height = 1.2 * inch
+        badge_width = 1.3 * inch
+        badge_height = 0.35 * inch
 
         # Row positions
         row1_y = self.PAGE_HEIGHT - 2.5 * inch
@@ -963,7 +991,7 @@ class PDFProposalRenderer:
         # =========================
         # MIDDLE COLUMN - Annual
         # =========================
-        mid_card_width = 2.8 * inch
+        mid_card_width = 2.6 * inch
         mid_row1_y = row1_y - 0.2 * inch
         mid_row2_y = row2_y - 0.2 * inch
 
@@ -1046,56 +1074,69 @@ def generate_pdf_proposal(data: ProposalData) -> BytesIO:
 
 
 if __name__ == "__main__":
-    # Test with sample data
+    # Test with sample data based on Color Ink census (37 employees)
+    # This demonstrates the corrected comparison calculations
     test_data = ProposalData(
-        client_name="Ecentria",
-        renewal_percentage=40,
-        total_renewal_cost=1_300_000,
-        employee_count=226,
-        avg_monthly_premium=559,
-        covered_lives=377,
-        total_employees=226,
-        total_dependents=151,
-        fit_score=87,
+        client_name="Color Ink",
+        renewal_percentage=33.0,  # 33% renewal increase
+        total_renewal_cost=403661,  # $403,661 annual renewal total
+        employee_count=37,
+        avg_monthly_premium=684,
+        covered_lives=52,
+        total_employees=37,
+        total_dependents=15,
+        fit_score=78,
         category_scores={
-            'cost_advantage': 85,
-            'market_readiness': 80,
-            'workforce_fit': 90,
-            'geographic_complexity': 85,
-            'employee_experience': 75,
-            'admin_readiness': 90,
+            'cost_advantage': 80,
+            'market_readiness': 75,
+            'workforce_fit': 82,
+            'geographic_complexity': 90,
+            'employee_experience': 70,
+            'admin_readiness': 75,
         },
-        total_states=18,
+        total_states=1,
         top_states=[
-            {'state': 'IL', 'count': 180},
-            {'state': 'AZ', 'count': 11},
-            {'state': 'UT', 'count': 5},
-            {'state': 'TX', 'count': 4},
-            {'state': 'IN', 'count': 4},
+            {'state': 'WI', 'count': 37},
         ],
-        family_status_breakdown={'EE': 155, 'ES': 26, 'EC': 14, 'F': 31},
-        current_total_monthly=203048,
-        current_total_annual=2436581,
-        current_er_monthly=148219,
-        current_er_annual=1778631,
-        current_ee_monthly=54829,
-        current_ee_annual=657950,
-        per_life_monthly=538,
-        proposed_er_monthly=115935,
-        proposed_er_annual=1391216,
-        renewal_monthly=84585,
-        ichra_monthly=47752,
-        current_to_renewal_diff_monthly=6806,
-        current_to_renewal_pct=8.75,
-        renewal_to_ichra_diff_monthly=36833,
-        renewal_to_ichra_pct=43.5,
-        annual_savings=387415,
-        annual_savings_vs_renewal=441988,
-        savings_percentage=21.8,
-        additional_healthcare_burden=280000,
-        avg_employee_age=40.3,
-        age_range_min=21,
-        age_range_max=73,
+        family_status_breakdown={'EE': 25, 'ES': 6, 'EC': 3, 'F': 3},
+        # Current costs (2025)
+        current_total_monthly=25311,
+        current_total_annual=303732,
+        current_er_monthly=15091,
+        current_er_annual=181088,  # $181,088 current ER
+        current_ee_monthly=10220,
+        current_ee_annual=122644,
+        per_life_monthly=487,
+        # ER/EE split percentages
+        er_contribution_pct=0.596,  # 59.6% ER share
+        ee_contribution_pct=0.404,  # 40.4% EE share
+        # Projected 2026 renewal ER (applying same split to renewal)
+        projected_er_monthly_2026=20056,  # $33,638 × 59.6%
+        projected_er_annual_2026=240667,  # $240,667 - what ER would pay at renewal
+        projected_ee_monthly_2026=13582,
+        projected_ee_annual_2026=162994,
+        # Proposed ICHRA
+        proposed_er_monthly=17447,
+        proposed_er_annual=209364,  # $209,364 ICHRA budget
+        # Comparisons
+        delta_vs_current_er=28276,  # ICHRA costs $28,276 MORE than current ER
+        delta_vs_current_er_pct=15.6,
+        savings_vs_renewal_er=31303,  # ICHRA SAVES $31,303 vs renewal ER (PRIMARY)
+        savings_vs_renewal_er_pct=13.0,
+        # Legacy/workflow slide values
+        renewal_monthly=33638,
+        ichra_monthly=17447,
+        current_to_renewal_diff_monthly=8327,
+        current_to_renewal_pct=33.0,
+        renewal_to_ichra_diff_monthly=16191,
+        renewal_to_ichra_pct=48.1,
+        annual_savings=-28276,  # vs current ER (negative = costs more)
+        annual_savings_vs_renewal=194297,  # vs renewal total (big number)
+        savings_percentage=-15.6,  # vs current ER
+        additional_healthcare_burden=0,  # No salary data
+        avg_employee_age=42.5,
+        age_range_min=23,
+        age_range_max=64,
     )
 
     buffer = generate_pdf_proposal(test_data)

@@ -25,6 +25,7 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 from database import get_database_connection
+from contribution_strategies import calculate_affordability_impact
 
 
 def get_anthropic_api_key():
@@ -57,32 +58,7 @@ logger = logging.getLogger(__name__)
 # Page config
 st.set_page_config(page_title="Contribution Evaluation", page_icon="💰", layout="wide")
 
-# =============================================================================
-# SCROLL TO TOP ON FRESH NAVIGATION
-# =============================================================================
-# Add anchor at top of page and use CSS/JS to ensure scroll position
-st.markdown('<div id="top-anchor"></div>', unsafe_allow_html=True)
-
-# Use session state to detect fresh page load vs rerun
-if 'page2_initialized' not in st.session_state:
-    st.session_state.page2_initialized = True
-    # Inject JavaScript to scroll to top on fresh navigation
-    st.markdown("""
-    <style>
-        /* Ensure page starts at top */
-        html, body {
-            scroll-behavior: auto !important;
-        }
-    </style>
-    <script>
-        // Scroll to top immediately
-        window.scrollTo({top: 0, left: 0, behavior: 'instant'});
-        // Also try after a short delay for Streamlit's dynamic content
-        setTimeout(function() {
-            window.scrollTo({top: 0, left: 0, behavior: 'instant'});
-        }, 100);
-    </script>
-    """, unsafe_allow_html=True)
+# Scroll fix CSS removed - was causing button interaction issues
 
 # =============================================================================
 # STYLING
@@ -1407,7 +1383,7 @@ st.markdown("---")
 # =============================================================================
 
 st.markdown("## Contribution Strategy Modeler")
-st.markdown("*Design contributions that meet IRS affordability requirements*")
+st.markdown("*Design contributions that meet IRS affordability requirements¹*")
 
 # Load affordability context on first run
 if 'affordability_context' not in st.session_state or not st.session_state.affordability_context.get('loaded'):
@@ -1420,44 +1396,64 @@ aff_context = st.session_state.affordability_context
 # -----------------------------------------------------------------------------
 # AFFORDABILITY CONTEXT PANEL (Always Visible)
 # -----------------------------------------------------------------------------
-context_cols = st.columns(3)
+context_cols = st.columns(4)
 
 with context_cols[0]:
-    st.markdown("**Workforce Summary**")
+    st.markdown("**Workforce**")
     workforce = aff_context.get('workforce', {})
     st.metric("Employees", workforce.get('total_employees', 0))
     st.caption(f"{len(workforce.get('states', []))} states | Avg age: {workforce.get('avg_age', 0):.0f}")
 
 with context_cols[1]:
-    st.markdown("**IRS Affordability**")
-    st.metric("Threshold", "9.96%")
-    st.caption("2026 Safe Harbor Rate")
-
-with context_cols[2]:
     st.markdown("**LCSP Benchmark**")
     lcsp_data = aff_context.get('lcsp_data', {})
-    st.metric("Average LCSP", f"${lcsp_data.get('avg', 0):,.0f}/mo")
-    st.caption(f"Range: ${lcsp_data.get('min', 0):,.0f} - ${lcsp_data.get('max', 0):,.0f}")
+    lcsp_min = lcsp_data.get('min', 0)
+    lcsp_max = lcsp_data.get('max', 0)
+    lcsp_avg = lcsp_data.get('avg', 0)
+    st.metric("Average", f"${lcsp_avg:,.0f}/mo")
+    st.markdown(f"**Range: ${lcsp_min:,.0f} – ${lcsp_max:,.0f}**")
 
-# Current affordability status
+with context_cols[2]:
+    # Current ER Spend
+    from utils import ContributionComparison
+    _contrib_totals = ContributionComparison.aggregate_contribution_totals(census_df)
+    _current_er_annual = _contrib_totals.get('total_current_er_annual', 0)
+    st.markdown("**Current ER Spend**")
+    st.metric("2025", f"${_current_er_annual:,.0f}")
+    st.caption("Annual employer cost")
+
+with context_cols[3]:
+    # Projected 2026 ER Spend
+    from financial_calculator import FinancialSummaryCalculator
+    projected_2026_er = 0
+    if 'financial_summary' in st.session_state and st.session_state.financial_summary.get('renewal_monthly'):
+        projected_2026_er = st.session_state.financial_summary['renewal_monthly'] * 12
+    else:
+        projected_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
+        if projected_data['has_data']:
+            projected_2026_er = projected_data['total_annual']
+    st.markdown("**Projected ER Spend**")
+    if projected_2026_er > 0:
+        st.metric("2026", f"${projected_2026_er:,.0f}")
+        trend_pct = ((projected_2026_er / _current_er_annual) - 1) * 100 if _current_er_annual > 0 else 0
+        st.caption(f"+{trend_pct:.0f}% trend" if trend_pct > 0 else "Projected renewal")
+    else:
+        st.metric("2026", "N/A")
+        st.caption("Add '2026 Premium' to census")
+
+# Current affordability status (compact display)
 current_status = aff_context.get('current_status', {})
-if current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0) > 0:
-    status_cols = st.columns(4)
-    with status_cols[0]:
-        affordable_pct = (current_status.get('affordable_at_current', 0) /
-                         (current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0)) * 100) if (current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0)) > 0 else 0
-        st.metric("Currently Affordable", f"{current_status.get('affordable_at_current', 0)}", f"{affordable_pct:.0f}%",
-                 help="Employees whose current employer contribution already meets the IRS 9.96% affordability safe harbor.")
-    with status_cols[1]:
-        needs_increase_count = current_status.get('needs_increase', 0)
-        st.metric("Need Increase", needs_increase_count,
-                 help="Employees requiring additional employer contributions to meet IRS affordability. See details below.")
-    with status_cols[2]:
-        st.metric("Current ER Spend/yr", f"${current_status.get('current_er_spend_annual', 0):,.0f}",
-                 help="Total annual employer spending on health benefits based on current census data.")
-    with status_cols[3]:
-        st.metric("Gap to Close", f"${current_status.get('total_gap_annual', 0):,.0f}",
-                 help="Additional annual employer spending needed to make ALL employees IRS-affordable. This is the minimum increase required.")
+total_analyzed = current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0)
+if total_analyzed > 0:
+    needs_increase_count = current_status.get('needs_increase', 0)
+    affordable_count = current_status.get('affordable_at_current', 0)
+    affordable_pct = (affordable_count / total_analyzed * 100) if total_analyzed > 0 else 0
+
+    # Compact status line
+    if needs_increase_count > 0:
+        st.warning(f"⚠️ **{needs_increase_count}** of {total_analyzed} employees need contribution increase for affordability")
+    else:
+        st.success(f"✅ All {total_analyzed} employees meet affordability threshold")
 
     # Show which employees need increases
     if needs_increase_count > 0:
@@ -1500,10 +1496,10 @@ if 'strategy_config' not in st.session_state:
     st.session_state.strategy_config = {
         'active_strategy': 'base_age_curve',
         'base_age': 21,
-        'base_contribution': 400.0,
+        'base_contribution': 200.0,
         'lcsp_percentage': 75,
         'tier_amounts': {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900},
-        'apply_family_multipliers': True,
+        'apply_family_multipliers': False,
         'apply_location_adjustment': False,
         'high_cost_adjustment': 100.0,
         'high_cost_states': [],
@@ -1548,7 +1544,7 @@ if selected_strategy == 'base_age_curve':
             "Base Contribution ($/month)",
             min_value=0.0,
             max_value=5000.0,
-            value=float(st.session_state.strategy_config.get('base_contribution', 400.0)),
+            value=float(st.session_state.strategy_config.get('base_contribution', 200.0)),
             step=25.0,
             key="base_contribution_input"
         )
@@ -1631,7 +1627,7 @@ modifier_cols = st.columns(2)
 with modifier_cols[0]:
     apply_family_multipliers = st.checkbox(
         "Apply Family Multipliers",
-        value=st.session_state.strategy_config.get('apply_family_multipliers', True),
+        value=st.session_state.strategy_config.get('apply_family_multipliers', False),
         key="apply_family_mult"
     )
     if apply_family_multipliers:
@@ -1717,7 +1713,7 @@ if st.button("Calculate Contributions", type="primary", key="calc_strategy_btn")
             strategy_type = cfg.get('active_strategy', 'base_age_curve')
 
             # Read modifier values from session state
-            use_family_mult = cfg.get('apply_family_multipliers', True)
+            use_family_mult = cfg.get('apply_family_multipliers', False)
             use_location_adj = cfg.get('apply_location_adjustment', False)
 
             # Build location adjustments dict from session state
@@ -1779,7 +1775,14 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
     result = st.session_state.strategy_results['current']
 
     st.markdown("---")
-    st.markdown(f"### Strategy Results: {result['strategy_name']}")
+
+    # Strategy header with adjustment indicator
+    if result.get('affordability_adjusted'):
+        buffer_info = f" (+{result.get('buffer_applied', 0)}% buffer)" if result.get('buffer_applied') else ""
+        st.markdown(f"### Strategy Results: {result['strategy_name']} ✓ Affordability Adjusted{buffer_info}")
+        st.info("Contributions have been adjusted to meet IRS 9.96% affordability threshold for all employees.")
+    else:
+        st.markdown(f"### Strategy Results: {result['strategy_name']}")
 
     # Summary metrics row
     metric_cols = st.columns(4)
@@ -1789,41 +1792,127 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
     avg = result['total_monthly'] / result['employees_covered'] if result['employees_covered'] > 0 else 0
     metric_cols[3].metric("Avg/Employee", f"${avg:,.0f}/mo")
 
-    # Affordability Impact Section
+    # Prominent Cost Comparison - ER to ER (employer cost focus)
     aff_impact = result.get('affordability_impact', {})
+    strategy_spend = result.get('total_annual', 0)
+
+    # Get current ER spend and 2026 projected renewal
+    from financial_calculator import FinancialSummaryCalculator
+    from utils import ContributionComparison
+
+    # Current ER Spend (what employer pays now)
+    contrib_totals = ContributionComparison.aggregate_contribution_totals(census_df)
+    current_er_annual = contrib_totals.get('total_current_er_annual', 0)
+
+    # 2026 Projected Renewal (for context)
+    projected_2026 = 0
+    if 'financial_summary' in st.session_state and st.session_state.financial_summary.get('renewal_monthly'):
+        projected_2026 = st.session_state.financial_summary['renewal_monthly'] * 12
+    else:
+        projected_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
+        if projected_data['has_data']:
+            projected_2026 = projected_data['total_annual']
+
+    # Show comparison section if we have ER data
+    if current_er_annual > 0 or projected_2026 > 0:
+        st.markdown("---")
+        st.markdown("### 💰 Employer Cost Comparison")
+
+        compare_cols = st.columns(2)
+
+        # Column 1: vs Current ER Spend
+        with compare_cols[0]:
+            if current_er_annual > 0:
+                diff_er = strategy_spend - current_er_annual
+                pct_er = (diff_er / current_er_annual) * 100
+
+                if diff_er > 0:
+                    st.warning(f"""
+                    **vs Current ER Spend**
+
+                    ⬆️ **+${diff_er:,.0f}/yr** (+{pct_er:.1f}%)
+
+                    ${current_er_annual:,.0f} → ${strategy_spend:,.0f}
+                    """)
+                elif diff_er < 0:
+                    st.success(f"""
+                    **vs Current ER Spend**
+
+                    ⬇️ **-${abs(diff_er):,.0f}/yr** ({pct_er:.1f}%)
+
+                    ${current_er_annual:,.0f} → ${strategy_spend:,.0f}
+                    """)
+                else:
+                    st.info(f"""
+                    **vs Current ER Spend**
+
+                    ↔️ **No change** - ${strategy_spend:,.0f}/yr
+                    """)
+            else:
+                st.warning("No ER spend data. Add 'Current ER Monthly' to census.")
+
+        # Column 2: vs Projected 2026 Renewal
+        with compare_cols[1]:
+            if projected_2026 > 0:
+                projected_diff = strategy_spend - projected_2026
+                projected_pct = (projected_diff / projected_2026) * 100
+
+                if projected_diff > 0:
+                    st.error(f"""
+                    **vs 2026 Projected Renewal**
+
+                    ⬆️ **+${projected_diff:,.0f}/yr** (+{projected_pct:.1f}%)
+
+                    ${projected_2026:,.0f} → ${strategy_spend:,.0f}
+                    """)
+                elif projected_diff < 0:
+                    st.success(f"""
+                    **vs 2026 Projected Renewal**
+
+                    ⬇️ **-${abs(projected_diff):,.0f}/yr** ({projected_pct:.1f}%)
+
+                    ${projected_2026:,.0f} → ${strategy_spend:,.0f}
+                    """)
+                else:
+                    st.info(f"""
+                    **vs 2026 Projected Renewal**
+
+                    ↔️ **No change** - ${strategy_spend:,.0f}/yr
+                    """)
+            else:
+                st.warning("No 2026 projection data. Add '2026 Premium' to census.")
     if aff_impact:
         st.markdown("---")
-        st.markdown("### Affordability Impact")
+        st.markdown("### IRS Affordability Compliance")
 
-        impact_cols = st.columns(3)
+        before = aff_impact.get('before', {})
+        after = aff_impact.get('after', {})
+        delta = aff_impact.get('delta', {})
 
-        with impact_cols[0]:
-            st.markdown("**Before Strategy**")
-            before = aff_impact.get('before', {})
-            st.metric("Affordable", f"{before.get('affordable_count', 0)}", f"{before.get('affordable_pct', 0):.0f}%")
-            st.metric("Annual ER Spend", f"${before.get('annual_spend', 0):,.0f}")
-
-        with impact_cols[1]:
-            st.markdown("**With Strategy**")
-            after = aff_impact.get('after', {})
-            st.metric("Affordable", f"{after.get('affordable_count', 0)}", f"{after.get('affordable_pct', 0):.0f}%")
-            st.metric("Annual ER Spend", f"${after.get('annual_spend', 0):,.0f}")
-
-        with impact_cols[2]:
-            st.markdown("**Delta**")
-            delta = aff_impact.get('delta', {})
-            st.metric("Employees Gained", f"+{delta.get('employees_gained', 0)}")
-            spend_change = delta.get('spend_change', 0)
-            st.metric("Cost Change", f"${spend_change:+,.0f}/yr",
-                     delta_color="inverse" if spend_change > 0 else "normal")
-
-        # Progress bar
+        # Progress bar first - most important visual
         employees_analyzed = after.get('employees_analyzed', 0)
         affordable_count = after.get('affordable_count', 0)
         unaffordable_count = employees_analyzed - affordable_count
+
         if employees_analyzed > 0:
             aff_pct = affordable_count / employees_analyzed
-            st.progress(aff_pct, text=f"Affordability: {aff_pct*100:.0f}% ({affordable_count}/{employees_analyzed} employees)")
+            st.progress(aff_pct, text=f"Affordability: {aff_pct*100:.0f}% ({affordable_count}/{employees_analyzed} employees meet 9.96% threshold)")
+
+            # Compact metrics row
+            aff_cols = st.columns(4)
+            with aff_cols[0]:
+                st.metric("Currently Affordable", before.get('affordable_count', 0),
+                         help="Employees already meeting affordability threshold")
+            with aff_cols[1]:
+                st.metric("With This Strategy", affordable_count,
+                         delta=f"+{delta.get('employees_gained', 0)}" if delta.get('employees_gained', 0) > 0 else None)
+            with aff_cols[2]:
+                st.metric("Still Need Adjustment", unaffordable_count,
+                         delta_color="inverse" if unaffordable_count > 0 else "normal")
+            with aff_cols[3]:
+                gap_annual = after.get('total_gap', 0)
+                st.metric("Remaining Gap", f"${gap_annual:,.0f}/yr" if gap_annual > 0 else "$0",
+                         help="Additional annual spend needed to reach 100% affordability")
 
             if aff_pct >= 1.0:
                 st.success("All employees meet IRS affordability threshold")
@@ -1832,20 +1921,136 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
             else:
                 st.error(f"Significant gap: {unaffordable_count} employee{'s' if unaffordable_count != 1 else ''} unaffordable")
 
-            # Show which employees are unaffordable
+            # Show which employees are unaffordable with detailed adjustment table
             if unaffordable_count > 0:
                 unaffordable_employees = aff_impact.get('unaffordable_employees', [])
                 if unaffordable_employees:
                     with st.expander(f"View {len(unaffordable_employees)} employee{'s' if len(unaffordable_employees) != 1 else ''} needing adjustment", expanded=False):
+                        # Build detailed adjustment table
                         unaff_data = []
+                        total_current = 0
+                        total_min_needed = 0
+                        total_gap = 0
+
                         for emp in unaffordable_employees:
+                            current = emp.get('current_contribution', 0)
+                            min_needed = emp.get('min_affordable', 0)
+                            gap = emp.get('gap', 0)
+
+                            total_current += current
+                            total_min_needed += min_needed
+                            total_gap += gap
+
                             unaff_data.append({
                                 'Employee': emp.get('name', emp.get('employee_id', 'N/A')),
-                                'Current Gap': f"${emp.get('gap', 0):,.0f}/mo",
-                                'Additional Needed': f"${emp.get('additional_needed', 0):,.0f}/mo"
+                                'Age': emp.get('age', ''),
+                                'Status': emp.get('family_status', 'EE'),
+                                'Income': f"${emp.get('monthly_income', 0):,.0f}",
+                                'LCSP': f"${emp.get('lcsp_ee_rate', 0):,.0f}",
+                                'Current': f"${current:,.0f}",
+                                'Min Needed': f"${min_needed:,.0f}",
+                                'Gap': f"${gap:,.0f}"
                             })
+
                         if unaff_data:
                             st.dataframe(pd.DataFrame(unaff_data), hide_index=True, width='stretch')
+
+                            # Totals row
+                            totals_cols = st.columns(4)
+                            with totals_cols[0]:
+                                st.metric("Current Spend (Unaffordable)", f"${total_current:,.0f}/mo")
+                            with totals_cols[1]:
+                                st.metric("Min Needed (Unaffordable)", f"${total_min_needed:,.0f}/mo")
+                            with totals_cols[2]:
+                                st.metric("Total Gap to Close", f"${total_gap:,.0f}/mo",
+                                         help="Additional monthly spend required to make all employees affordable")
+                            with totals_cols[3]:
+                                st.metric("Annual Gap", f"${total_gap * 12:,.0f}/yr")
+
+                            st.markdown("---")
+
+                            # Action buttons for adjustments
+                            st.markdown("**Apply Minimum Affordable Amounts**")
+                            st.caption("Adjust contributions for unaffordable employees to meet the IRS 9.96% threshold. Includes $1/mo buffer to ensure compliance.")
+
+                            apply_cols = st.columns([2, 1])
+                            with apply_cols[0]:
+                                if st.button("Apply Minimum to Unaffordable Employees", key="apply_min_btn",
+                                           help="Sets contribution to exact minimum needed for each unaffordable employee"):
+                                    # Merge minimum amounts into strategy results
+                                    emp_contribs = result.get('employee_contributions', {})
+                                    adjusted_total = result.get('total_monthly', 0)
+
+                                    for emp in unaffordable_employees:
+                                        emp_id = emp.get('employee_id')
+                                        if emp_id and emp_id in emp_contribs:
+                                            old_contrib = emp_contribs[emp_id].get('monthly_contribution', 0)
+                                            new_contrib = emp.get('min_affordable', old_contrib)
+                                            # Update contribution
+                                            emp_contribs[emp_id]['monthly_contribution'] = round(new_contrib, 2)
+                                            emp_contribs[emp_id]['annual_contribution'] = round(new_contrib * 12, 2)
+                                            emp_contribs[emp_id]['adjusted_for_affordability'] = True
+                                            # Update running total
+                                            adjusted_total = adjusted_total - old_contrib + new_contrib
+
+                                    # Update result totals
+                                    result['total_monthly'] = round(adjusted_total, 2)
+                                    result['total_annual'] = round(adjusted_total * 12, 2)
+                                    result['affordability_adjusted'] = True
+
+                                    # Recalculate affordability impact with updated contributions
+                                    result['affordability_impact'] = calculate_affordability_impact(
+                                        result,
+                                        st.session_state.affordability_context
+                                    )
+
+                                    # Store back to session state
+                                    st.session_state.strategy_results['current'] = result
+
+                                    st.success(f"✓ Applied minimum affordable amounts to {len(unaffordable_employees)} employees. Total monthly spend: ${adjusted_total:,.0f}")
+                                    st.rerun()
+
+                            with apply_cols[1]:
+                                buffer_pct = st.number_input("Buffer %", min_value=0, max_value=25, value=5, key="buffer_pct",
+                                                           help="Add a buffer above the minimum for safety margin")
+
+                                if st.button(f"Apply with {buffer_pct}% Buffer", key="apply_buffer_btn"):
+                                    # Merge minimum amounts + buffer into strategy results
+                                    emp_contribs = result.get('employee_contributions', {})
+                                    adjusted_total = result.get('total_monthly', 0)
+                                    buffer_mult = 1 + (buffer_pct / 100)
+
+                                    for emp in unaffordable_employees:
+                                        emp_id = emp.get('employee_id')
+                                        if emp_id and emp_id in emp_contribs:
+                                            old_contrib = emp_contribs[emp_id].get('monthly_contribution', 0)
+                                            min_contrib = emp.get('min_affordable', old_contrib)
+                                            new_contrib = min_contrib * buffer_mult
+                                            # Update contribution
+                                            emp_contribs[emp_id]['monthly_contribution'] = round(new_contrib, 2)
+                                            emp_contribs[emp_id]['annual_contribution'] = round(new_contrib * 12, 2)
+                                            emp_contribs[emp_id]['adjusted_for_affordability'] = True
+                                            emp_contribs[emp_id]['buffer_applied'] = buffer_pct
+                                            # Update running total
+                                            adjusted_total = adjusted_total - old_contrib + new_contrib
+
+                                    # Update result totals
+                                    result['total_monthly'] = round(adjusted_total, 2)
+                                    result['total_annual'] = round(adjusted_total * 12, 2)
+                                    result['affordability_adjusted'] = True
+                                    result['buffer_applied'] = buffer_pct
+
+                                    # Recalculate affordability impact with updated contributions
+                                    result['affordability_impact'] = calculate_affordability_impact(
+                                        result,
+                                        st.session_state.affordability_context
+                                    )
+
+                                    # Store back to session state
+                                    st.session_state.strategy_results['current'] = result
+
+                                    st.success(f"✓ Applied minimum + {buffer_pct}% buffer to {len(unaffordable_employees)} employees. Total monthly spend: ${adjusted_total:,.0f}")
+                                    st.rerun()
 
     # Expandable breakdown sections
     with st.expander("Age Tier Breakdown", expanded=False):
@@ -1860,7 +2065,8 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                     'Total Monthly': f"${data['total_monthly']:,.0f}",
                     'Avg Monthly': f"${avg_amt:,.0f}"
                 })
-            st.dataframe(pd.DataFrame(age_data), hide_index=True, width='stretch')
+            age_df = pd.DataFrame(age_data).sort_values('Employees', ascending=False)
+            st.dataframe(age_df, hide_index=True, width='stretch')
 
     with st.expander("Family Status Breakdown", expanded=False):
         by_fs = result.get('by_family_status', {})
@@ -1874,7 +2080,8 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                     'Total Monthly': f"${data['total_monthly']:,.0f}",
                     'Avg Monthly': f"${avg_amt:,.0f}"
                 })
-            st.dataframe(pd.DataFrame(fs_data), hide_index=True, width='stretch')
+            fs_df = pd.DataFrame(fs_data).sort_values('Employees', ascending=False)
+            st.dataframe(fs_df, hide_index=True, width='stretch')
 
     if result.get('by_state'):
         with st.expander("State/Location Breakdown", expanded=False):
@@ -1928,53 +2135,72 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
 
     with action_cols[0]:
         st.markdown("**Save this strategy for use in subsequent pages:**")
-        if st.button("Use This Strategy →", type="primary", key="apply_strategy_btn",
-                    help="Saves calculated contributions to session. Results will appear on Employer Summary and later pages."):
-            # Convert result to contribution_settings format
-            emp_contribs = result.get('employee_contributions', {})
-            st.session_state.contribution_settings = {
-                'contribution_type': 'class_based',
-                'strategy_applied': result['strategy_type'],
-                'strategy_name': result['strategy_name'],
-                'total_monthly': result['total_monthly'],
-                'total_annual': result['total_annual'],
-                'employees_assigned': result['employees_covered'],
-                'employee_assignments': {
-                    emp_id: {
-                        'monthly_contribution': data['monthly_contribution'],
-                        'annual_contribution': data['annual_contribution']
-                    } for emp_id, data in emp_contribs.items()
-                },
-                'config': result.get('config', {})
-            }
 
-            # Also populate contribution_analysis for Page 4 (Employer Summary)
-            # This replaces the need for a separate "Calculate Budget" step
-            contribution_analysis = {}
-            for emp_id, data in emp_contribs.items():
-                # Use full family tier premium (not just EE rate) for accurate comparison
-                lcsp_tier_premium = data.get('lcsp_tier_premium', 0) or data.get('lcsp_ee_rate', 0) or 0
-                employer_contribution = data.get('monthly_contribution', 0)
-                # Employee cost = full tier premium minus ICHRA contribution
-                employee_cost = max(0, lcsp_tier_premium - employer_contribution)
+        # Define callback to handle button click
+        def apply_strategy_callback():
+            st.session_state.apply_strategy_clicked = True
 
-                contribution_analysis[emp_id] = {
-                    'employee_name': emp_id,  # Will be looked up on Page 4
-                    'family_status': data.get('family_status', 'EE'),
-                    'ichra_analysis': {
-                        'plan_type': 'LCSP',
-                        'plan_id': '',
-                        'plan_name': 'Lowest Cost Silver Plan',
-                        'metal_level': 'Silver',
-                        'monthly_premium': lcsp_tier_premium,  # Full tier premium
-                        'employer_contribution': employer_contribution,
-                        'employee_cost': employee_cost
-                    }
+        st.button(
+            "Use This Strategy →",
+            type="primary",
+            key="apply_strategy_btn",
+            on_click=apply_strategy_callback
+        )
+
+        # Check if callback was triggered
+        if st.session_state.get('apply_strategy_clicked', False):
+            st.session_state.apply_strategy_clicked = False  # Reset flag
+
+            try:
+                # Convert result to contribution_settings format
+                emp_contribs = result.get('employee_contributions', {})
+                st.session_state.contribution_settings = {
+                    'contribution_type': 'class_based',
+                    'strategy_applied': result['strategy_type'],
+                    'strategy_name': result['strategy_name'],
+                    'total_monthly': result['total_monthly'],
+                    'total_annual': result['total_annual'],
+                    'employees_assigned': result['employees_covered'],
+                    'employee_assignments': {
+                        emp_id: {
+                            'monthly_contribution': data['monthly_contribution'],
+                            'annual_contribution': data['annual_contribution']
+                        } for emp_id, data in emp_contribs.items()
+                    },
+                    'config': result.get('config', {})
                 }
-            st.session_state.contribution_analysis = contribution_analysis
 
-            st.success(f"✓ Strategy saved! {len(contribution_analysis)} employees assigned. Proceed to **Employer Summary** page to see results.")
-            st.rerun()
+                # Also populate contribution_analysis for Page 4 (Employer Summary)
+                contribution_analysis = {}
+                for emp_id, data in emp_contribs.items():
+                    lcsp_tier_premium = data.get('lcsp_tier_premium', 0) or data.get('lcsp_ee_rate', 0) or 0
+                    employer_contribution = data.get('monthly_contribution', 0)
+                    employee_cost = max(0, lcsp_tier_premium - employer_contribution)
+
+                    contribution_analysis[emp_id] = {
+                        'employee_name': emp_id,
+                        'family_status': data.get('family_status', 'EE'),
+                        'ichra_analysis': {
+                            'plan_type': 'LCSP',
+                            'plan_id': '',
+                            'plan_name': 'Lowest Cost Silver Plan',
+                            'metal_level': 'Silver',
+                            'monthly_premium': lcsp_tier_premium,
+                            'employer_contribution': employer_contribution,
+                            'employee_cost': employee_cost
+                        }
+                    }
+                st.session_state.contribution_analysis = contribution_analysis
+
+                # Also update strategy_results with format Employer Summary expects
+                st.session_state.strategy_results['calculated'] = True
+                st.session_state.strategy_results['result'] = result
+
+                st.success(f"✓ Strategy saved! {len(contribution_analysis)} employees assigned. Proceed to **Employer Summary** page to see results.")
+            except Exception as e:
+                st.error(f"Error saving strategy: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
     with action_cols[1]:
         # CSV Export
@@ -2011,6 +2237,9 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
             st.session_state.strategy_results = {}
             # Keep strategy_config intact so user doesn't lose their inputs
             st.rerun()
+
+# Affordability footnote
+st.caption("¹ *IRS Affordability Safe Harbor: Employee cost for self-only LCSP must not exceed 9.96% of household income (2026 threshold).*")
 
 # Note: The IRS Affordability Analysis is now integrated into the unified modeler above.
 # The separate affordability_analysis session state is deprecated in favor of affordability_context.
@@ -2050,16 +2279,8 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
 
     st.markdown("*Analysis based on 9.96% of household income affordability threshold (2026 IRS safe harbor)*")
 
-    # Calculate LCSP average from employee details
-    employee_details = analysis.get('employee_details', [])
-    lcsp_avg = 0
-    if employee_details:
-        lcsp_premiums = [e.get('lcsp_premium', 0) for e in employee_details if e.get('lcsp_premium')]
-        if lcsp_premiums:
-            lcsp_avg = sum(lcsp_premiums) / len(lcsp_premiums)
-
     # Current Status Metrics (Row 1)
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.metric(
@@ -2087,17 +2308,13 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
         )
 
     with col4:
+        # Show Current ER Spend for employer cost comparison
+        _er_totals = ContributionComparison.aggregate_contribution_totals(census_df)
+        _current_er = _er_totals.get('total_current_er_annual', 0)
         st.metric(
-            "💰 Current ER Spend/yr",
-            f"${summary.get('current_er_spend_annual', 0):,.0f}",
-            help="Current annual employer spend on health benefits (sum of 'Current ER Monthly' × 12)."
-        )
-
-    with col5:
-        st.metric(
-            "📊 Avg LCSP",
-            f"${lcsp_avg:,.0f}/mo",
-            help="Average Lowest Cost Silver Plan premium across all analyzed employees."
+            "💰 Current ER Spend",
+            f"${_current_er:,.0f}",
+            help="Current annual employer contribution to group plan."
         )
 
     # Proposed Strategy Comparison (shows when strategy is applied)
@@ -2105,8 +2322,10 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
     if contribution_settings.get('contribution_type') == 'class_based' and contribution_settings.get('strategy_applied'):
         strategy_name = contribution_settings.get('strategy_applied', '').replace('_', ' ').title()
         proposed_annual = contribution_settings.get('total_annual', 0)
-        current_annual = summary.get('current_er_spend_annual', 0)
-        savings = current_annual - proposed_annual
+        # ER to ER comparison
+        _er_for_compare = ContributionComparison.aggregate_contribution_totals(census_df)
+        current_er_annual = _er_for_compare.get('total_current_er_annual', 0)
+        change = proposed_annual - current_er_annual
 
         st.markdown("---")
         st.markdown(f"### 📋 Proposed: {strategy_name}")
@@ -2115,19 +2334,27 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
 
         with prop_col1:
             st.metric(
-                "Proposed ER Spend/yr",
+                "ICHRA Annual Cost",
                 f"${proposed_annual:,.0f}",
                 help="Total annual employer spend with the applied contribution strategy."
             )
 
         with prop_col2:
-            delta_text = f"+${savings:,.0f}" if savings > 0 else f"-${abs(savings):,.0f}"
+            if change < 0:
+                delta_text = f"-${abs(change):,.0f}"
+                delta_label = "Savings"
+            elif change > 0:
+                delta_text = f"+${change:,.0f}"
+                delta_label = "Additional"
+            else:
+                delta_text = "$0"
+                delta_label = ""
             st.metric(
-                "vs Current",
-                delta_text if savings != 0 else "$0",
-                "Savings" if savings > 0 else ("Additional" if savings < 0 else ""),
-                delta_color="normal" if savings >= 0 else "inverse",
-                help="Difference between proposed and current annual spend."
+                "vs Current ER",
+                delta_text,
+                delta_label,
+                delta_color="normal" if change <= 0 else "inverse",
+                help="Difference between ICHRA cost and current ER spend."
             )
 
         with prop_col3:
@@ -2535,10 +2762,10 @@ if st.session_state.contribution_analysis:
 
     st.success(f"✅ Strategy applied to {analyzed_count} of {total_employees} employees")
 
-    budget_cols = st.columns(3)
-    budget_cols[0].metric("Total ER Monthly", f"${total_er:,.2f}")
-    budget_cols[1].metric("Total ER Annual", f"${total_er * 12:,.2f}")
-    budget_cols[2].metric("Total EE Monthly", f"${total_ee:,.2f}")
+    budget_cols = st.columns(2)
+    budget_cols[0].metric("ICHRA ER Monthly", f"${total_er:,.2f}")
+    budget_cols[1].metric("ICHRA EE Monthly", f"${total_ee:,.2f}")
+    # budget_cols[2].metric("ICHRA ER Annual", f"${total_er * 12:,.2f}")
 
     st.info("💡 Go to **4️⃣ Employer Summary** to compare this ICHRA budget against your current group plan costs")
 

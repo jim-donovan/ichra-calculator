@@ -75,6 +75,20 @@ class ProposalData:
     annual_savings: float = 0.0
     savings_percentage: float = 0.0
 
+    # Projected Renewal ER calculations (applying current ER/EE split to 2026 renewal)
+    er_contribution_pct: float = 0.0  # Current ER% of total (e.g., 0.596 = 59.6%)
+    ee_contribution_pct: float = 0.0  # Current EE% of total
+    projected_er_monthly_2026: float = 0.0  # renewal_monthly * er_pct
+    projected_er_annual_2026: float = 0.0
+    projected_ee_monthly_2026: float = 0.0  # renewal_monthly * ee_pct
+    projected_ee_annual_2026: float = 0.0
+
+    # Standardized comparisons
+    savings_vs_renewal_er: float = 0.0  # projected_er_annual_2026 - proposed_er_annual (positive = savings)
+    savings_vs_renewal_er_pct: float = 0.0
+    delta_vs_current_er: float = 0.0  # proposed_er_annual - current_er_annual (positive = costs more)
+    delta_vs_current_er_pct: float = 0.0
+
     # ICHRA Evaluation Workflow slide
     renewal_monthly: float = 0.0
     ichra_monthly: float = 0.0
@@ -187,30 +201,77 @@ class ProposalData:
         if data.covered_lives > 0:
             data.per_life_monthly = data.current_total_monthly / data.covered_lives
 
-        # Financial summary data (ICHRA projections)
-        results = financial_summary.get('results', {})
-        if results:
-            data.proposed_er_monthly = results.get('total_monthly', 0)
-            data.proposed_er_annual = results.get('total_annual', 0)
+        # ICHRA projections - check strategy_results first (from Contribution Evaluation page)
+        strategy_results = session_state.get('strategy_results', {})
+        strategy_result = strategy_results.get('result') or strategy_results.get('current') or {}
 
-            # Calculate savings
-            if data.current_er_annual > 0:
-                data.annual_savings = data.current_er_annual - data.proposed_er_annual
-                data.savings_percentage = (data.annual_savings / data.current_er_annual) * 100
+        if strategy_result:
+            data.proposed_er_monthly = strategy_result.get('total_monthly', 0)
+            data.proposed_er_annual = strategy_result.get('total_annual', 0)
+        else:
+            # Fallback to financial_summary (from LCSP Analysis page)
+            results = financial_summary.get('results', {})
+            if results:
+                data.proposed_er_monthly = results.get('total_monthly', 0)
+                data.proposed_er_annual = results.get('total_annual', 0)
+
+        # Calculate ER/EE contribution split percentages
+        if data.current_total_monthly > 0:
+            data.er_contribution_pct = data.current_er_monthly / data.current_total_monthly
+            data.ee_contribution_pct = data.current_ee_monthly / data.current_total_monthly
+        else:
+            # Default to typical 60/40 ER/EE split if no current data
+            data.er_contribution_pct = 0.60
+            data.ee_contribution_pct = 0.40
+
+        # Calculate savings vs current ER (legacy field for backwards compatibility)
+        if data.proposed_er_annual > 0 and data.current_er_annual > 0:
+            data.annual_savings = data.current_er_annual - data.proposed_er_annual
+            data.savings_percentage = (data.annual_savings / data.current_er_annual) * 100
+
+            # Delta vs current ER (positive = ICHRA costs more than current)
+            data.delta_vs_current_er = data.proposed_er_annual - data.current_er_annual
+            data.delta_vs_current_er_pct = (data.delta_vs_current_er / data.current_er_annual) * 100
 
         # Average monthly premium per employee (from current group plan)
         if data.total_employees > 0 and data.current_total_monthly > 0:
             data.avg_monthly_premium = data.current_total_monthly / data.total_employees
 
-        # 2026 Renewal data from financial_summary
+        # 2026 Renewal data from financial_summary or calculate from census
         renewal_monthly = financial_summary.get('renewal_monthly', 0) or 0
+
+        # If no renewal data in financial_summary, try to calculate from census 2026 Premium column
+        if renewal_monthly == 0 and census_df is not None:
+            from financial_calculator import FinancialSummaryCalculator
+            projected_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
+            if projected_data.get('has_data'):
+                renewal_monthly = projected_data.get('total_monthly', 0)
+
+        # If still no renewal data, estimate from current total with 8% trend
+        if renewal_monthly == 0 and data.current_total_monthly > 0:
+            renewal_monthly = data.current_total_monthly * 1.08  # 8% trend factor
+
         data.renewal_monthly = renewal_monthly
         data.ichra_monthly = data.proposed_er_monthly
 
         if renewal_monthly > 0:
             data.total_renewal_cost = renewal_monthly * 12  # Annual
 
-            # Calculate renewal increase % vs current
+            # PROJECT the 2026 ER contribution using same split ratio as current
+            # This is the KEY calculation - what would the employer pay at renewal
+            # if they kept the same ER/EE cost split
+            data.projected_er_monthly_2026 = renewal_monthly * data.er_contribution_pct
+            data.projected_er_annual_2026 = data.projected_er_monthly_2026 * 12
+            data.projected_ee_monthly_2026 = renewal_monthly * data.ee_contribution_pct
+            data.projected_ee_annual_2026 = data.projected_ee_monthly_2026 * 12
+
+            # PRIMARY SALES COMPARISON: ICHRA vs Projected Renewal ER
+            # This is the comparison that matters - "what you'd pay at renewal vs what ICHRA costs"
+            if data.proposed_er_annual > 0 and data.projected_er_annual_2026 > 0:
+                data.savings_vs_renewal_er = data.projected_er_annual_2026 - data.proposed_er_annual
+                data.savings_vs_renewal_er_pct = (data.savings_vs_renewal_er / data.projected_er_annual_2026) * 100
+
+            # Calculate renewal increase % vs current total (2026 Premium is total renewal)
             if data.current_total_monthly > 0:
                 increase = renewal_monthly - data.current_total_monthly
                 data.renewal_percentage = (increase / data.current_total_monthly) * 100
@@ -220,7 +281,7 @@ class ProposalData:
                 data.current_to_renewal_pct = data.renewal_percentage
                 data.annual_increase = increase * 12
 
-            # Renewal to ICHRA comparison
+            # Renewal to ICHRA comparison (vs total renewal, for context)
             if data.proposed_er_monthly > 0:
                 ichra_diff = renewal_monthly - data.proposed_er_monthly
                 data.renewal_to_ichra_diff_monthly = ichra_diff
@@ -238,6 +299,65 @@ class ProposalData:
             data.additional_healthcare_burden = data.total_annual_salaries * 0.30  # 30% of salaries
 
         return data
+
+    def validate(self) -> tuple:
+        """
+        Validate comparison data for internal consistency.
+
+        Returns:
+            (errors: List[str], warnings: List[str])
+        """
+        errors = []
+        warnings = []
+
+        # Check cost totals sum correctly
+        calculated_total = self.current_ee_annual + self.current_er_annual
+        if abs(calculated_total - self.current_total_annual) > 1:
+            errors.append(
+                f"Current costs don't sum: EE({self.current_ee_annual:,.0f}) + ER({self.current_er_annual:,.0f}) "
+                f"!= Total({self.current_total_annual:,.0f})"
+            )
+
+        # Check ER percentage is reasonable (typically 40-90%)
+        if self.er_contribution_pct > 0:
+            if self.er_contribution_pct < 0.4:
+                warnings.append(f"Unusual ER contribution percentage: {self.er_contribution_pct*100:.1f}% (< 40%)")
+            elif self.er_contribution_pct > 0.9:
+                warnings.append(f"Unusual ER contribution percentage: {self.er_contribution_pct*100:.1f}% (> 90%)")
+
+        # Check projected renewal ER calculation
+        if self.renewal_monthly > 0 and self.er_contribution_pct > 0:
+            expected_projected_er = self.renewal_monthly * self.er_contribution_pct * 12
+            if abs(expected_projected_er - self.projected_er_annual_2026) > 1:
+                errors.append(
+                    f"Projected renewal ER mismatch: expected {expected_projected_er:,.0f}, "
+                    f"got {self.projected_er_annual_2026:,.0f}"
+                )
+
+        # Check ICHRA vs renewal makes sense
+        if self.savings_vs_renewal_er < 0 and self.proposed_er_annual > 0:
+            warnings.append(
+                f"ICHRA costs MORE than projected renewal ER by ${abs(self.savings_vs_renewal_er):,.0f} - "
+                "verify contribution strategy"
+            )
+
+        # Check renewal is higher than current (typical scenario)
+        if self.renewal_monthly > 0 and self.current_total_monthly > 0:
+            if self.renewal_monthly < self.current_total_monthly:
+                warnings.append(
+                    f"Renewal ({self.renewal_monthly:,.0f}/mo) is LOWER than current "
+                    f"({self.current_total_monthly:,.0f}/mo) - unusual"
+                )
+
+        # Check employee count
+        if self.employee_count <= 0:
+            errors.append("Employee count is zero or negative")
+
+        # Check for zero proposed ICHRA when strategy should be applied
+        if self.proposed_er_annual == 0 and self.employee_count > 0:
+            warnings.append("Proposed ICHRA is $0 - has a contribution strategy been applied?")
+
+        return errors, warnings
 
 
 class ProposalGenerator:
@@ -518,13 +638,25 @@ class ProposalGenerator:
                 self.replace_text_in_shape(shape, old_text, new_text)
 
     def populate_slide_10(self, slide, data: ProposalData) -> None:
-        """Populate Slide 10: ICHRA Analysis"""
+        """Populate Slide 10: ICHRA Analysis
+
+        Key update: Now shows savings vs Projected Renewal ER (not vs current ER)
+        This is the PRIMARY sales comparison - avoiding the renewal hit.
+        """
+        # Use savings_vs_renewal_er as the main savings metric
+        # This shows: projected_er_annual_2026 - proposed_er_annual
+        savings_display = abs(data.savings_vs_renewal_er) if data.savings_vs_renewal_er != 0 else abs(data.annual_savings)
+
         replacements = [
-            ('$387,414.78', f'${abs(data.annual_savings):,.2f}'),
+            # Primary savings metric - vs Renewal ER
+            ('$387,414.78', f'${savings_display:,.2f}'),
+            # Current ER costs
             ('$1,778,631.00', f'${data.current_er_annual:,.2f}'),
             ('$148,219.25', f'${data.current_er_monthly:,.2f}'),
+            # Current EE costs
             ('$657,949.44', f'${data.current_ee_annual:,.2f}'),
             ('$54,829.12', f'${data.current_ee_monthly:,.2f}'),
+            # Proposed ICHRA
             ('$1,391,216.22', f'${data.proposed_er_annual:,.2f}'),
             ('$115,934.68', f'${data.proposed_er_monthly:,.2f}'),
         ]
