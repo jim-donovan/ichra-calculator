@@ -38,14 +38,14 @@ if 'dependents_df' not in st.session_state:
     st.session_state.dependents_df = None
 
 # Header
-st.title("📊 Employee Census Input")
+st.title("📊 Employee census input")
 st.markdown("Upload your employee census with ZIP codes, dates of birth, and family status.")
 
 # ==============================================================================
 # TEMPLATE DOWNLOAD
 # ==============================================================================
 
-st.header("📥 Step 1: Download Census Template")
+st.header("📥 Step 1: Download census template")
 
 col1, col2 = st.columns([2, 1])
 
@@ -96,7 +96,7 @@ st.markdown("---")
 # FILE UPLOAD
 # ==============================================================================
 
-st.header("📤 Step 2: Upload Your Census File")
+st.header("📤 Step 2: Upload your census file")
 
 # Check if census is already loaded in session state
 if st.session_state.census_df is not None:
@@ -117,7 +117,7 @@ if st.session_state.census_df is not None:
 
     # Display the loaded census data
     st.markdown("---")
-    st.subheader("📋 Loaded Census Data")
+    st.subheader("📋 Loaded census data")
 
     employees_df = st.session_state.census_df
     dependents_df = st.session_state.dependents_df if st.session_state.dependents_df is not None else pd.DataFrame()
@@ -157,7 +157,7 @@ if st.session_state.census_df is not None:
     tab1, tab2, tab3, tab4 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography", "📊 Demographics"])
 
     with tab1:
-        st.markdown("### 📊 Employee Demographics")
+        st.markdown("### 📊 Employee demographics")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -174,7 +174,7 @@ if st.session_state.census_df is not None:
         ee_employees = employees_df[employees_df['family_status'] == 'EE']
         if len(ee_employees) > 0:
             st.markdown("---")
-            st.markdown("### 👤 Employee Only (EE) Class")
+            st.markdown("### 👤 Employee only (EE) class")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -188,7 +188,7 @@ if st.session_state.census_df is not None:
                 st.markdown(f"- Oldest: {ee_employees['age'].max():.0f} years")
 
         st.markdown("---")
-        st.markdown("### 👨‍👩‍👧‍👦 Family Status Breakdown")
+        st.markdown("### 👨‍👩‍👧‍👦 Family status breakdown")
         status_counts = employees_df['family_status'].value_counts()
         for status, count in status_counts.items():
             status_name = FAMILY_STATUS_CODES.get(status, status)
@@ -196,7 +196,7 @@ if st.session_state.census_df is not None:
             st.markdown(f"- **{status_name}:** {count} employees ({pct:.1f}%)")
 
         st.markdown("---")
-        st.markdown("### 📋 Employee Data")
+        st.markdown("### 📋 Employee data")
         display_cols = ['employee_id', 'first_name', 'last_name', 'age', 'state', 'county', 'family_status']
         if 'current_ee_monthly' in employees_df.columns:
             display_cols.extend(['current_ee_monthly', 'current_er_monthly'])
@@ -204,7 +204,7 @@ if st.session_state.census_df is not None:
 
     with tab2:
         if not dependents_df.empty:
-            st.markdown("### 👶 Dependent Overview")
+            st.markdown("### 👶 Dependent overview")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -234,7 +234,7 @@ if st.session_state.census_df is not None:
 
             if not children_df.empty:
                 st.markdown("---")
-                st.markdown("### 👧👦 Children Analysis")
+                st.markdown("### 👧👦 Children analysis")
 
                 # Get employees with children
                 employees_with_children = employees_df[employees_df['family_status'].isin(['EC', 'F'])]
@@ -257,7 +257,7 @@ if st.session_state.census_df is not None:
 
                 # Breakdown by family type
                 st.markdown("---")
-                st.markdown("### 📊 Children by Family Type")
+                st.markdown("### 📊 Children by family type")
 
                 # Employee + Children (EC)
                 ec_employees = employees_df[employees_df['family_status'] == 'EC']
@@ -292,7 +292,7 @@ if st.session_state.census_df is not None:
             # Spouse analysis
             if not spouses_df.empty:
                 st.markdown("---")
-                st.markdown("### 💑 Spouse Analysis")
+                st.markdown("### 💑 Spouse analysis")
 
                 # Get employees with spouses
                 employees_with_spouses = employees_df[employees_df['family_status'].isin(['ES', 'F'])]
@@ -333,7 +333,7 @@ if st.session_state.census_df is not None:
                         st.markdown(f"- Age Range: {f_spouses['age'].min():.0f} - {f_spouses['age'].max():.0f} years")
 
             st.markdown("---")
-            st.markdown("### 📋 Dependent Data")
+            st.markdown("### 📋 Dependent data")
             st.dataframe(dependents_df, width="stretch")
         else:
             st.info("No dependents in this census (all employees have Family Status = EE)")
@@ -355,7 +355,7 @@ if st.session_state.census_df is not None:
         import plotly.express as px
 
         # Age distribution chart
-        st.markdown("### Age Distribution")
+        st.markdown("### Age distribution")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -394,7 +394,7 @@ if st.session_state.census_df is not None:
 
         # Family status distribution
         if 'family_status' in employees_df.columns:
-            st.markdown("### Family Status Distribution")
+            st.markdown("### Family status distribution")
 
             family_counts = employees_df['family_status'].value_counts()
             family_labels = [f"{code} ({FAMILY_STATUS_CODES.get(code, code)})" for code in family_counts.index]
@@ -418,7 +418,7 @@ if st.session_state.census_df is not None:
 
         # Dependent demographics (if present)
         if not dependents_df.empty:
-            st.markdown("### Dependent Demographics")
+            st.markdown("### Dependent demographics")
 
             dep_col1, dep_col2 = st.columns(2)
 
@@ -456,7 +456,7 @@ if st.session_state.census_df is not None:
                 st.plotly_chart(fig, width='stretch')
 
         # Rating area distribution
-        st.markdown("### Geographic Distribution")
+        st.markdown("### Geographic distribution")
 
         col1, col2 = st.columns(2)
 
@@ -682,12 +682,12 @@ else:
 
                     # Detailed breakdown
                     st.markdown("---")
-                    st.subheader("📊 Census Summary")
+                    st.subheader("📊 Census summary")
 
                     tab1, tab2, tab3, tab4 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography", "📊 Demographics"])
 
                     with tab1:
-                        st.markdown("### 📊 Employee Demographics")
+                        st.markdown("### 📊 Employee demographics")
 
                         col1, col2 = st.columns(2)
                         with col1:
@@ -704,7 +704,7 @@ else:
                         ee_employees = employees_df[employees_df['family_status'] == 'EE']
                         if len(ee_employees) > 0:
                             st.markdown("---")
-                            st.markdown("### 👤 Employee Only (EE) Class")
+                            st.markdown("### 👤 Employee only (EE) class")
 
                             col1, col2 = st.columns(2)
                             with col1:
@@ -718,7 +718,7 @@ else:
                                 st.markdown(f"- Oldest: {ee_employees['age'].max():.0f} years")
 
                         st.markdown("---")
-                        st.markdown("### 👨‍👩‍👧‍👦 Family Status Breakdown")
+                        st.markdown("### 👨‍👩‍👧‍👦 Family status breakdown")
                         status_counts = employees_df['family_status'].value_counts()
                         for status, count in status_counts.items():
                             status_name = FAMILY_STATUS_CODES.get(status, status)
@@ -726,7 +726,7 @@ else:
                             st.markdown(f"- **{status_name}:** {count} employees ({pct:.1f}%)")
 
                         st.markdown("---")
-                        st.markdown("### 📋 Employee Data")
+                        st.markdown("### 📋 Employee data")
                         display_cols = ['employee_id', 'first_name', 'last_name', 'age', 'state', 'county', 'family_status']
                         if 'current_ee_monthly' in employees_df.columns:
                             display_cols.extend(['current_ee_monthly', 'current_er_monthly'])
@@ -734,7 +734,7 @@ else:
 
                     with tab2:
                         if not dependents_df.empty:
-                            st.markdown("### 👶 Dependent Overview")
+                            st.markdown("### 👶 Dependent overview")
 
                             col1, col2 = st.columns(2)
                             with col1:
@@ -764,7 +764,7 @@ else:
 
                             if not children_df.empty:
                                 st.markdown("---")
-                                st.markdown("### 👧👦 Children Analysis")
+                                st.markdown("### 👧👦 Children analysis")
 
                                 # Get employees with children
                                 employees_with_children = employees_df[employees_df['family_status'].isin(['EC', 'F'])]
@@ -787,7 +787,7 @@ else:
 
                                 # Breakdown by family type
                                 st.markdown("---")
-                                st.markdown("### 📊 Children by Family Type")
+                                st.markdown("### 📊 Children by family type")
 
                                 # Employee + Children (EC)
                                 ec_employees = employees_df[employees_df['family_status'] == 'EC']
@@ -822,7 +822,7 @@ else:
                             # Spouse analysis
                             if not spouses_df.empty:
                                 st.markdown("---")
-                                st.markdown("### 💑 Spouse Analysis")
+                                st.markdown("### 💑 Spouse analysis")
 
                                 # Get employees with spouses
                                 employees_with_spouses = employees_df[employees_df['family_status'].isin(['ES', 'F'])]
@@ -863,7 +863,7 @@ else:
                                         st.markdown(f"- Age Range: {f_spouses['age'].min():.0f} - {f_spouses['age'].max():.0f} years")
 
                             st.markdown("---")
-                            st.markdown("### 📋 Dependent Data")
+                            st.markdown("### 📋 Dependent data")
                             st.dataframe(dependents_df, width="stretch")
                         else:
                             st.info("No dependents in this census (all employees have Family Status = EE)")
@@ -885,7 +885,7 @@ else:
                         import plotly.express as px
 
                         # Age distribution chart
-                        st.markdown("### Age Distribution")
+                        st.markdown("### Age distribution")
                         col1, col2 = st.columns(2)
 
                         with col1:
@@ -924,7 +924,7 @@ else:
 
                         # Family status distribution
                         if 'family_status' in employees_df.columns:
-                            st.markdown("### Family Status Distribution")
+                            st.markdown("### Family status distribution")
 
                             family_counts = employees_df['family_status'].value_counts()
                             family_labels = [f"{code} ({FAMILY_STATUS_CODES.get(code, code)})" for code in family_counts.index]
@@ -948,7 +948,7 @@ else:
 
                         # Dependent demographics (if present)
                         if not dependents_df.empty:
-                            st.markdown("### Dependent Demographics")
+                            st.markdown("### Dependent demographics")
 
                             dep_col1, dep_col2 = st.columns(2)
 
@@ -986,7 +986,7 @@ else:
                                 st.plotly_chart(fig, width='stretch')
 
                         # Rating area distribution
-                        st.markdown("### Geographic Distribution")
+                        st.markdown("### Geographic distribution")
 
                         col1, col2 = st.columns(2)
 
@@ -1023,7 +1023,7 @@ else:
                     st.error(f"❌ Error processing census: {str(e)}")
                     st.error("Please check your file format and try again.")
                     import traceback
-                    with st.expander("Technical Details"):
+                    with st.expander("Technical details"):
                         st.code(traceback.format_exc())
 
         except Exception as e:
@@ -1040,7 +1040,7 @@ else:
 
 st.markdown("---")
 
-with st.expander("ℹ️ Help & Instructions"):
+with st.expander("ℹ️ Help & instructions"):
     st.markdown("""
     ## Census File Format
 
@@ -1098,7 +1098,7 @@ with st.expander("ℹ️ Help & Instructions"):
 
 # Show current census status in sidebar
 with st.sidebar:
-    st.markdown("### Census Status")
+    st.markdown("### Census status")
 
     if st.session_state.census_df is not None:
         num_employees = len(st.session_state.census_df)

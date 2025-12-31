@@ -47,7 +47,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 
-st.set_page_config(page_title="Export Results", page_icon="📄", layout="wide")
+st.set_page_config(page_title="Export results", page_icon="📄", layout="wide")
 
 
 # Initialize session state
@@ -68,13 +68,13 @@ if 'contribution_settings' not in st.session_state:
 
 
 # Page header
-st.title("📄 Export Results")
+st.title("📄 Export results")
 st.markdown("Generate PDF reports and export data to CSV")
 
 # Check prerequisites
 if st.session_state.census_df is None:
-    st.warning("⚠️ No employee census loaded. Please complete **Census Input** first.")
-    st.info("👉 Go to **1️⃣ Census Input** in the sidebar to upload your census")
+    st.warning("⚠️ No employee census loaded. Please complete **Census input** first.")
+    st.info("👉 Go to **1️⃣ Census input** in the sidebar to upload your census")
     st.stop()
 
 census_df = st.session_state.census_df
@@ -91,7 +91,7 @@ st.markdown("---")
 # PDF GENERATION
 # ============================================================================
 
-st.subheader("📊 PDF Report Generation")
+st.subheader("📊 PDF report generation")
 
 if not REPORTLAB_AVAILABLE:
     st.warning("""
@@ -110,7 +110,7 @@ else:
     st.info("Generate a professional PDF report for your ICHRA contribution evaluation")
 
     # PDF customization options
-    with st.expander("⚙️ Customize PDF Options", expanded=True):
+    with st.expander("⚙️ Customize PDF options", expanded=True):
 
         col1, col2 = st.columns(2)
 
@@ -134,7 +134,7 @@ else:
             )
 
     # Generate PDF button
-    if st.button("🎨 Generate PDF Report", type="primary"):
+    if st.button("🎨 Generate PDF report", type="primary"):
 
         if not has_analysis:
             st.warning("⚠️ No contribution analysis available. Run analysis on Page 2 first for a complete report.")
@@ -185,7 +185,7 @@ else:
             )
 
             # Title page
-            elements.append(Paragraph("ICHRA Contribution Evaluation", title_style))
+            elements.append(Paragraph("ICHRA contribution evaluation", title_style))
             elements.append(Spacer(1, 0.25*inch))
 
             elements.append(Paragraph(f"<b>Prepared for:</b> {client_name}", styles['Normal']))
@@ -195,8 +195,8 @@ else:
             elements.append(Paragraph(f"<b>Date:</b> {datetime.now().strftime('%B %d, %Y')}", styles['Normal']))
             elements.append(Spacer(1, 0.5*inch))
 
-            # Executive Summary
-            elements.append(Paragraph("Executive Summary", heading_style))
+            # Executive summary
+            elements.append(Paragraph("Executive summary", heading_style))
 
             num_employees = len(census_df)
             num_dependents = len(dependents_df) if dependents_df is not None and not dependents_df.empty else 0
@@ -226,9 +226,9 @@ else:
             elements.append(Paragraph(contrib_text, styles['Normal']))
             elements.append(Spacer(1, 0.25*inch))
 
-            # Cost Summary (if individual contributions available)
+            # Cost summary (if individual contributions available)
             if has_individual_contribs:
-                elements.append(Paragraph("Premium Comparison", heading_style))
+                elements.append(Paragraph("Premium comparison", heading_style))
 
                 contrib_totals = ContributionComparison.aggregate_contribution_totals(census_df)
 
@@ -306,10 +306,10 @@ else:
                 elements.append(Paragraph(f"<i>Current Total = ER + EE premium. Based on {employees_analyzed} employees.</i>", styles['Normal']))
                 elements.append(Spacer(1, 0.25*inch))
 
-            # Employee Detail (if enabled)
+            # Employee detail (if enabled)
             if include_employee_detail and has_analysis:
                 elements.append(PageBreak())
-                elements.append(Paragraph("Employee-Level Cost Comparison", heading_style))
+                elements.append(Paragraph("Employee-level cost comparison", heading_style))
 
                 detail_table_data = [['Employee ID', 'Family', 'Current Total', 'Proposed ICHRA', 'Change']]
 
@@ -364,13 +364,13 @@ else:
                 elements.append(Paragraph("<i>Current Total = ER + EE premium per employee (monthly)</i>", styles['Normal']))
                 elements.append(Spacer(1, 0.25*inch))
 
-            # Demographics Summary (if enabled)
+            # Demographics summary (if enabled)
             if include_demographics:
                 elements.append(PageBreak())
-                elements.append(Paragraph("Census Demographics", heading_style))
+                elements.append(Paragraph("Census demographics", heading_style))
 
                 # Age distribution
-                elements.append(Paragraph("Age Distribution", subheading_style))
+                elements.append(Paragraph("Age distribution", subheading_style))
 
                 age_col = 'employee_age' if 'employee_age' in census_df.columns else 'age'
                 age_bins = [0, 30, 40, 50, 60, 100]
@@ -406,7 +406,7 @@ else:
 
                 # Family status distribution
                 if 'family_status' in census_df.columns:
-                    elements.append(Paragraph("Family Status Distribution", subheading_style))
+                    elements.append(Paragraph("Family status distribution", subheading_style))
 
                     family_counts = census_df['family_status'].value_counts()
                     family_table_data = [['Family Status', 'Description', 'Count', 'Percentage']]
@@ -432,7 +432,7 @@ else:
                     elements.append(Spacer(1, 0.25*inch))
 
                 # State distribution
-                elements.append(Paragraph("Geographic Distribution", subheading_style))
+                elements.append(Paragraph("Geographic distribution", subheading_style))
 
                 state_counts = census_df['state'].value_counts()
                 state_table_data = [['State', 'Employees', 'Percentage']]
@@ -468,7 +468,7 @@ else:
             filename = f"{EXPORT_FILE_PREFIX}_{client_name.replace(' ', '_')}_{timestamp}.pdf"
 
             st.download_button(
-                label="📥 Download PDF Report",
+                label="📥 Download PDF report",
                 data=pdf_bytes,
                 file_name=filename,
                 mime="application/pdf"
@@ -479,7 +479,7 @@ else:
 # ============================================================================
 
 st.markdown("---")
-st.subheader("📊 CSV Data Exports")
+st.subheader("📊 CSV data exports")
 
 st.markdown("Download detailed data in CSV format for further analysis")
 
@@ -487,9 +487,9 @@ col1, col2 = st.columns(2)
 
 with col1:
     # Export census with contribution analysis
-    st.markdown("**Employee Census with Analysis**")
+    st.markdown("**Employee census with analysis**")
 
-    if st.button("Generate Census Export"):
+    if st.button("Generate census export"):
         employee_export = []
 
         # Get contribution settings for reference
@@ -546,7 +546,7 @@ with col1:
         csv = employee_export_df.to_csv(index=False)
 
         st.download_button(
-            label="📥 Download Census CSV",
+            label="📥 Download census CSV",
             data=csv,
             file_name=f"{EXPORT_FILE_PREFIX}_census_{datetime.now().strftime(DATE_FORMAT)}.csv",
             mime="text/csv",
@@ -555,9 +555,9 @@ with col1:
 
 with col2:
     # Export contribution summary
-    st.markdown("**Contribution Summary**")
+    st.markdown("**Contribution summary**")
 
-    if st.button("Generate Summary Export"):
+    if st.button("Generate summary export"):
         summary_rows = []
 
         if has_individual_contribs:
@@ -620,7 +620,7 @@ with col2:
         csv = summary_df.to_csv(index=False)
 
         st.download_button(
-            label="📥 Download Summary CSV",
+            label="📥 Download summary CSV",
             data=csv,
             file_name=f"{EXPORT_FILE_PREFIX}_summary_{datetime.now().strftime(DATE_FORMAT)}.csv",
             mime="text/csv",
@@ -630,13 +630,13 @@ with col2:
 # Export dependents if available
 if dependents_df is not None and not dependents_df.empty:
     st.markdown("---")
-    st.markdown("**Dependents Export**")
+    st.markdown("**Dependents export**")
 
-    if st.button("Generate Dependents Export"):
+    if st.button("Generate dependents export"):
         csv = dependents_df.to_csv(index=False)
 
         st.download_button(
-            label="📥 Download Dependents CSV",
+            label="📥 Download dependents CSV",
             data=csv,
             file_name=f"{EXPORT_FILE_PREFIX}_dependents_{datetime.now().strftime(DATE_FORMAT)}.csv",
             mime="text/csv",
@@ -649,7 +649,7 @@ if dependents_df is not None and not dependents_df.empty:
 
 st.markdown("---")
 st.success("""
-### ✅ ICHRA Contribution Evaluation Complete!
+### ✅ ICHRA contribution evaluation complete!
 
 You've successfully completed the ICHRA calculator workflow:
 

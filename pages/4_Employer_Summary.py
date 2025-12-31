@@ -36,7 +36,7 @@ if 'contribution_settings' not in st.session_state:
 
 
 # Page header
-st.title("📊 Employer Summary")
+st.title("📊 Employer summary")
 st.markdown("Review aggregate costs, contribution analysis, and census demographics")
 
 # Check prerequisites
@@ -61,7 +61,7 @@ has_individual_contribs = ContributionComparison.has_individual_contributions(ce
 # EXECUTIVE SUMMARY
 # ============================================================================
 
-st.subheader("📋 Executive Summary")
+st.subheader("📋 Executive summary")
 
 if has_dependents:
     # Four columns when dependents present
@@ -103,7 +103,7 @@ st.markdown("---")
 # CONTRIBUTION SETTINGS SUMMARY
 # ============================================================================
 
-st.subheader("⚙️ Contribution Settings")
+st.subheader("⚙️ Contribution settings")
 
 settings = st.session_state.contribution_settings
 contribution_type = settings.get('contribution_type', 'percentage')
@@ -206,7 +206,7 @@ if has_individual_contribs:
         st.info("💡 **Key insight:** ICHRA is employer contribution only. 'vs Renewal ER' shows what you save by switching to ICHRA instead of accepting the renewal. 'vs Renewal Total' includes employee premiums and appears larger but isn't an apples-to-apples comparison.")
 
             # === HEADLINE: EMPLOYER COST COMPARISON ===
-        st.subheader("💰 Employer Cost Comparison")
+        st.subheader("💰 Employer cost comparison")
 
         # === DETAILED SUMMARY ===
         st.markdown("---")
@@ -291,7 +291,7 @@ if has_individual_contribs:
 
     else:
         # No strategy applied yet
-        st.subheader("💰 Employer Cost Impact")
+        st.subheader("💰 Employer cost impact")
         st.info("""
         **Configure a contribution strategy to see cost comparison**
 
@@ -300,7 +300,7 @@ if has_individual_contribs:
 
     # Detailed employee breakdown
     if st.session_state.contribution_analysis:
-        with st.expander("📋 View Employee-Level Comparison", expanded=False):
+        with st.expander("📋 View employee-level comparison", expanded=False):
             comparison_rows = []
 
             for emp_id, analysis in st.session_state.contribution_analysis.items():
@@ -361,7 +361,7 @@ if has_individual_contribs:
                 st.info("No employee comparisons available")
 
 else:
-    st.subheader("💰 Contribution Summary")
+    st.subheader("💰 Contribution summary")
     st.info("""
     **No per-employee contribution data in census**
 

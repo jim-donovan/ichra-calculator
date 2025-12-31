@@ -14,7 +14,7 @@ from constants import FAMILY_STATUS_CODES
 logger = logging.getLogger(__name__)
 
 # Page config
-st.set_page_config(page_title="Individual Analysis", page_icon="👤", layout="wide")
+st.set_page_config(page_title="Individual analysis", page_icon="👤", layout="wide")
 
 
 # =============================================================================
@@ -545,12 +545,12 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
 # PAGE CONTENT
 # =============================================================================
 
-st.title("👤 Individual Employee Analysis")
+st.title("👤 Individual employee analysis")
 
 # Check for census
 if 'census_df' not in st.session_state or st.session_state.census_df is None:
     st.warning("Please upload employee census data first.")
-    st.markdown("Go to **1️⃣ Employee Census** to upload your census file.")
+    st.markdown("Go to **1️⃣ Employee census** to upload your census file.")
     st.stop()
 
 census_df = st.session_state.census_df
@@ -589,7 +589,7 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     selected = st.selectbox(
-        "Select Employee to Analyze",
+        "Select employee to analyze",
         options=employee_options,
         index=0
     )
@@ -598,7 +598,7 @@ with col1:
     st.session_state.selected_employee_id = selected_id
 
 with col2:
-    if st.button("🔍 Analyze Employee", type="primary"):
+    if st.button("🔍 Analyze employee", type="primary"):
         if selected_id:
             with st.spinner("Analyzing..."):
                 result = compare_current_vs_marketplace(selected_id)
@@ -635,8 +635,8 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
     st.subheader(f"📊 {result['employee_name']}")
     st.caption(f"Employee ID: `{result['employee_id']}` · Family Status: **{family_status}** ({status_label})")
 
-    # Employee Details
-    with st.expander("👤 Employee Details", expanded=True):
+    # Employee details
+    with st.expander("👤 Employee details", expanded=True):
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         col1.metric("Age", age)
         col2.metric("State", state)
@@ -645,9 +645,9 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
         col5.metric("ZIP", zip_code if zip_code != 'N/A' else "—")
         col6.metric("Rating Area", rating_area)
 
-    # Affordability Status
+    # Affordability status
     if 'affordability_analysis' in st.session_state and st.session_state.affordability_analysis:
-        st.markdown("#### IRS Affordability Status")
+        st.markdown("#### IRS affordability status")
 
         emp_details = st.session_state.affordability_analysis['employee_details']
         selected_employee_id = result.get('employee_id')
@@ -678,8 +678,8 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
         elif emp_afford:
             st.info("ℹ️ No income data available for affordability calculation. Add 'Monthly Income' to census for this employee.")
 
-    # Current Group Plan
-    with st.expander("💵 Current Group Plan", expanded=True):
+    # Current group plan
+    with st.expander("💵 Current group plan", expanded=True):
         if result['has_current_data']:
             curr = result['current_contribution']
             col1, col2, col3 = st.columns(3)
@@ -689,15 +689,15 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
         else:
             st.warning("No current contribution data in census for this employee")
 
-    # ICHRA/LCSP Section
-    with st.expander("💰 ICHRA Contribution (LCSP)", expanded=True):
+    # ICHRA/LCSP section
+    with st.expander("💰 ICHRA contribution (LCSP)", expanded=True):
         lcsp_data = st.session_state.get('_quick_analysis_lcsp', {})
         if lcsp_data and 'lcsp' in lcsp_data:
             lcsp = lcsp_data['lcsp']
             lcsp_premium_str = lcsp.get('monthly_premium', '$0.00')
             lcsp_premium = float(lcsp_premium_str.replace('$', '').replace(',', ''))
 
-            st.markdown("**Lowest Cost Silver Plan (LCSP)**")
+            st.markdown("**Lowest cost silver plan (LCSP)**")
 
             plan_name = lcsp.get('plan_name', 'N/A')
             st.markdown(f'<div class="plan-badge"><span class="plan-badge-label">Plan:</span>{plan_name}</div>', unsafe_allow_html=True)
@@ -727,10 +727,10 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
                 pct = settings.get('default_percentage', 75)
                 st.caption(f"Contribution: {pct}% Employer / {100-pct}% Employee")
 
-    # Equivalent Plan
+    # Equivalent plan
     equiv_data = st.session_state.get('_quick_analysis_equiv', {})
     if equiv_data and 'plan_id' in equiv_data:
-        with st.expander("🎯 Equivalent Plan (Closest to Current Premium)", expanded=True):
+        with st.expander("🎯 Equivalent plan (closest to current premium)", expanded=True):
             equiv_plan_name = equiv_data.get('plan_name', 'N/A')
             st.markdown(f'<div class="plan-badge"><span class="plan-badge-label">Plan:</span>{equiv_plan_name}</div>', unsafe_allow_html=True)
 
@@ -755,11 +755,11 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
             st.caption(f"{equiv_data.get('metal_level', 'N/A')} | {equiv_data.get('plan_type', 'N/A')} | {equiv_data.get('exchange_status', 'N/A')} | Deductible: {equiv_data.get('deductible', 'N/A')} | OOPM: {equiv_data.get('oopm', 'N/A')}")
             st.caption(f"Price difference from current: {equiv_data.get('difference', 'N/A')}")
     elif equiv_data and 'error' in equiv_data:
-        with st.expander("🎯 Equivalent Plan", expanded=False):
+        with st.expander("🎯 Equivalent plan", expanded=False):
             st.info(equiv_data['error'])
 
-    # Marketplace Plans
-    with st.expander("🏥 Marketplace Plan Options", expanded=True):
+    # Marketplace plans
+    with st.expander("🏥 Marketplace plan options", expanded=True):
         plan_data = []
         for comp in result['comparisons'][:5]:
             plan_data.append({
@@ -801,7 +801,7 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
             st.info("No marketplace plans found for this employee's location")
 
     # Clear button
-    if st.button("Clear Analysis", key="clear_analysis"):
+    if st.button("Clear analysis", key="clear_analysis"):
         st.session_state.pop('_quick_analysis_result', None)
         st.session_state.pop('_quick_analysis_employee', None)
         st.session_state.pop('_quick_analysis_lcsp', None)

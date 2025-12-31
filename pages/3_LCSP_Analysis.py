@@ -26,7 +26,7 @@ st.set_page_config(page_title="LCSP Analysis", page_icon="📊", layout="wide")
 # PAGE HEADER
 # =============================================================================
 
-st.title("📊 LCSP Analysis")
+st.title("📊 LCSP analysis")
 st.markdown("Compare current group plan costs to 100% LCSP (Lowest Cost Silver Plan) premiums across all states.")
 
 # =============================================================================
@@ -56,7 +56,7 @@ if 'financial_summary' not in st.session_state:
 # CENSUS SUMMARY
 # =============================================================================
 
-st.subheader("📋 Census Summary")
+st.subheader("📋 Census summary")
 
 # Calculate current totals from census
 current_totals = FinancialSummaryCalculator.calculate_current_totals(census_df)
@@ -79,7 +79,7 @@ col5.metric(
 )
 
 # Show breakdown
-with st.expander("View Current Cost Breakdown"):
+with st.expander("View current cost breakdown"):
     bk_col1, bk_col2, bk_col3 = st.columns(3)
     bk_col1.metric("ER Monthly", f"${current_totals['total_er_monthly']:,.0f}")
     bk_col2.metric("EE Monthly", f"${current_totals['total_ee_monthly']:,.0f}")
@@ -101,7 +101,7 @@ st.markdown("---")
 projected_2026_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
 has_csv_projected = projected_2026_data['has_data']
 
-st.subheader("📈 2026 Projected Renewal")
+st.subheader("📈 2026 projected renewal")
 
 if has_csv_projected:
     # CSV has 2026 Premium data - show it and allow override
@@ -184,7 +184,7 @@ st.markdown("---")
 # PLAN SELECTION BY STATE
 # =============================================================================
 
-st.subheader("📋 Plan Selection by State")
+st.subheader("📋 Plan selection by state")
 
 states = FinancialSummaryCalculator.get_states_from_census(census_df)
 
@@ -216,7 +216,7 @@ results = st.session_state.financial_summary.get('results', {})
 
 if results and 'total_monthly' in results:
     st.markdown("---")
-    st.subheader("📊 Financial Comparison")
+    st.subheader("📊 Financial comparison")
     st.caption("100% LCSP = total cost to cover each employee's Lowest Cost Silver Plan based on their rating area, age, and family status.")
 
     # Main comparison metrics
@@ -364,7 +364,7 @@ if results and 'total_monthly' in results:
 
     # State breakdown
     if results.get('by_state'):
-        with st.expander("📍 Breakdown by State", expanded=True):
+        with st.expander("📍 Breakdown by state", expanded=True):
             metal_level = results.get('metal_level', 'Plan')
             state_data = []
             for state, state_info in results['by_state'].items():
@@ -386,7 +386,7 @@ if results and 'total_monthly' in results:
 
     # Savings Heatmap by Age and Family Status
     if results.get('employee_details') and has_renewal:
-        with st.expander("🗺️ Savings Heatmap by Age & Family Status", expanded=True):
+        with st.expander("🗺️ Savings heatmap by age & family status", expanded=True):
             st.markdown("**Monthly savings per employee** comparing 2026 Renewal vs LCSP. Green = savings, Red = increase.")
 
             detail_df = pd.DataFrame(results['employee_details'])
@@ -562,7 +562,7 @@ if results and 'total_monthly' in results:
 
     # Employee Impact Analysis - categorize by savings/breakeven/increase
     if results.get('employee_details') and has_renewal:
-        with st.expander("👥 Employee Impact Analysis", expanded=True):
+        with st.expander("👥 Employee impact analysis", expanded=True):
             st.markdown("**How does 100% LCSP compare for each employee?** Comparing 2026 Renewal vs LCSP costs.")
 
             impact_df = pd.DataFrame(results['employee_details'])

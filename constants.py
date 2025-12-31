@@ -313,7 +313,7 @@ DEPENDENT_CONTRIBUTION_STRATEGIES = [
 
 # Application configuration
 APP_CONFIG = {
-    'title': 'ICHRA Plan Calculator',
+    'title': 'ICHRA plan calculator',
     'icon': '📊',
     'layout': 'wide',
     'initial_sidebar_state': 'expanded'
@@ -321,10 +321,10 @@ APP_CONFIG = {
 
 # Page names for navigation (4-page structure)
 PAGE_NAMES = {
-    'census': '1️⃣ Employee Census',
-    'contribution_eval': '2️⃣ Contribution Evaluation',
-    'employer_summary': '3️⃣ Employer Summary',
-    'export': '4️⃣ Export Results'
+    'census': '1️⃣ Employee census',
+    'contribution_eval': '2️⃣ Contribution evaluation',
+    'employer_summary': '3️⃣ Employer summary',
+    'export': '4️⃣ Export results'
 }
 
 # Help text

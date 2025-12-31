@@ -98,7 +98,7 @@ def main():
     initialize_session_state()
 
     # Sidebar navigation
-    st.sidebar.title("📊 ICHRA Calculator")
+    st.sidebar.title("📊 ICHRA calculator")
     st.sidebar.markdown("---")
 
     # Navigation menu
@@ -109,7 +109,7 @@ def main():
         st.session_state.current_page = 'home'
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Calculator Steps")
+    st.sidebar.subheader("Calculator steps")
 
     # Step navigation buttons
     pages = [
@@ -125,7 +125,7 @@ def main():
 
     # Sidebar info
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Quick Stats")
+    st.sidebar.subheader("Quick stats")
 
     if st.session_state.census_df is not None:
         st.sidebar.metric("Employees", len(st.session_state.census_df))
@@ -134,7 +134,7 @@ def main():
 
     # Test database connection
     st.sidebar.markdown("---")
-    if st.sidebar.button("🔌 Test Database Connection"):
+    if st.sidebar.button("🔌 Test database connection"):
         with st.sidebar:
             with st.spinner("Testing connection..."):
                 if test_connection():
@@ -166,35 +166,35 @@ def show_home_page():
     """Display home/welcome page"""
 
     st.markdown("""
-    ## Welcome to the ICHRA Plan Calculator
+    ## Welcome to the ICHRA plan calculator
 
     This tool helps benefits consultants evaluate ICHRA (Individual Coverage Health
     Reimbursement Arrangement) contributions by comparing what employees could get
     on the Individual marketplace for their current contribution.
 
-    ### Getting Started
+    ### Getting started
 
     Follow these steps to create an ICHRA proposal:
 
-    1. **📋 Employee Census** - Upload employee census data with current contribution info
-    2. **💰 Contribution Evaluation** - AI-powered analysis of marketplace options vs. current costs
-    3. **📊 Employer Summary** - Review aggregate employer cost savings
-    4. **📄 Export Results** - Generate PDF proposal and export data
+    1. **📋 Employee census** - Upload employee census data with current contribution info
+    2. **💰 Contribution evaluation** - AI-powered analysis of marketplace options vs. current costs
+    3. **📊 Employer summary** - Review aggregate employer cost savings
+    4. **📄 Export results** - Generate PDF proposal and export data
 
-    ### Key Features
+    ### Key features
 
-    - **AI-Powered Evaluation**: Intelligent comparison of current vs. marketplace options
-    - **Cost Comparison**: See what employees can get for their current contribution
-    - **Approved Class Support**: Set different contribution levels by employee class
-    - **Rating Area Accuracy**: Automatic county-to-rating-area mapping for accurate pricing
-    - **Professional Exports**: Generate client-ready PDF proposals
+    - **AI-powered evaluation**: Intelligent comparison of current vs. marketplace options
+    - **Cost comparison**: See what employees can get for their current contribution
+    - **Approved class support**: Set different contribution levels by employee class
+    - **Rating area accuracy**: Automatic county-to-rating-area mapping for accurate pricing
+    - **Professional exports**: Generate client-ready PDF proposals
 
-    ### Data Source
+    ### Data source
 
     This calculator uses official 2026 RBIS (Rate Based Insurance System) data from CMS,
     covering Individual marketplace plans across all 50 states + DC.
 
-    ### Getting Help
+    ### Getting help
 
     - Use the **sidebar navigation** to move between steps
     - Look for ℹ️ info boxes for guidance on each page
@@ -202,11 +202,11 @@ def show_home_page():
 
     ---
 
-    **Ready to start?** Click on **1️⃣ Employee Census** in the sidebar to begin!
+    **Ready to start?** Click on **1️⃣ Employee census** in the sidebar to begin!
     """)
 
     # Show database connection status
-    st.markdown("### System Status")
+    st.markdown("### System status")
     col1, col2 = st.columns(2)
 
     with col1:

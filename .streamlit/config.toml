@@ -1,10 +1,14 @@
 [theme]
 base = "light"
-primaryColor = "#1f77b4"
+primaryColor = "#0D7377"
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
-font = "DM Sans"
+secondaryBackgroundColor = "#f5f0e8"
+textColor = "#2C2C2C"
+
+# DM Sans from Google Fonts (with fallback)
+font = "'DM Sans':https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "'DM Sans':https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;600;700&display=swap, sans-serif"
+codeFont = "'Space Mono':https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap, monospace"
 
 [server]
 headless = true
