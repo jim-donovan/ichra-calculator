@@ -35,7 +35,7 @@ st.markdown("Compare current group plan costs to 100% LCSP (Lowest Cost Silver P
 
 # Check for census data
 if 'census_df' not in st.session_state or st.session_state.census_df is None:
-    st.warning("⚠️ No census data loaded. Please upload a census on **1️⃣ Census Input** first.")
+    st.warning("⚠️ No census data loaded. Please upload a census on **1️⃣ Census input** first.")
     st.stop()
 
 census_df = st.session_state.census_df
@@ -45,8 +45,8 @@ if 'db' not in st.session_state:
     st.session_state.db = get_database_connection()
 db = st.session_state.db
 
-# Initialize financial summary state
-if 'financial_summary' not in st.session_state:
+# Initialize financial summary state (handle both missing key and None value)
+if 'financial_summary' not in st.session_state or st.session_state.financial_summary is None:
     st.session_state.financial_summary = {
         'renewal_monthly': None,
         'results': {}
@@ -65,15 +65,15 @@ state_counts = FinancialSummaryCalculator.get_state_employee_counts(census_df)
 
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Employees", len(census_df))
-col2.metric("Covered Lives", total_lives)
+col2.metric("Covered lives", total_lives)
 col3.metric("States", len(state_counts))
 col4.metric(
-    "Employees w/ Data",
+    "Employees w/ data",
     current_totals['employees_with_data'],
     help="Employees with current premium data"
 )
 col5.metric(
-    "Current Total/mo",
+    "Current total/mo",
     f"${current_totals['total_premium_monthly']:,.0f}",
     help="Total monthly premium (EE + ER combined)"
 )
@@ -81,15 +81,15 @@ col5.metric(
 # Show breakdown
 with st.expander("View current cost breakdown"):
     bk_col1, bk_col2, bk_col3 = st.columns(3)
-    bk_col1.metric("ER Monthly", f"${current_totals['total_er_monthly']:,.0f}")
-    bk_col2.metric("EE Monthly", f"${current_totals['total_ee_monthly']:,.0f}")
-    bk_col3.metric("Total Monthly", f"${current_totals['total_premium_monthly']:,.0f}")
+    bk_col1.metric("ER monthly", f"${current_totals['total_er_monthly']:,.0f}")
+    bk_col2.metric("EE monthly", f"${current_totals['total_ee_monthly']:,.0f}")
+    bk_col3.metric("Total monthly", f"${current_totals['total_premium_monthly']:,.0f}")
 
     st.caption("Annual totals:")
     ann_col1, ann_col2, ann_col3 = st.columns(3)
-    ann_col1.metric("ER Annual", f"${current_totals['total_er_annual']:,.0f}")
-    ann_col2.metric("EE Annual", f"${current_totals['total_ee_annual']:,.0f}")
-    ann_col3.metric("Total Annual", f"${current_totals['total_premium_annual']:,.0f}")
+    ann_col1.metric("ER annual", f"${current_totals['total_er_annual']:,.0f}")
+    ann_col2.metric("EE annual", f"${current_totals['total_ee_annual']:,.0f}")
+    ann_col3.metric("Total annual", f"${current_totals['total_premium_annual']:,.0f}")
 
 st.markdown("---")
 
@@ -111,7 +111,7 @@ if has_csv_projected:
 
     with renewal_col1:
         st.metric(
-            "From Census Data",
+            "From census data",
             f"${projected_2026_data['total_monthly']:,.0f}/mo",
             help="Sum of '2026 Premium' column from uploaded census"
         )
@@ -122,7 +122,7 @@ if has_csv_projected:
         if current_total > 0:
             increase_pct = ((projected_2026_data['total_monthly'] - current_total) / current_total * 100)
             st.metric(
-                "vs Current Premium",
+                "vs current premium",
                 f"${projected_2026_data['total_monthly'] - current_total:+,.0f}/mo",
                 f"{increase_pct:+.1f}% increase",
                 delta_color="inverse"
@@ -241,7 +241,7 @@ if results and 'total_monthly' in results:
     vs_renewal_pct = (vs_renewal_monthly / renewal_monthly * 100) if renewal_monthly > 0 else 0
 
     # Comparison table
-    st.markdown("### Cost Comparison")
+    st.markdown("### Cost comparison")
 
     comp_col1, comp_col2, comp_col3 = st.columns(3)
 
@@ -252,10 +252,10 @@ if results and 'total_monthly' in results:
     with comp_col2:
         if has_renewal:
             source_label = "(from census)" if renewal_source == 'census' else "(manual)"
-            st.metric(f"2026 Renewal {source_label}", f"${renewal_monthly:,.0f}/mo")
+            st.metric(f"2026 renewal {source_label}", f"${renewal_monthly:,.0f}/mo")
             st.caption(f"${renewal_annual:,.0f}/year")
         else:
-            st.metric("2026 Renewal", "Not Set")
+            st.metric("2026 renewal", "Not set")
             st.caption("Set renewal amount above")
 
     with comp_col3:
@@ -270,7 +270,7 @@ if results and 'total_monthly' in results:
     with var_col1:
         if vs_current_monthly >= 0:
             st.metric(
-                "LCSP Savings vs Current",
+                "LCSP savings vs current",
                 f"${vs_current_monthly:,.0f}/mo",
                 f"{vs_current_pct:.1f}%",
                 delta_color="normal",
@@ -278,7 +278,7 @@ if results and 'total_monthly' in results:
             )
         else:
             st.metric(
-                "LCSP Increase vs Current",
+                "LCSP increase vs current",
                 f"+${abs(vs_current_monthly):,.0f}/mo",
                 f"{abs(vs_current_pct):.1f}% more",
                 delta_color="inverse",
@@ -289,7 +289,7 @@ if results and 'total_monthly' in results:
         if has_renewal:
             if vs_renewal_monthly >= 0:
                 st.metric(
-                    "LCSP Savings vs 2026 Renewal",
+                    "LCSP savings vs 2026 renewal",
                     f"${vs_renewal_monthly:,.0f}/mo",
                     f"{vs_renewal_pct:.1f}%",
                     delta_color="normal",
@@ -297,7 +297,7 @@ if results and 'total_monthly' in results:
                 )
             else:
                 st.metric(
-                    "LCSP Increase vs 2026 Renewal",
+                    "LCSP increase vs 2026 renewal",
                     f"+${abs(vs_renewal_monthly):,.0f}/mo",
                     f"{abs(vs_renewal_pct):.1f}% more",
                     delta_color="inverse",
@@ -318,7 +318,7 @@ if results and 'total_monthly' in results:
                 )
 
     # Detailed comparison table
-    st.markdown("### Detailed Variance Analysis")
+    st.markdown("### Detailed variance analysis")
 
     metal_level = results.get('metal_level', 'Selected')
     table_data = {
@@ -522,11 +522,11 @@ if results and 'total_monthly' in results:
 
                 fig.update_layout(
                     title=dict(
-                        text="Average Monthly Savings: 2026 Renewal vs LCSP",
+                        text="Average monthly savings: 2026 renewal vs LCSP",
                         font=dict(size=16)
                     ),
-                    xaxis_title="Family Status",
-                    yaxis_title="Employee Age Band",
+                    xaxis_title="Family status",
+                    yaxis_title="Employee age band",
                     height=450,
                     yaxis=dict(autorange='reversed'),  # Youngest at top
                     margin=dict(l=80, r=40, t=60, b=60)
@@ -544,15 +544,15 @@ if results and 'total_monthly' in results:
                 total_emp = len(detail_df)
 
                 with stats_col1:
-                    st.metric("Employees with Savings", f"{emp_with_savings}", f"{emp_with_savings/total_emp*100:.0f}%")
+                    st.metric("Employees with savings", f"{emp_with_savings}", f"{emp_with_savings/total_emp*100:.0f}%")
                 with stats_col2:
-                    st.metric("Employees with Increase", f"{emp_with_increase}", f"{emp_with_increase/total_emp*100:.0f}%")
+                    st.metric("Employees with increase", f"{emp_with_increase}", f"{emp_with_increase/total_emp*100:.0f}%")
                 with stats_col3:
                     avg_savings = detail_df['savings'].mean()
                     if avg_savings >= 0:
-                        st.metric("Avg Savings/Employee", f"${avg_savings:,.0f}/mo")
+                        st.metric("Avg savings/employee", f"${avg_savings:,.0f}/mo")
                     else:
-                        st.metric("Avg Increase/Employee", f"${abs(avg_savings):,.0f}/mo")
+                        st.metric("Avg increase/employee", f"${abs(avg_savings):,.0f}/mo")
                 with stats_col4:
                     max_savings = detail_df['savings'].max()
                     max_increase = detail_df['savings'].min()
@@ -592,7 +592,7 @@ if results and 'total_monthly' in results:
             )])
 
             fig_donut.update_layout(
-                title=dict(text="Employee Impact Distribution", font=dict(size=16)),
+                title=dict(text="Employee impact distribution", font=dict(size=16)),
                 height=350,
                 showlegend=False,
                 annotations=[dict(
@@ -646,23 +646,23 @@ if results and 'total_monthly' in results:
 
             with net_col1:
                 if net_savings >= 0:
-                    st.metric("Net Monthly Impact", f"${net_savings:,.0f} savings", f"${net_savings * 12:,.0f}/year")
+                    st.metric("Net monthly impact", f"${net_savings:,.0f} savings", f"${net_savings * 12:,.0f}/year")
                 else:
-                    st.metric("Net Monthly Impact", f"-${abs(net_savings):,.0f} increase", f"-${abs(net_savings) * 12:,.0f}/year")
+                    st.metric("Net monthly impact", f"-${abs(net_savings):,.0f} increase", f"-${abs(net_savings) * 12:,.0f}/year")
 
             with net_col2:
                 favorable_pct = (n_saves + n_breakeven) / total_emp * 100
-                st.metric("Favorable Outcomes", f"{n_saves + n_breakeven} employees", f"{favorable_pct:.0f}% of workforce")
+                st.metric("Favorable outcomes", f"{n_saves + n_breakeven} employees", f"{favorable_pct:.0f}% of workforce")
 
             with net_col3:
                 if n_pays_more > 0:
                     max_increase = abs(pays_more['savings'].min())
-                    st.metric("Max Individual Increase", f"${max_increase:,.0f}/mo", "Consider mitigation strategy")
+                    st.metric("Max individual increase", f"${max_increase:,.0f}/mo", "Consider mitigation strategy")
                 else:
-                    st.metric("Max Individual Increase", "$0/mo", "No employees pay more")
+                    st.metric("Max individual increase", "$0/mo", "No employees pay more")
 
             # Breakdown by family status
-            st.markdown("#### Impact by Family Status")
+            st.markdown("#### Impact by family status")
             status_labels = {'EE': 'Employee Only', 'ES': 'EE + Spouse', 'EC': 'EE + Child(ren)', 'F': 'Family'}
 
             status_summary = []
@@ -689,7 +689,7 @@ if results and 'total_monthly' in results:
 
     # Errors/warnings
     if results.get('errors'):
-        with st.expander(f"⚠️ Calculation Warnings ({len(results['errors'])} issues)"):
+        with st.expander(f"⚠️ Calculation warnings ({len(results['errors'])} issues)"):
             for error in results['errors'][:20]:
                 st.text(error)
             if len(results['errors']) > 20:
@@ -740,7 +740,7 @@ if results and 'total_monthly' in results:
 
         csv_data = detail_df.to_csv(index=False)
         st.download_button(
-            label="📥 Download Full Silver LCSP Detail CSV",
+            label="📥 Download full Silver LCSP detail CSV",
             data=csv_data,
             file_name="lcsp_silver_detail.csv",
             mime="text/csv",
@@ -751,7 +751,7 @@ if results and 'total_monthly' in results:
     # BOTTOM LINE SUMMARY
     # ==========================================================================
     st.markdown("---")
-    st.markdown("## 📌 Bottom Line")
+    st.markdown("## 📌 Bottom line")
 
     # Determine primary comparison (renewal if available, otherwise current)
     if has_renewal:

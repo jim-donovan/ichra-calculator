@@ -87,15 +87,15 @@ if 'send_email_enabled' not in st.session_state:
     st.session_state.send_email_enabled = False
 
 # Page header
-st.title("📑 Proposal Generator")
+st.title("📑 Proposal generator")
 st.markdown("Generate a branded GLOVE ICHRA proposal PowerPoint presentation")
 
 # Note: PPTX template check is done at generation time (PDF doesn't need template)
 
 # Check prerequisites
 if st.session_state.census_df is None or st.session_state.census_df.empty:
-    st.warning("⚠️ No census data loaded. Please complete **Census Input** first.")
-    st.info("👉 Go to **1️⃣ Census Input** in the sidebar to upload your census")
+    st.warning("⚠️ No census data loaded. Please complete **Census input** first.")
+    st.info("👉 Go to **1️⃣ Census input** in the sidebar to upload your census")
     st.stop()
 
 census_df = st.session_state.census_df
@@ -118,13 +118,13 @@ st.markdown("---")
 # =============================================================================
 # SECTION 1: CLIENT INFORMATION (Editable)
 # =============================================================================
-st.subheader("📋 Client Information")
+st.subheader("📋 Client information")
 
 col1, col2 = st.columns(2)
 
 with col1:
     client_name = st.text_input(
-        "Client/Company Name",
+        "Client/company name",
         value=st.session_state.get('proposal_client_name', 'ABC Company'),
         help="This will appear on the cover slide",
         key="client_name_input"
@@ -132,7 +132,7 @@ with col1:
     st.session_state.proposal_client_name = client_name
 
     consultant_name = st.text_input(
-        "Consultant Name",
+        "Consultant name",
         value=st.session_state.get('proposal_consultant_name', 'Your Name'),
         key="consultant_name_input"
     )
@@ -140,13 +140,13 @@ with col1:
 
 with col2:
     proposal_date = st.date_input(
-        "Proposal Date",
+        "Proposal date",
         value=datetime.now(),
         key="proposal_date_input"
     )
 
     plan_year = st.selectbox(
-        "Plan Year",
+        "Plan year",
         options=[2026, 2027],
         index=0,
         key="plan_year_input"
@@ -156,7 +156,7 @@ with col2:
 # SECTION 2: FIT SCORE CALCULATION
 # =============================================================================
 st.markdown("---")
-st.subheader("🎯 GLOVE ICHRA Fit Score")
+st.subheader("🎯 GLOVE ICHRA fit score")
 
 # Calculate Fit Score
 calculator = FitScoreCalculator(
@@ -170,10 +170,10 @@ calculator = FitScoreCalculator(
 calculated_score, category_scores = calculator.calculate()
 
 # Allow manual override
-use_override = st.checkbox("Override calculated Fit Score", value=False)
+use_override = st.checkbox("Override calculated fit score", value=False)
 if use_override:
     fit_score = st.slider(
-        "Manual Fit Score",
+        "Manual fit score",
         min_value=0,
         max_value=100,
         value=calculated_score,
@@ -189,13 +189,13 @@ with score_col1:
     # Score color based on value
     if fit_score >= 70:
         score_color = "#16a34a"  # Green
-        score_label = "Strong Fit"
+        score_label = "Strong fit"
     elif fit_score >= 50:
         score_color = "#f59e0b"  # Amber
-        score_label = "Moderate Fit"
+        score_label = "Moderate fit"
     else:
         score_color = "#dc2626"  # Red
-        score_label = "Needs Review"
+        score_label = "Needs review"
 
     st.markdown(f"""
     <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #f8fafc, #e2e8f0); border-radius: 12px; border: 2px solid {score_color};">
@@ -205,7 +205,7 @@ with score_col1:
     """, unsafe_allow_html=True)
 
 with score_col2:
-    st.markdown("**Category Breakdown:**")
+    st.markdown("**Category breakdown:**")
 
     category_labels = {
         'cost_advantage': 'Cost Advantage',
@@ -233,7 +233,7 @@ with score_col2:
 # SECTION 3: PROPOSAL DATA PREVIEW (Editable)
 # =============================================================================
 st.markdown("---")
-st.subheader("📊 Proposal Data Preview")
+st.subheader("📊 Proposal data preview")
 
 # Build ProposalData from session state
 proposal_data = ProposalData.from_session_state(st.session_state)
@@ -247,7 +247,7 @@ with st.expander("📌 Cover & Overview (Slides 1-2)", expanded=True):
 
     with cov_col1:
         renewal_pct = st.number_input(
-            "Renewal Increase %",
+            "Renewal increase %",
             value=float(proposal_data.renewal_percentage) if proposal_data.renewal_percentage else 0.0,
             min_value=-50.0,
             max_value=200.0,
@@ -258,7 +258,7 @@ with st.expander("📌 Cover & Overview (Slides 1-2)", expanded=True):
 
     with cov_col2:
         total_renewal = st.number_input(
-            "Total Renewal Cost ($)",
+            "Total renewal cost ($)",
             value=float(proposal_data.total_renewal_cost) if proposal_data.total_renewal_cost else 0.0,
             min_value=0.0,
             format="%.0f",
@@ -273,24 +273,24 @@ with st.expander("📌 Cover & Overview (Slides 1-2)", expanded=True):
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
     with metric_col1:
-        st.metric("Covered Lives", proposal_data.covered_lives)
+        st.metric("Covered lives", proposal_data.covered_lives)
     with metric_col2:
-        st.metric("Avg Monthly Premium", f"${proposal_data.avg_monthly_premium:,.0f}")
+        st.metric("Avg monthly premium", f"${proposal_data.avg_monthly_premium:,.0f}")
     with metric_col3:
         st.metric("States", proposal_data.total_states)
 
-with st.expander("📈 Cost Burden (Slide 5)", expanded=False):
+with st.expander("📈 Cost burden (slide 5)", expanded=False):
     burden_col1, burden_col2, burden_col3 = st.columns(3)
 
     with burden_col1:
         st.metric("Employees", proposal_data.employee_count)
 
     with burden_col2:
-        st.metric("Total Annual Salaries", f"${proposal_data.total_annual_salaries:,.0f}")
+        st.metric("Total annual salaries", f"${proposal_data.total_annual_salaries:,.0f}")
 
     with burden_col3:
         healthcare_burden = st.number_input(
-            "Healthcare Burden ($)",
+            "Healthcare burden ($)",
             value=float(proposal_data.additional_healthcare_burden),
             min_value=0.0,
             format="%.0f",
@@ -303,8 +303,8 @@ with st.expander("📈 Cost Burden (Slide 5)", expanded=False):
     else:
         st.caption("Add 'Monthly Income' column to census to auto-calculate healthcare burden from salaries.")
 
-with st.expander("🗺️ Geographic Distribution (Slide 8)", expanded=False):
-    st.markdown("**Top States by Employee Count:**")
+with st.expander("🗺️ Geographic distribution (slide 8)", expanded=False):
+    st.markdown("**Top states by employee count:**")
 
     if proposal_data.top_states:
         top_states_df = pd.DataFrame(proposal_data.top_states)
@@ -321,21 +321,21 @@ with st.expander("🗺️ Geographic Distribution (Slide 8)", expanded=False):
     else:
         st.info("No geographic data available from census")
 
-with st.expander("👥 Census Demographics (Slide 9)", expanded=False):
+with st.expander("👥 Census demographics (slide 9)", expanded=False):
     demo_col1, demo_col2 = st.columns(2)
 
     with demo_col1:
-        st.markdown("**Population Overview:**")
-        st.metric("Covered Lives", proposal_data.covered_lives)
+        st.markdown("**Population overview:**")
+        st.metric("Covered lives", proposal_data.covered_lives)
         st.metric("Employees", proposal_data.total_employees)
         st.metric("Dependents", proposal_data.total_dependents)
 
-        st.markdown("**Age Statistics:**")
-        st.text(f"Average Age: {proposal_data.avg_employee_age:.1f}")
-        st.text(f"Age Range: {proposal_data.age_range_min} - {proposal_data.age_range_max}")
+        st.markdown("**Age statistics:**")
+        st.text(f"Average age: {proposal_data.avg_employee_age:.1f}")
+        st.text(f"Age range: {proposal_data.age_range_min} - {proposal_data.age_range_max}")
 
     with demo_col2:
-        st.markdown("**Family Status Breakdown:**")
+        st.markdown("**Family status breakdown:**")
         for code, count in proposal_data.family_status_breakdown.items():
             desc = FAMILY_STATUS_CODES.get(code, code)
             pct = (count / proposal_data.total_employees * 100) if proposal_data.total_employees > 0 else 0
@@ -345,14 +345,14 @@ with st.expander("👥 Census Demographics (Slide 9)", expanded=False):
         st.text(f"Spouses: {proposal_data.total_spouses}")
         st.text(f"Children: {proposal_data.total_children}")
 
-with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
+with st.expander("💰 Cost analysis (slides 9-10)", expanded=False):
     cost_col1, cost_col2 = st.columns(2)
 
     with cost_col1:
-        st.markdown("**Current Group Plan Costs (2025):**")
+        st.markdown("**Current group plan costs (2025):**")
 
         current_er_monthly = st.number_input(
-            "Current ER Monthly Total",
+            "Current ER monthly total",
             value=float(proposal_data.current_er_monthly),
             min_value=0.0,
             format="%.2f"
@@ -361,7 +361,7 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
         proposal_data.current_er_annual = current_er_monthly * 12
 
         current_ee_monthly = st.number_input(
-            "Current EE Monthly Total",
+            "Current EE monthly total",
             value=float(proposal_data.current_ee_monthly),
             min_value=0.0,
             format="%.2f"
@@ -376,16 +376,16 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
             proposal_data.ee_contribution_pct = current_ee_monthly / current_total_monthly
 
         st.metric(
-            "Current Total Annual",
+            "Current total annual",
             f"${(proposal_data.current_er_annual + proposal_data.current_ee_annual):,.0f}"
         )
         st.caption(f"ER share: {proposal_data.er_contribution_pct*100:.1f}%")
 
     with cost_col2:
-        st.markdown("**Proposed ICHRA Costs:**")
+        st.markdown("**Proposed ICHRA costs:**")
 
         proposed_er_monthly = st.number_input(
-            "Proposed ER Monthly",
+            "Proposed ER monthly",
             value=float(proposal_data.proposed_er_monthly),
             min_value=0.0,
             format="%.2f"
@@ -393,7 +393,7 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
         proposal_data.proposed_er_monthly = proposed_er_monthly
         proposal_data.proposed_er_annual = proposed_er_monthly * 12
 
-        st.metric("Proposed ER Annual", f"${proposal_data.proposed_er_annual:,.0f}")
+        st.metric("Proposed ER annual", f"${proposal_data.proposed_er_annual:,.0f}")
 
         # Recalculate projected renewal ER
         if proposal_data.renewal_monthly > 0:
@@ -416,7 +416,7 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
 
     # Show all three comparisons clearly
     st.markdown("---")
-    st.markdown("**EMPLOYER COST COMPARISON:**")
+    st.markdown("**Employer cost comparison:**")
 
     compare_cols = st.columns(3)
 
@@ -452,7 +452,7 @@ with st.expander("💰 Cost Analysis (Slides 9-10)", expanded=False):
         else:
             st.warning(f"Costs ${abs(proposal_data.savings_vs_renewal_er):,.0f} more")
 
-with st.expander("📊 ICHRA Evaluation Workflow (Slide 13 - Final)", expanded=False):
+with st.expander("📊 ICHRA evaluation workflow (slide 13 - final)", expanded=False):
     st.caption("This slide is appended at the end of the presentation")
 
     workflow_col1, workflow_col2, workflow_col3 = st.columns(3)
@@ -483,13 +483,13 @@ with st.expander("📊 ICHRA Evaluation Workflow (Slide 13 - Final)", expanded=F
 # SECTION 4: GENERATE PROPOSAL
 # =============================================================================
 st.markdown("---")
-st.subheader("🎨 Generate Proposal")
+st.subheader("🎨 Generate proposal")
 
 # Note: Healthcare burden is calculated as 30% of total annual salaries
 # in ProposalData.from_session_state() - we preserve that calculation here
 
 # Summary before generation
-st.markdown("**Proposal Summary:**")
+st.markdown("**Proposal summary:**")
 summary_col1, summary_col2, summary_col3 = st.columns(3)
 
 with summary_col1:
@@ -510,7 +510,7 @@ with summary_col3:
 st.markdown("---")
 
 # Format selection
-st.markdown("**Export Format:**")
+st.markdown("**Export format:**")
 export_format = st.radio(
     "Choose format",
     options=["PDF (Recommended)", "PowerPoint"],
@@ -523,7 +523,7 @@ export_format = st.radio(
 # EMAIL DELIVERY SECTION
 # =============================================================================
 st.markdown("---")
-st.subheader("📧 Email Delivery (Optional)")
+st.subheader("📧 Email delivery (optional)")
 
 # Check if email service is configured
 email_service = EmailService()
@@ -553,7 +553,7 @@ else:
 
         with email_col1:
             recipient_email = st.text_input(
-                "Recipient Email Address",
+                "Recipient email address",
                 value=st.session_state.recipient_email,
                 placeholder="client@example.com",
                 help="Enter the email address to send the proposal to",
@@ -601,13 +601,13 @@ with generate_col1:
         errors, warnings = proposal_data.validate()
 
         if errors:
-            st.error("**Validation Errors - Cannot generate proposal:**")
+            st.error("**Validation errors - cannot generate proposal:**")
             for error in errors:
                 st.error(f"• {error}")
             st.stop()
 
         if warnings:
-            st.warning("**Data Warnings (proposal will still generate):**")
+            st.warning("**Data warnings (proposal will still generate):**")
             for warning in warnings:
                 st.warning(f"• {warning}")
 
@@ -709,7 +709,7 @@ if st.session_state.email_result is not None:
 
         # Retry button (shown inline with error status)
         if st.session_state.proposal_buffer is not None and is_email_configured:
-            if st.button("🔄 Retry Email", type="secondary"):
+            if st.button("🔄 Retry email", type="secondary"):
                 with st.spinner("Retrying email..."):
                     file_data = st.session_state.proposal_buffer.getvalue()
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

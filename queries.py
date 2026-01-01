@@ -627,6 +627,235 @@ WHERE
         logging.info(f"LCSP BATCH: Total batch time: {time.time() - batch_start:.2f}s")
         return result
 
+    @staticmethod
+    def get_lowest_cost_plan_by_rating_area(db: DatabaseConnection, state_code: str,
+                                             rating_area_id: int, age_band: str,
+                                             metal_level: str = 'Silver') -> pd.DataFrame:
+        """
+        Get the Lowest Cost Plan for a specific metal level, rating area, and age band.
+
+        Generalizes get_lcsp_by_rating_area() to support Bronze, Silver, or Gold.
+        For Silver, this returns the LCSP (Lowest Cost Silver Plan) used for IRS affordability.
+        For Bronze/Gold, returns the lowest cost plan at that metal level.
+
+        Args:
+            db: Database connection
+            state_code: Two-letter state code (e.g., 'CA', 'NY')
+            rating_area_id: Rating area as integer (e.g., 1, 2, 3)
+            age_band: Age band string (e.g., "0-14", "35", "64 and over", "Family-Tier Rates")
+            metal_level: Metal tier - 'Bronze', 'Silver', or 'Gold' (default: 'Silver')
+
+        Returns:
+            DataFrame with columns: hios_plan_id, plan_name, state_code,
+                                   rating_area_id, age, premium, metal_level
+            Returns single row (the lowest cost plan) or empty if no plans found.
+        """
+        query = """
+        SELECT
+            p.hios_plan_id,
+            p.plan_marketing_name as plan_name,
+            SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
+            CASE
+                WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                ELSE NULL
+            END AS rating_area_id,
+            br.age,
+            br.individual_rate as premium,
+            p.level_of_coverage as metal_level
+        FROM rbis_insurance_plan_base_rates_20251019202724 br
+        JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
+        JOIN rbis_insurance_plan_variant_20251019202724 v ON p.hios_plan_id = v.hios_plan_id
+        WHERE p.level_of_coverage = %s
+            AND p.market_coverage = 'Individual'
+            AND v.csr_variation_type = 'Exchange variant (no CSR)'
+            AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
+            AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+            AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
+            AND br.age = %s
+            AND br.rate_effective_date = '2026-01-01'
+            AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)
+        ORDER BY br.individual_rate ASC
+        LIMIT 1
+        """
+        return db.execute_query(query, (metal_level, state_code, rating_area_id, age_band))
+
+    @staticmethod
+    def get_lowest_cost_plans_batch(db: DatabaseConnection,
+                                     employee_locations: list,
+                                     metal_level: str = 'Silver') -> pd.DataFrame:
+        """
+        Get lowest cost plan for multiple (state, rating_area, age_band) combinations in one query.
+
+        Generalizes get_lcsp_for_employees_batch() to support Bronze, Silver, or Gold.
+        More efficient than calling get_lowest_cost_plan_by_rating_area() multiple times.
+
+        Args:
+            db: Database connection
+            employee_locations: List of dicts with keys: state_code, rating_area_id, age_band
+                               e.g., [{'state_code': 'CA', 'rating_area_id': 1, 'age_band': '35'}, ...]
+            metal_level: Metal tier - 'Bronze', 'Silver', or 'Gold' (default: 'Silver')
+
+        Returns:
+            DataFrame with columns: hios_plan_id, plan_name, state_code,
+                                   rating_area_id, age_band, premium, metal_level
+        """
+        import logging
+        import time
+        logging.info(f"LCP BATCH [{metal_level}]: Called with {len(employee_locations)} locations")
+        batch_start = time.time()
+
+        if not employee_locations:
+            return pd.DataFrame()
+
+        # Deduplicate combinations
+        unique_combos = []
+        seen = set()
+        for loc in employee_locations:
+            key = (loc['state_code'], loc['rating_area_id'], loc['age_band'])
+            if key not in seen:
+                seen.add(key)
+                unique_combos.append(loc)
+
+        logging.info(f"LCP BATCH [{metal_level}]: {len(unique_combos)} unique combinations after dedup")
+
+        if not unique_combos:
+            return pd.DataFrame()
+
+        # Build UNION ALL query for each unique combination
+        union_queries = []
+        params = []
+
+        for combo in unique_combos:
+            union_queries.append("""
+            (SELECT
+                p.hios_plan_id,
+                p.plan_marketing_name as plan_name,
+                SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
+                CASE
+                    WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                    ELSE NULL
+                END AS rating_area_id,
+                br.age as age_band,
+                br.individual_rate as premium,
+                p.level_of_coverage as metal_level
+            FROM rbis_insurance_plan_base_rates_20251019202724 br
+            JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
+            JOIN rbis_insurance_plan_variant_20251019202724 v ON p.hios_plan_id = v.hios_plan_id
+            WHERE p.level_of_coverage = %s
+                AND p.market_coverage = 'Individual'
+                AND v.csr_variation_type = 'Exchange variant (no CSR)'
+                AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
+                AND br.age = %s
+                AND br.rate_effective_date = '2026-01-01'
+                AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)
+            ORDER BY br.individual_rate ASC
+            LIMIT 1)
+            """)
+            params.extend([metal_level, combo['state_code'], combo['rating_area_id'], combo['age_band']])
+
+        query = "\nUNION ALL\n".join(union_queries)
+        logging.info(f"LCP BATCH [{metal_level}]: Executing query with {len(unique_combos)} UNION ALLs...")
+        query_start = time.time()
+        result = db.execute_query(query, tuple(params))
+        logging.info(f"LCP BATCH [{metal_level}]: Query completed in {time.time() - query_start:.2f}s, returned {len(result)} rows")
+        logging.info(f"LCP BATCH [{metal_level}]: Total batch time: {time.time() - batch_start:.2f}s")
+        return result
+
+    @staticmethod
+    def get_lowest_cost_plans_all_metals_batch(db: DatabaseConnection,
+                                                employee_locations: list,
+                                                metal_levels: list = None) -> pd.DataFrame:
+        """
+        Get lowest cost plans for ALL metal levels in a single efficient query.
+
+        Fetches Bronze, Silver, and Gold lowest-cost plans for all employee locations
+        in one database round-trip using a combined UNION ALL query.
+
+        Args:
+            db: Database connection
+            employee_locations: List of dicts with keys: state_code, rating_area_id, age_band
+            metal_levels: List of metal levels to query (default: ['Bronze', 'Silver', 'Gold'])
+
+        Returns:
+            DataFrame with columns: hios_plan_id, plan_name, state_code,
+                                   rating_area_id, age_band, premium, metal_level
+            Contains one row per (location, metal_level) combination.
+        """
+        import logging
+        import time
+
+        if metal_levels is None:
+            metal_levels = ['Bronze', 'Silver', 'Gold']
+
+        logging.info(f"LCP ALL METALS BATCH: Called with {len(employee_locations)} locations, metals: {metal_levels}")
+        batch_start = time.time()
+
+        if not employee_locations:
+            return pd.DataFrame()
+
+        # Deduplicate combinations
+        unique_combos = []
+        seen = set()
+        for loc in employee_locations:
+            key = (loc['state_code'], loc['rating_area_id'], loc['age_band'])
+            if key not in seen:
+                seen.add(key)
+                unique_combos.append(loc)
+
+        logging.info(f"LCP ALL METALS BATCH: {len(unique_combos)} unique location combinations")
+
+        if not unique_combos:
+            return pd.DataFrame()
+
+        # Build UNION ALL query for each (location, metal_level) combination
+        union_queries = []
+        params = []
+
+        for combo in unique_combos:
+            for metal in metal_levels:
+                union_queries.append("""
+                (SELECT
+                    p.hios_plan_id,
+                    p.plan_marketing_name as plan_name,
+                    SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
+                    CASE
+                        WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                        THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                        ELSE NULL
+                    END AS rating_area_id,
+                    br.age as age_band,
+                    br.individual_rate as premium,
+                    p.level_of_coverage as metal_level
+                FROM rbis_insurance_plan_base_rates_20251019202724 br
+                JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
+                JOIN rbis_insurance_plan_variant_20251019202724 v ON p.hios_plan_id = v.hios_plan_id
+                WHERE p.level_of_coverage = %s
+                    AND p.market_coverage = 'Individual'
+                    AND v.csr_variation_type = 'Exchange variant (no CSR)'
+                    AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                    AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
+                    AND br.age = %s
+                    AND br.rate_effective_date = '2026-01-01'
+                    AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)
+                ORDER BY br.individual_rate ASC
+                LIMIT 1)
+                """)
+                params.extend([metal, combo['state_code'], combo['rating_area_id'], combo['age_band']])
+
+        query = "\nUNION ALL\n".join(union_queries)
+        total_queries = len(unique_combos) * len(metal_levels)
+        logging.info(f"LCP ALL METALS BATCH: Executing query with {total_queries} UNION ALLs ({len(unique_combos)} locations x {len(metal_levels)} metals)...")
+        query_start = time.time()
+        result = db.execute_query(query, tuple(params))
+        logging.info(f"LCP ALL METALS BATCH: Query completed in {time.time() - query_start:.2f}s, returned {len(result)} rows")
+        logging.info(f"LCP ALL METALS BATCH: Total batch time: {time.time() - batch_start:.2f}s")
+        return result
+
 
 class ComprehensivePlanQueries:
     """SQL queries for comprehensive plan data retrieval"""

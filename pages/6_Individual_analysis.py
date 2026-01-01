@@ -637,13 +637,46 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
 
     # Employee details
     with st.expander("👤 Employee details", expanded=True):
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Age", age)
-        col2.metric("State", state)
-        col3.metric("City", city if city != 'N/A' else "—")
-        col4.metric("County", county if county != 'N/A' else "—")
-        col5.metric("ZIP", zip_code if zip_code != 'N/A' else "—")
-        col6.metric("Rating Area", rating_area)
+        col2.metric("County", county if county != 'N/A' else "—")
+        col3.metric("State", state)
+        col4.metric("ZIP", zip_code if zip_code != 'N/A' else "—")
+        col5.metric("Rating area", rating_area)
+
+        # Display dependents for ES, EC, or F family status
+        if family_status in ['ES', 'EC', 'F']:
+            dependents_list = []
+
+            # Get dependents from dependents_df (separate dataframe from census parsing)
+            emp_id = result.get('employee_id')
+            dependents_df = st.session_state.get('dependents_df')
+
+            if dependents_df is not None and not dependents_df.empty and emp_id:
+                # Filter dependents for this employee
+                emp_deps = dependents_df[dependents_df['employee_id'].astype(str) == str(emp_id)]
+
+                # Spouse
+                spouse_deps = emp_deps[emp_deps['relationship'] == 'spouse']
+                if not spouse_deps.empty:
+                    spouse_age = spouse_deps.iloc[0].get('age')
+                    if spouse_age is not None and not pd.isna(spouse_age):
+                        dependents_list.append(f"**Spouse (S):** Age {int(spouse_age)}")
+
+                # Children
+                child_deps = emp_deps[emp_deps['relationship'] == 'child']
+                if not child_deps.empty:
+                    child_ages = [int(row['age']) for _, row in child_deps.iterrows() if pd.notna(row.get('age'))]
+                    if child_ages:
+                        child_ages.sort(reverse=True)  # Oldest first
+                        children_str = ", ".join([f"Age {a}" for a in child_ages])
+                        dependents_list.append(f"**{'Child' if len(child_ages) == 1 else 'Children'} (C):** {children_str}")
+
+            if dependents_list:
+                st.markdown("---")
+                st.markdown("**Dependents:**")
+                for dep in dependents_list:
+                    st.markdown(dep)
 
     # Affordability status
     if 'affordability_analysis' in st.session_state and st.session_state.affordability_analysis:
@@ -768,7 +801,7 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
                 "Metal": comp['metal_level'],
                 "Type": comp.get('plan_type', 'N/A'),
                 "Premium": comp['marketplace_total_premium'],
-                "You Pay": comp['marketplace_employee_pays'],
+                "You pay": comp['marketplace_employee_pays'],
                 "Δ Monthly": comp['monthly_difference'],
                 "Δ Annual": comp['annual_difference'],
             })
@@ -780,12 +813,12 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
                 width='stretch',
                 hide_index=True,
                 column_config={
-                    "Plan": st.column_config.TextColumn("Plan Name", width="large"),
+                    "Plan": st.column_config.TextColumn("Plan name", width="large"),
                     "ID": st.column_config.TextColumn("Plan ID", width="medium"),
                     "Metal": st.column_config.TextColumn("Metal", width="small"),
                     "Type": st.column_config.TextColumn("Type", width="small"),
                     "Premium": st.column_config.TextColumn("Premium", width="small"),
-                    "You Pay": st.column_config.TextColumn("You Pay", width="small"),
+                    "You pay": st.column_config.TextColumn("You pay", width="small"),
                     "Δ Monthly": st.column_config.TextColumn("Monthly Δ", width="small"),
                     "Δ Annual": st.column_config.TextColumn("Annual Δ", width="small"),
                 }

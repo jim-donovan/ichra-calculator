@@ -51,9 +51,9 @@ col1, col2 = st.columns([2, 1])
 
 with col1:
     st.markdown("""
-    **Census Format Requirements:**
+    **Census format requirements:**
 
-    **Required Columns:**
+    **Required columns:**
     - **Employee Number** - Unique identifier for each employee
     - **Home Zip** - 5-digit ZIP code
     - **Home State** - 2-letter state code (e.g., NY, CA, PA)
@@ -64,11 +64,11 @@ with col1:
       - **F** = Family (Employee + Spouse + Children)
     - **EE DOB** - Employee date of birth (M/D/YY format)
 
-    **Optional Columns** (based on Family Status):
+    **Optional columns** (based on family status):
     - **Spouse DOB** - Required if Family Status = ES or F
     - **Dep 2 DOB** through **Dep 6 DOB** - Child dates of birth (required if Family Status = EC or F)
 
-    **Current Group Plan Contributions** (optional - for cost comparison):
+    **Current group plan contributions** (optional - for cost comparison):
     - **Current EE Monthly** - Employee's current monthly contribution (e.g., "$250" or "250")
     - **Current ER Monthly** - Employer's current monthly contribution for this employee
     - **2026 Premium** - Projected 2026 renewal premium for this employee (from carrier rate table)
@@ -81,7 +81,7 @@ with col2:
     template_csv = CensusProcessor.create_new_census_template()
 
     st.download_button(
-        label="📄 Download Template CSV",
+        label="📄 Download template CSV",
         data=template_csv,
         file_name="census_template.csv",
         mime="text/csv",
@@ -109,7 +109,7 @@ if st.session_state.census_df is not None:
         if st.session_state.dependents_df is not None and not st.session_state.dependents_df.empty:
             st.markdown(f"**Dependents:** {len(st.session_state.dependents_df)} dependents")
     with col_b:
-        if st.button("📤 Upload New Census", type="secondary"):
+        if st.button("📤 Upload new census", type="secondary"):
             st.session_state.census_df = None
             st.session_state.dependents_df = None
             st.session_state.contribution_analysis = {}
@@ -126,7 +126,7 @@ if st.session_state.census_df is not None:
     if ContributionComparison.has_individual_contributions(employees_df):
         contrib_totals = ContributionComparison.aggregate_contribution_totals(employees_df)
         st.info(f"""
-        **📊 Per-Employee Contribution Data Found:**
+        **📊 Per-employee contribution data found:**
         - Employees with data: **{contrib_totals['employees_with_data']}**
         - Total current EE contributions: **${contrib_totals['total_current_ee_monthly']:,.2f}/mo** (${contrib_totals['total_current_ee_annual']:,.2f}/yr)
         - Total current ER contributions: **${contrib_totals['total_current_er_monthly']:,.2f}/mo** (${contrib_totals['total_current_er_annual']:,.2f}/yr)
@@ -138,15 +138,15 @@ if st.session_state.census_df is not None:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Total Employees", len(employees_df))
+        st.metric("Total employees", len(employees_df))
 
     with col2:
         num_deps = len(dependents_df) if not dependents_df.empty else 0
-        st.metric("Total Dependents", num_deps)
+        st.metric("Total dependents", num_deps)
 
     with col3:
         total_lives = len(employees_df) + num_deps
-        st.metric("Covered Lives", total_lives)
+        st.metric("Covered lives", total_lives)
 
     with col4:
         unique_states = employees_df['state'].nunique()
@@ -161,12 +161,12 @@ if st.session_state.census_df is not None:
 
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f"**Total Employees:** {len(employees_df)}")
-            st.markdown(f"**Average Age:** {employees_df['age'].mean():.1f} years")
-            st.markdown(f"**Median Age:** {employees_df['age'].median():.1f} years")
+            st.markdown(f"**Total employees:** {len(employees_df)}")
+            st.markdown(f"**Average age:** {employees_df['age'].mean():.1f} years")
+            st.markdown(f"**Median age:** {employees_df['age'].median():.1f} years")
 
         with col2:
-            st.markdown("**Age Range:**")
+            st.markdown("**Age range:**")
             st.markdown(f"- Youngest: {employees_df['age'].min():.0f} years")
             st.markdown(f"- Oldest: {employees_df['age'].max():.0f} years")
 
@@ -179,11 +179,11 @@ if st.session_state.census_df is not None:
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**Count:** {len(ee_employees)} employees")
-                st.markdown(f"**Average Age:** {ee_employees['age'].mean():.1f} years")
-                st.markdown(f"**Median Age:** {ee_employees['age'].median():.1f} years")
+                st.markdown(f"**Average age:** {ee_employees['age'].mean():.1f} years")
+                st.markdown(f"**Median age:** {ee_employees['age'].median():.1f} years")
 
             with col2:
-                st.markdown("**Age Range:**")
+                st.markdown("**Age range:**")
                 st.markdown(f"- Youngest: {ee_employees['age'].min():.0f} years")
                 st.markdown(f"- Oldest: {ee_employees['age'].max():.0f} years")
 
@@ -208,22 +208,22 @@ if st.session_state.census_df is not None:
 
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown(f"**Total Dependents:** {len(dependents_df)}")
+                st.markdown(f"**Total dependents:** {len(dependents_df)}")
                 total_lives = len(employees_df) + len(dependents_df)
                 ratio = total_lives / len(employees_df)
-                st.markdown(f"**Coverage Burden:** {ratio:.2f}:1")
-                st.markdown(f"**Average Age:** {dependents_df['age'].mean():.1f} years")
-                st.markdown(f"**Median Age:** {dependents_df['age'].median():.1f} years")
+                st.markdown(f"**Coverage burden:** {ratio:.2f}:1")
+                st.markdown(f"**Average age:** {dependents_df['age'].mean():.1f} years")
+                st.markdown(f"**Median age:** {dependents_df['age'].median():.1f} years")
 
             with col2:
-                st.markdown("**Age Range:**")
+                st.markdown("**Age range:**")
                 st.markdown(f"- Youngest: {dependents_df['age'].min():.0f} years")
                 st.markdown(f"- Oldest: {dependents_df['age'].max():.0f} years")
 
             st.markdown("---")
             # Overall breakdown by relationship
             rel_counts = dependents_df['relationship'].value_counts()
-            st.markdown("**By Relationship:**")
+            st.markdown("**By relationship:**")
             for rel, count in rel_counts.items():
                 pct = (count / len(dependents_df)) * 100
                 st.markdown(f"- **{rel.title()}s:** {count} ({pct:.1f}%)")
@@ -242,15 +242,15 @@ if st.session_state.census_df is not None:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.markdown("**Overall Statistics:**")
-                    st.markdown(f"- Total Children: {len(children_df)}")
-                    st.markdown(f"- Families with Children: {len(employees_with_children)}")
+                    st.markdown("**Overall statistics:**")
+                    st.markdown(f"- Total children: {len(children_df)}")
+                    st.markdown(f"- Families with children: {len(employees_with_children)}")
                     if len(employees_with_children) > 0:
                         avg_children = len(children_df) / len(employees_with_children)
-                        st.markdown(f"- Avg Children per Family: {avg_children:.1f}")
+                        st.markdown(f"- Avg children per family: {avg_children:.1f}")
 
                 with col2:
-                    st.markdown("**Age Statistics:**")
+                    st.markdown("**Age statistics:**")
                     st.markdown(f"- Average Age: {children_df['age'].mean():.1f} years")
                     st.markdown(f"- Median Age: {children_df['age'].median():.1f} years")
                     st.markdown(f"- Age Range: {children_df['age'].min():.0f} - {children_df['age'].max():.0f} years")
@@ -268,7 +268,7 @@ if st.session_state.census_df is not None:
                     st.markdown(f"- Total Children: {len(ec_children)}")
                     if len(ec_children) > 0:
                         avg_ec = len(ec_children) / len(ec_employees)
-                        st.markdown(f"- Avg per Family: {avg_ec:.1f}")
+                        st.markdown(f"- Avg per family: {avg_ec:.1f}")
                         st.markdown(f"- Avg Age: {ec_children['age'].mean():.1f} years | Median: {ec_children['age'].median():.1f} years")
                         st.markdown(f"- Age Range: {int(ec_children['age'].min())} - {int(ec_children['age'].max())} years")
                 else:
@@ -283,7 +283,7 @@ if st.session_state.census_df is not None:
                     st.markdown(f"- Total Children: {len(f_children)}")
                     if len(f_children) > 0:
                         avg_f = len(f_children) / len(f_employees)
-                        st.markdown(f"- Avg per Family: {avg_f:.1f}")
+                        st.markdown(f"- Avg per family: {avg_f:.1f}")
                         st.markdown(f"- Avg Age: {f_children['age'].mean():.1f} years | Median: {f_children['age'].median():.1f} years")
                         st.markdown(f"- Age Range: {int(f_children['age'].min())} - {int(f_children['age'].max())} years")
                 else:
@@ -300,17 +300,17 @@ if st.session_state.census_df is not None:
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.markdown("**Coverage Statistics:**")
-                    st.markdown(f"- Total Spouses: {len(spouses_df)}")
-                    st.markdown(f"- Families with Spouse Coverage: {len(employees_with_spouses)}")
+                    st.markdown("**Coverage statistics:**")
+                    st.markdown(f"- Total spouses: {len(spouses_df)}")
+                    st.markdown(f"- Families with spouse coverage: {len(employees_with_spouses)}")
 
                 with col2:
-                    st.markdown("**Overall Age Statistics:**")
+                    st.markdown("**Overall age statistics:**")
                     st.markdown(f"- Average Age: {spouses_df['age'].mean():.1f} years")
                     st.markdown(f"- Median Age: {spouses_df['age'].median():.1f} years")
 
                 st.markdown("---")
-                st.markdown("**By Family Type:**")
+                st.markdown("**By family type:**")
 
                 # Employee + Spouse (ES)
                 es_employees = employees_df[employees_df['family_status'] == 'ES']
@@ -376,7 +376,7 @@ if st.session_state.census_df is not None:
             fig = px.pie(
                 values=age_dist.values,
                 names=age_dist.index,
-                title='Employee Age Distribution'
+                title='Employee age distribution'
             )
             st.plotly_chart(fig, width='stretch')
 
@@ -388,7 +388,7 @@ if st.session_state.census_df is not None:
                 x=state_dist.index,
                 y=state_dist.values,
                 title='Employees by State',
-                labels={'x': 'State', 'y': 'Number of Employees'}
+                labels={'x': 'State', 'y': 'Number of employees'}
             )
             st.plotly_chart(fig, width='stretch')
 
@@ -405,7 +405,7 @@ if st.session_state.census_df is not None:
                 fig = px.pie(
                     values=family_counts.values,
                     names=family_labels,
-                    title='Employees by Family Status'
+                    title='Employees by family status'
                 )
                 st.plotly_chart(fig, width='stretch')
 
@@ -428,7 +428,7 @@ if st.session_state.census_df is not None:
                 fig = px.pie(
                     values=rel_counts.values,
                     names=[rel.title() + 's' for rel in rel_counts.index],
-                    title='Dependents by Relationship'
+                    title='Dependents by relationship'
                 )
                 st.plotly_chart(fig, width='stretch')
 
@@ -450,8 +450,8 @@ if st.session_state.census_df is not None:
                 fig = px.bar(
                     x=dep_age_dist.index,
                     y=dep_age_dist.values,
-                    title='Dependent Age Distribution',
-                    labels={'x': 'Age Group', 'y': 'Number of Dependents'}
+                    title='Dependent age distribution',
+                    labels={'x': 'Age group', 'y': 'Number of dependents'}
                 )
                 st.plotly_chart(fig, width='stretch')
 
@@ -474,8 +474,8 @@ if st.session_state.census_df is not None:
                 x=county_counts.values,
                 y=county_counts.index,
                 orientation='h',
-                title='Top 10 Counties by Employee Count',
-                labels={'x': 'Number of Employees', 'y': 'County'}
+                title='Top 10 counties by employee count',
+                labels={'x': 'Number of employees', 'y': 'County'}
             )
             fig.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig, width='stretch')
@@ -654,7 +654,7 @@ else:
                     if ContributionComparison.has_individual_contributions(employees_df):
                         contrib_totals = ContributionComparison.aggregate_contribution_totals(employees_df)
                         st.info(f"""
-                        **📊 Per-Employee Contribution Data Found:**
+                        **📊 Per-employee contribution data found:**
                         - Employees with data: **{contrib_totals['employees_with_data']}**
                         - Total current EE contributions: **${contrib_totals['total_current_ee_monthly']:,.2f}/mo** (${contrib_totals['total_current_ee_annual']:,.2f}/yr)
                         - Total current ER contributions: **${contrib_totals['total_current_er_monthly']:,.2f}/mo** (${contrib_totals['total_current_er_annual']:,.2f}/yr)
@@ -666,15 +666,15 @@ else:
                     col1, col2, col3, col4 = st.columns(4)
 
                     with col1:
-                        st.metric("Total Employees", len(employees_df))
+                        st.metric("Total employees", len(employees_df))
 
                     with col2:
                         num_deps = len(dependents_df) if not dependents_df.empty else 0
-                        st.metric("Total Dependents", num_deps)
+                        st.metric("Total dependents", num_deps)
 
                     with col3:
                         total_lives = len(employees_df) + num_deps
-                        st.metric("Covered Lives", total_lives)
+                        st.metric("Covered lives", total_lives)
 
                     with col4:
                         unique_states = employees_df['state'].nunique()
@@ -691,12 +691,12 @@ else:
 
                         col1, col2 = st.columns(2)
                         with col1:
-                            st.markdown(f"**Total Employees:** {len(employees_df)}")
-                            st.markdown(f"**Average Age:** {employees_df['age'].mean():.1f} years")
-                            st.markdown(f"**Median Age:** {employees_df['age'].median():.1f} years")
+                            st.markdown(f"**Total employees:** {len(employees_df)}")
+                            st.markdown(f"**Average age:** {employees_df['age'].mean():.1f} years")
+                            st.markdown(f"**Median age:** {employees_df['age'].median():.1f} years")
 
                         with col2:
-                            st.markdown("**Age Range:**")
+                            st.markdown("**Age range:**")
                             st.markdown(f"- Youngest: {employees_df['age'].min():.0f} years")
                             st.markdown(f"- Oldest: {employees_df['age'].max():.0f} years")
 
@@ -709,11 +709,11 @@ else:
                             col1, col2 = st.columns(2)
                             with col1:
                                 st.markdown(f"**Count:** {len(ee_employees)} employees")
-                                st.markdown(f"**Average Age:** {ee_employees['age'].mean():.1f} years")
-                                st.markdown(f"**Median Age:** {ee_employees['age'].median():.1f} years")
+                                st.markdown(f"**Average age:** {ee_employees['age'].mean():.1f} years")
+                                st.markdown(f"**Median age:** {ee_employees['age'].median():.1f} years")
 
                             with col2:
-                                st.markdown("**Age Range:**")
+                                st.markdown("**Age range:**")
                                 st.markdown(f"- Youngest: {ee_employees['age'].min():.0f} years")
                                 st.markdown(f"- Oldest: {ee_employees['age'].max():.0f} years")
 
@@ -738,22 +738,22 @@ else:
 
                             col1, col2 = st.columns(2)
                             with col1:
-                                st.markdown(f"**Total Dependents:** {len(dependents_df)}")
+                                st.markdown(f"**Total dependents:** {len(dependents_df)}")
                                 total_lives = len(employees_df) + len(dependents_df)
                                 ratio = total_lives / len(employees_df)
-                                st.markdown(f"**Coverage Burden:** {ratio:.2f}:1")
-                                st.markdown(f"**Average Age:** {dependents_df['age'].mean():.1f} years")
-                                st.markdown(f"**Median Age:** {dependents_df['age'].median():.1f} years")
+                                st.markdown(f"**Coverage burden:** {ratio:.2f}:1")
+                                st.markdown(f"**Average age:** {dependents_df['age'].mean():.1f} years")
+                                st.markdown(f"**Median age:** {dependents_df['age'].median():.1f} years")
 
                             with col2:
-                                st.markdown("**Age Range:**")
+                                st.markdown("**Age range:**")
                                 st.markdown(f"- Youngest: {dependents_df['age'].min():.0f} years")
                                 st.markdown(f"- Oldest: {dependents_df['age'].max():.0f} years")
 
                             st.markdown("---")
                             # Overall breakdown by relationship
                             rel_counts = dependents_df['relationship'].value_counts()
-                            st.markdown("**By Relationship:**")
+                            st.markdown("**By relationship:**")
                             for rel, count in rel_counts.items():
                                 pct = (count / len(dependents_df)) * 100
                                 st.markdown(f"- **{rel.title()}s:** {count} ({pct:.1f}%)")
@@ -772,15 +772,15 @@ else:
                                 col1, col2 = st.columns(2)
 
                                 with col1:
-                                    st.markdown("**Overall Statistics:**")
-                                    st.markdown(f"- Total Children: {len(children_df)}")
-                                    st.markdown(f"- Families with Children: {len(employees_with_children)}")
+                                    st.markdown("**Overall statistics:**")
+                                    st.markdown(f"- Total children: {len(children_df)}")
+                                    st.markdown(f"- Families with children: {len(employees_with_children)}")
                                     if len(employees_with_children) > 0:
                                         avg_children = len(children_df) / len(employees_with_children)
-                                        st.markdown(f"- Avg Children per Family: {avg_children:.1f}")
+                                        st.markdown(f"- Avg children per family: {avg_children:.1f}")
 
                                 with col2:
-                                    st.markdown("**Age Statistics:**")
+                                    st.markdown("**Age statistics:**")
                                     st.markdown(f"- Average Age: {children_df['age'].mean():.1f} years")
                                     st.markdown(f"- Median Age: {children_df['age'].median():.1f} years")
                                     st.markdown(f"- Age Range: {children_df['age'].min():.0f} - {children_df['age'].max():.0f} years")
@@ -798,7 +798,7 @@ else:
                                     st.markdown(f"- Total Children: {len(ec_children)}")
                                     if len(ec_children) > 0:
                                         avg_ec = len(ec_children) / len(ec_employees)
-                                        st.markdown(f"- Avg per Family: {avg_ec:.1f}")
+                                        st.markdown(f"- Avg per family: {avg_ec:.1f}")
                                         st.markdown(f"- Avg Age: {ec_children['age'].mean():.1f} years | Median: {ec_children['age'].median():.1f} years")
                                         st.markdown(f"- Age Range: {int(ec_children['age'].min())} - {int(ec_children['age'].max())} years")
                                 else:
@@ -813,7 +813,7 @@ else:
                                     st.markdown(f"- Total Children: {len(f_children)}")
                                     if len(f_children) > 0:
                                         avg_f = len(f_children) / len(f_employees)
-                                        st.markdown(f"- Avg per Family: {avg_f:.1f}")
+                                        st.markdown(f"- Avg per family: {avg_f:.1f}")
                                         st.markdown(f"- Avg Age: {f_children['age'].mean():.1f} years | Median: {f_children['age'].median():.1f} years")
                                         st.markdown(f"- Age Range: {int(f_children['age'].min())} - {int(f_children['age'].max())} years")
                                 else:
@@ -830,17 +830,17 @@ else:
                                 col1, col2 = st.columns(2)
 
                                 with col1:
-                                    st.markdown("**Coverage Statistics:**")
-                                    st.markdown(f"- Total Spouses: {len(spouses_df)}")
-                                    st.markdown(f"- Families with Spouse Coverage: {len(employees_with_spouses)}")
+                                    st.markdown("**Coverage statistics:**")
+                                    st.markdown(f"- Total spouses: {len(spouses_df)}")
+                                    st.markdown(f"- Families with spouse coverage: {len(employees_with_spouses)}")
 
                                 with col2:
-                                    st.markdown("**Overall Age Statistics:**")
+                                    st.markdown("**Overall age statistics:**")
                                     st.markdown(f"- Average Age: {spouses_df['age'].mean():.1f} years")
                                     st.markdown(f"- Median Age: {spouses_df['age'].median():.1f} years")
 
                                 st.markdown("---")
-                                st.markdown("**By Family Type:**")
+                                st.markdown("**By family type:**")
 
                                 # Employee + Spouse (ES)
                                 es_employees = employees_df[employees_df['family_status'] == 'ES']
@@ -906,7 +906,7 @@ else:
                             fig = px.pie(
                                 values=age_dist.values,
                                 names=age_dist.index,
-                                title='Employee Age Distribution'
+                                title='Employee age distribution'
                             )
                             st.plotly_chart(fig, width='stretch')
 
@@ -918,7 +918,7 @@ else:
                                 x=state_dist.index,
                                 y=state_dist.values,
                                 title='Employees by State',
-                                labels={'x': 'State', 'y': 'Number of Employees'}
+                                labels={'x': 'State', 'y': 'Number of employees'}
                             )
                             st.plotly_chart(fig, width='stretch')
 
@@ -935,12 +935,12 @@ else:
                                 fig = px.pie(
                                     values=family_counts.values,
                                     names=family_labels,
-                                    title='Employees by Family Status'
+                                    title='Employees by family status'
                                 )
                                 st.plotly_chart(fig, width='stretch')
 
                             with col2:
-                                st.markdown("**Family Status Breakdown:**")
+                                st.markdown("**Family status breakdown:**")
                                 for code, count in family_counts.items():
                                     pct = count / len(employees_df) * 100
                                     desc = FAMILY_STATUS_CODES.get(code, code)
@@ -958,7 +958,7 @@ else:
                                 fig = px.pie(
                                     values=rel_counts.values,
                                     names=[rel.title() + 's' for rel in rel_counts.index],
-                                    title='Dependents by Relationship'
+                                    title='Dependents by relationship'
                                 )
                                 st.plotly_chart(fig, width='stretch')
 
@@ -1042,11 +1042,11 @@ st.markdown("---")
 
 with st.expander("ℹ️ Help & instructions"):
     st.markdown("""
-    ## Census File Format
+    ## Census file format
 
     Your census file should be a CSV file (comma or tab-delimited) with the following structure:
 
-    ### Required Columns
+    ### Required columns
 
     1. **Employee Number** - Unique identifier for each employee (e.g., EMP001, 12345)
     2. **Home Zip** - 5-digit ZIP code (e.g., 10001, 90210)
@@ -1059,13 +1059,13 @@ with st.expander("ℹ️ Help & instructions"):
        - **F** = Family (employee + spouse + children)
     5. **EE DOB** - Employee date of birth (flexible format: m/d/yy, mm/dd/yy, m/d/yyyy, mm/dd/yyyy)
 
-    ### Optional Columns (Conditional)
+    ### Optional columns (conditional)
 
     - **Spouse DOB** - Required if Family Status is ES or F
     - **Dep 2 DOB** - First child DOB (required if Family Status is EC or F)
     - **Dep 3 DOB** through **Dep 6 DOB** - Additional children (optional)
 
-    ### Example Rows
+    ### Example rows
 
     | Employee Number | Home Zip | Home State | Family Status | EE DOB | Spouse DOB | Dep 2 DOB | Dep 3 DOB |
     |----------------|----------|------------|---------------|--------|------------|-----------|-----------|
@@ -1088,7 +1088,7 @@ with st.expander("ℹ️ Help & instructions"):
     - Children must be age 0-26
     - Employees must be age 18-64
 
-    ### Common Errors
+    ### Common errors
 
     - **Invalid ZIP code** - ZIP not found in database for the specified state
     - **Missing required field** - ES/F without Spouse DOB, or EC/F without child DOB
@@ -1109,9 +1109,9 @@ with st.sidebar:
         if num_dependents > 0:
             st.info(f"👨‍👩‍👧‍👦 **{num_dependents}** dependents")
 
-        st.metric("Covered Lives", num_employees + num_dependents)
+        st.metric("Covered lives", num_employees + num_dependents)
 
-        if st.button("Clear Census"):
+        if st.button("Clear census"):
             st.session_state.census_df = None
             st.session_state.dependents_df = None
             st.rerun()

@@ -23,7 +23,10 @@ import streamlit as st
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from constants import APP_CONFIG, PAGE_NAMES
+from constants import (
+    APP_CONFIG, PAGE_NAMES,
+    COOPERATIVE_CONFIG, DEFAULT_ADOPTION_RATES
+)
 from database import get_database_connection, test_connection
 
 def get_cloudflare_user():
@@ -90,6 +93,13 @@ def initialize_session_state():
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 'home'
 
+    # Dashboard configuration (user-adjustable settings)
+    if 'dashboard_config' not in st.session_state:
+        st.session_state.dashboard_config = {
+            'cooperative_ratio': COOPERATIVE_CONFIG['default_discount_ratio'],
+            'adoption_rates': DEFAULT_ADOPTION_RATES.copy(),
+        }
+
 
 def main():
     """Main application entry point"""
@@ -114,9 +124,13 @@ def main():
     # Step navigation buttons
     pages = [
         ('census', PAGE_NAMES['census']),
+        ('dashboard', PAGE_NAMES['dashboard']),
         ('contribution_eval', PAGE_NAMES['contribution_eval']),
+        ('lcsp_analysis', PAGE_NAMES['lcsp_analysis']),
         ('employer_summary', PAGE_NAMES['employer_summary']),
-        ('export', PAGE_NAMES['export'])
+        ('individual_analysis', PAGE_NAMES['individual_analysis']),
+        ('export', PAGE_NAMES['export']),
+        ('proposal', PAGE_NAMES['proposal'])
     ]
 
     for page_key, page_name in pages:
@@ -150,16 +164,28 @@ def main():
         show_home_page()
     elif st.session_state.current_page == 'census':
         st.info("Navigate to pages in the sidebar or use the multi-page structure")
-        st.markdown("Go to **pages/1_Census_Input.py** to enter employee census data")
+        st.markdown("Go to **pages/1_Census_input.py** to enter employee census data")
+    elif st.session_state.current_page == 'dashboard':
+        st.info("Navigate to pages in the sidebar or use the multi-page structure")
+        st.markdown("Go to **pages/2_ICHRA_dashboard.py** to view ICHRA comparison dashboard")
     elif st.session_state.current_page == 'contribution_eval':
         st.info("Navigate to pages in the sidebar or use the multi-page structure")
-        st.markdown("Go to **pages/2_Contribution_Evaluation.py** to evaluate ICHRA contributions")
+        st.markdown("Go to **pages/3_Contribution_evaluation.py** to evaluate ICHRA contributions")
+    elif st.session_state.current_page == 'lcsp_analysis':
+        st.info("Navigate to pages in the sidebar or use the multi-page structure")
+        st.markdown("Go to **pages/4_LCSP_analysis.py** to view LCSP analysis")
     elif st.session_state.current_page == 'employer_summary':
         st.info("Navigate to pages in the sidebar or use the multi-page structure")
-        st.markdown("Go to **pages/3_Employer_Summary.py** to view employer summary")
+        st.markdown("Go to **pages/5_Employer_summary.py** to view employer summary")
+    elif st.session_state.current_page == 'individual_analysis':
+        st.info("Navigate to pages in the sidebar or use the multi-page structure")
+        st.markdown("Go to **pages/6_Individual_analysis.py** to view individual analysis")
     elif st.session_state.current_page == 'export':
         st.info("Navigate to pages in the sidebar or use the multi-page structure")
-        st.markdown("Go to **pages/4_Export_Results.py** to export results")
+        st.markdown("Go to **pages/7_Export_results.py** to export results")
+    elif st.session_state.current_page == 'proposal':
+        st.info("Navigate to pages in the sidebar or use the multi-page structure")
+        st.markdown("Go to **pages/8_Proposal_generator.py** to generate proposals")
 
 
 def show_home_page():
@@ -177,9 +203,13 @@ def show_home_page():
     Follow these steps to create an ICHRA proposal:
 
     1. **📋 Employee census** - Upload employee census data with current contribution info
-    2. **💰 Contribution evaluation** - AI-powered analysis of marketplace options vs. current costs
-    3. **📊 Employer summary** - Review aggregate employer cost savings
-    4. **📄 Export results** - Generate PDF proposal and export data
+    2. **📊 ICHRA dashboard** - Visual comparison of current vs. ICHRA scenarios
+    3. **💰 Contribution evaluation** - AI-powered analysis of marketplace options vs. current costs
+    4. **📈 LCSP analysis** - Lowest cost silver plan analysis by rating area
+    5. **🏢 Employer summary** - Review aggregate employer cost savings
+    6. **👤 Individual analysis** - Per-employee marketplace options
+    7. **📄 Export results** - Generate PDF proposal and export data
+    8. **📝 Proposal generator** - Create PowerPoint/PDF proposals with email delivery
 
     ### Key features
 
@@ -216,7 +246,7 @@ def show_home_page():
             st.error("✗ Database Connection Failed")
 
     with col2:
-        st.info("Data Year: 2026")
+        st.info("Data year: 2026")
 
 if __name__ == "__main__":
     main()

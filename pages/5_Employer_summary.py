@@ -41,8 +41,8 @@ st.markdown("Review aggregate costs, contribution analysis, and census demograph
 
 # Check prerequisites
 if st.session_state.census_df is None:
-    st.warning("⚠️ No employee census loaded. Please complete **Census Input** first.")
-    st.info("👉 Go to **1️⃣ Census Input** in the sidebar to upload your census")
+    st.warning("⚠️ No employee census loaded. Please complete **Census input** first.")
+    st.info("👉 Go to **1️⃣ Census input** in the sidebar to upload your census")
     st.stop()
 
 st.markdown("---")
@@ -68,15 +68,15 @@ if has_dependents:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Total Employees", len(census_df))
+        st.metric("Total employees", len(census_df))
 
     with col2:
         num_dependents = len(dependents_df)
-        st.metric("Total Dependents", num_dependents)
+        st.metric("Total dependents", num_dependents)
 
     with col3:
         total_covered_lives = len(census_df) + num_dependents
-        st.metric("Covered Lives", total_covered_lives)
+        st.metric("Covered lives", total_covered_lives)
 
     with col4:
         unique_states = census_df['state'].nunique()
@@ -87,7 +87,7 @@ else:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("Total Employees", len(census_df))
+        st.metric("Total employees", len(census_df))
 
     with col2:
         unique_states = census_df['state'].nunique()
@@ -95,7 +95,7 @@ else:
 
     with col3:
         unique_rating_areas = census_df['rating_area_id'].nunique()
-        st.metric("Rating Areas", unique_rating_areas)
+        st.metric("Rating areas", unique_rating_areas)
 
 st.markdown("---")
 
@@ -111,30 +111,30 @@ contribution_type = settings.get('contribution_type', 'percentage')
 if contribution_type == 'class_based':
     strategy_name = settings.get('strategy_name', 'Class-Based')
     st.markdown(f"**Strategy:** {strategy_name}")
-    st.markdown(f"**Total Monthly:** ${settings.get('total_monthly', 0):,.2f}")
-    st.markdown(f"**Total Annual:** ${settings.get('total_annual', 0):,.2f}")
-    st.markdown(f"**Employees Assigned:** {settings.get('employees_assigned', 0)}")
+    st.markdown(f"**Total monthly:** ${settings.get('total_monthly', 0):,.2f}")
+    st.markdown(f"**Total annual:** ${settings.get('total_annual', 0):,.2f}")
+    st.markdown(f"**Employees assigned:** {settings.get('employees_assigned', 0)}")
 
     if settings.get('apply_family_multipliers'):
-        st.markdown("**Family Multipliers:** Enabled (EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x)")
+        st.markdown("**Family multipliers:** Enabled (EE=1.0x, ES=1.5x, EC=1.3x, F=1.8x)")
 
     # Show tier summary if available
     if settings.get('strategy_applied') == 'age_banded' and settings.get('tiers'):
-        st.markdown("**Age Tiers:**")
+        st.markdown("**Age tiers:**")
         for tier in settings['tiers']:
             st.markdown(f"- {tier['age_range']}: ${tier['contribution']:.0f}/mo")
     elif settings.get('strategy_applied') == 'location_based' and settings.get('tiers'):
-        st.markdown("**Location Tiers:**")
+        st.markdown("**Location tiers:**")
         for tier in settings['tiers']:
             st.markdown(f"- {tier['location']}: ${tier['contribution']:.0f}/mo")
 
 else:
     contribution_pct = settings.get('default_percentage', 75)
-    st.markdown("**Contribution Type:** Percentage")
-    st.markdown(f"**Employer Contribution:** {contribution_pct}%")
+    st.markdown("**Contribution type:** Percentage")
+    st.markdown(f"**Employer contribution:** {contribution_pct}%")
 
     if 'by_class' in settings and settings['by_class']:
-        st.markdown("**By Employee Class:**")
+        st.markdown("**By employee class:**")
         for class_name, pct in settings['by_class'].items():
             st.markdown(f"- {class_name}: {pct}%")
 
@@ -170,8 +170,9 @@ if has_individual_contribs:
         # 2026 Renewal TOTAL premium (from census or financial summary)
         renewal_total_annual = 0
         renewal_total_monthly = 0
-        if 'financial_summary' in st.session_state and st.session_state.financial_summary.get('renewal_monthly'):
-            renewal_total_monthly = st.session_state.financial_summary['renewal_monthly']
+        _financial_summary = st.session_state.get('financial_summary')
+        if _financial_summary and _financial_summary.get('renewal_monthly'):
+            renewal_total_monthly = _financial_summary['renewal_monthly']
             renewal_total_annual = renewal_total_monthly * 12
         else:
             projected_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
@@ -218,10 +219,10 @@ if has_individual_contribs:
 
         with summary_cols[1]:
             if projected_er_annual_2026 > 0:
-                st.metric("Projected Renewal ER", DataFormatter.format_currency(projected_er_annual_2026),
+                st.metric("Projected renewal ER", DataFormatter.format_currency(projected_er_annual_2026),
                          help=f"2026 renewal × {er_pct*100:.1f}% ER share")
             else:
-                st.metric("Projected Renewal ER", "N/A")
+                st.metric("Projected renewal ER", "N/A")
 
         with summary_cols[2]:
             st.metric("Proposed ICHRA", DataFormatter.format_currency(proposed_annual),
@@ -295,7 +296,7 @@ if has_individual_contribs:
         st.info("""
         **Configure a contribution strategy to see cost comparison**
 
-        Go to **Contribution Evaluation** → Use the Strategy Modeler → Click **"Use This Strategy"**
+        Go to **Contribution evaluation** → Use the strategy modeler → Click **"Use this strategy"**
         """)
 
     # Detailed employee breakdown
@@ -380,5 +381,5 @@ else:
 # ============================================================================
 
 st.markdown("---")
-st.success("✅ Summary complete! Ready to **Export Results** →")
-st.markdown("Click **4️⃣ Export Results** in the sidebar to generate reports and exports")
+st.success("✅ Summary complete! Ready to **Export results** →")
+st.markdown("Click **4️⃣ Export results** in the sidebar to generate reports and exports")

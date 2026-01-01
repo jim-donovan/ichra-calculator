@@ -247,9 +247,8 @@ class ProposalData:
             if projected_data.get('has_data'):
                 renewal_monthly = projected_data.get('total_monthly', 0)
 
-        # If still no renewal data, estimate from current total with 8% trend
-        if renewal_monthly == 0 and data.current_total_monthly > 0:
-            renewal_monthly = data.current_total_monthly * 1.08  # 8% trend factor
+        # No fallback - require actual renewal data
+        # If no renewal data available, leave as 0 (will show N/A in proposals)
 
         data.renewal_monthly = renewal_monthly
         data.ichra_monthly = data.proposed_er_monthly

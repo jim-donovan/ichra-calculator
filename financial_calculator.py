@@ -904,3 +904,307 @@ class FinancialSummaryCalculator:
         result['total_projected_2026_annual'] = result['total_projected_2026'] * 12
 
         return result
+
+    @staticmethod
+    def calculate_multi_metal_scenario(
+        census_df: pd.DataFrame,
+        db: DatabaseConnection,
+        metal_levels: list = None,
+        dependents_df: pd.DataFrame = None
+    ) -> Dict[str, Dict]:
+        """
+        Calculate total workforce premium for multiple metal levels (Bronze, Silver, Gold)
+        in a single pass using an optimized batch query.
+
+        This is more efficient than calling calculate_lcsp_scenario() three times
+        because it queries all metal levels in one database round-trip.
+
+        Args:
+            census_df: Employee census with state, rating_area_id, age data
+            db: Database connection
+            metal_levels: List of metal levels (default: ['Bronze', 'Silver', 'Gold'])
+            dependents_df: Optional (not used in tier multiplier approach)
+
+        Returns:
+            {
+                'Bronze': {
+                    'total_monthly': float,
+                    'total_annual': float,
+                    'employees_covered': int,
+                    'lives_covered': int,
+                    'by_state': {...},
+                    'employee_details': [...]
+                },
+                'Silver': {...},
+                'Gold': {...}
+            }
+        """
+        import logging
+        import time
+
+        if metal_levels is None:
+            metal_levels = ['Bronze', 'Silver', 'Gold']
+
+        logging.info(f"MULTI-METAL: Calculating for {len(census_df)} employees, metals: {metal_levels}")
+        start_time = time.time()
+
+        # Determine state column
+        state_col = None
+        for col in ['Home State', 'home_state', 'state']:
+            if col in census_df.columns:
+                state_col = col
+                break
+
+        if state_col is None:
+            return {metal: {'error': 'No state column found in census'} for metal in metal_levels}
+
+        # Lives count per tier
+        tier_lives = {'EE': 1, 'ES': 2, 'EC': 2, 'F': 3}
+
+        # Initialize results for each metal level
+        results = {}
+        for metal in metal_levels:
+            results[metal] = {
+                'total_monthly': 0.0,
+                'total_annual': 0.0,
+                'employees_covered': 0,
+                'lives_covered': 0,
+                'by_state': {},
+                'errors': [],
+                'metal_level': metal,
+                'employee_details': [],
+                '_av_values': [],  # Temporary list to collect AV values for averaging
+                'average_av': None  # Will be calculated at the end
+            }
+
+        # Pre-process all employees to collect unique (state, rating_area, age_band) tuples
+        employee_data = []
+        location_keys = set()
+
+        for idx, emp_row in census_df.iterrows():
+            state = emp_row.get(state_col)
+            if not state:
+                continue
+
+            # Get employee identifiers
+            employee_id = emp_row.get('employee_id', emp_row.get('Employee Number', ''))
+            first_name = emp_row.get('first_name', emp_row.get('First Name', ''))
+            last_name = emp_row.get('last_name', emp_row.get('Last Name', ''))
+            family_status = emp_row.get('Family Status', emp_row.get('family_status', 'EE'))
+
+            # Get current premium from census (2025 data)
+            current_ee_val = emp_row.get('current_ee_monthly', 0)
+            current_ee = 0.0 if pd.isna(current_ee_val) else float(current_ee_val or 0)
+            current_er_val = emp_row.get('current_er_monthly', 0)
+            current_er = 0.0 if pd.isna(current_er_val) else float(current_er_val or 0)
+            current_total = current_ee + current_er
+
+            # Get projected 2026 renewal premium (if available)
+            projected_2026_val = emp_row.get('projected_2026_premium', 0)
+            projected_2026 = 0.0 if pd.isna(projected_2026_val) else float(projected_2026_val or 0)
+
+            # Get rating area
+            rating_area = emp_row.get('rating_area_id', 1)
+            if pd.isna(rating_area):
+                rating_area = 1
+            rating_area = int(rating_area)
+            rating_area_str = f"Rating Area {rating_area}"
+
+            # Get employee age
+            ee_age = emp_row.get('age', emp_row.get('ee_age'))
+            if ee_age is None:
+                for metal in metal_levels:
+                    results[metal]['errors'].append(f"No age found for employee {employee_id} in {state}")
+                continue
+            ee_age = int(ee_age)
+            age_band = FinancialSummaryCalculator.get_age_band(ee_age)
+
+            # Handle NY/VT family-tier states
+            if state in FAMILY_TIER_STATES:
+                age_band = 'Family-Tier Rates'
+
+            # Store employee data and location key for batch lookup
+            location_key = (state, rating_area_str, age_band)
+            location_keys.add(location_key)
+
+            employee_data.append({
+                'employee_id': employee_id,
+                'first_name': first_name,
+                'last_name': last_name,
+                'state': state,
+                'rating_area': rating_area,
+                'rating_area_str': rating_area_str,
+                'family_status': family_status,
+                'ee_age': ee_age,
+                'age_band': age_band,
+                'current_ee': current_ee,
+                'current_er': current_er,
+                'current_total': current_total,
+                'projected_2026': projected_2026,
+                'location_key': location_key
+            })
+
+        # Batch query: Get lowest cost plan for all unique (state, rating_area, age, metal) combos
+        # Structure: {(state, rating_area_str, age_band): {metal: {'rate': float, 'plan_name': str, 'actuarial_value': str}}}
+        lcp_lookup = {}
+
+        if location_keys:
+            # Build batch query for ALL metal levels at once
+            # Includes join to plan_variant table to get issuer_actuarial_value
+            union_queries = []
+            params = []
+            for state, rating_area_str, age_band in location_keys:
+                for metal in metal_levels:
+                    union_queries.append("""
+                    (SELECT
+                        %s as state,
+                        %s as rating_area_str,
+                        %s as age_band,
+                        %s as metal_level,
+                        p.hios_plan_id as lcp_plan_id,
+                        p.plan_marketing_name,
+                        r.individual_rate as lcp_rate,
+                        v.issuer_actuarial_value
+                    FROM rbis_insurance_plan_20251019202724 p
+                    JOIN rbis_insurance_plan_base_rates_20251019202724 r
+                        ON p.hios_plan_id = r.plan_id
+                    LEFT JOIN rbis_insurance_plan_variant_20251019202724 v
+                        ON p.hios_plan_id = v.hios_plan_id
+                        AND v.csr_variation_type = 'Exchange variant (no CSR)'
+                    WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                      AND p.market_coverage = 'Individual'
+                      AND p.plan_effective_date = '2026-01-01'
+                      AND p.level_of_coverage = %s
+                      AND r.market_coverage = 'Individual'
+                      AND r.rating_area_id = %s
+                      AND r.age = %s
+                    ORDER BY r.individual_rate ASC
+                    LIMIT 1)
+                    """)
+                    params.extend([state, rating_area_str, age_band, metal, state, metal, rating_area_str, age_band])
+
+            batch_query = "\nUNION ALL\n".join(union_queries)
+            logging.info(f"MULTI-METAL: Executing batch query with {len(union_queries)} UNION ALLs")
+            query_start = time.time()
+
+            try:
+                batch_df = pd.read_sql(batch_query, db.engine, params=tuple(params))
+                logging.info(f"MULTI-METAL: Query returned {len(batch_df)} rows in {time.time() - query_start:.2f}s")
+
+                for _, row in batch_df.iterrows():
+                    loc_key = (row['state'], row['rating_area_str'], row['age_band'])
+                    metal = row['metal_level']
+
+                    if loc_key not in lcp_lookup:
+                        lcp_lookup[loc_key] = {}
+
+                    # Parse actuarial value (stored as "60.00%" string)
+                    av_str = row.get('issuer_actuarial_value', '')
+                    av_pct = None
+                    if av_str and pd.notna(av_str):
+                        try:
+                            av_pct = float(str(av_str).replace('%', '').strip())
+                        except (ValueError, TypeError):
+                            pass
+
+                    lcp_lookup[loc_key][metal] = {
+                        'rate': float(row['lcp_rate']) if pd.notna(row['lcp_rate']) else 0.0,
+                        'plan_id': row.get('lcp_plan_id'),
+                        'plan_name': row['plan_marketing_name'],
+                        'actuarial_value': av_pct
+                    }
+
+                    # Collect unique AV values per metal level (from query results, not per-employee)
+                    if av_pct is not None:
+                        results[metal]['_av_values'].append(av_pct)
+
+            except (ValueError, TypeError) as e:
+                for metal in metal_levels:
+                    results[metal]['errors'].append(f"Batch query error: {str(e)}")
+
+        # Process each employee using the batch lookup results
+        for emp in employee_data:
+            loc_rates = lcp_lookup.get(emp['location_key'], {})
+
+            for metal in metal_levels:
+                metal_data = loc_rates.get(metal)
+
+                if metal_data:
+                    lcp_rate = metal_data['rate']
+                    plan_id = metal_data.get('plan_id')
+                    plan_name = metal_data['plan_name']
+                    actuarial_value = metal_data.get('actuarial_value')
+                else:
+                    lcp_rate = 0.0
+                    plan_id = None
+                    plan_name = None
+                    actuarial_value = None
+                    results[metal]['errors'].append(
+                        f"No {metal} rate for {emp['state']} RA {emp['rating_area']}, age {emp['age_band']}"
+                    )
+
+                # Apply tier multiplier
+                tier_multiplier = FinancialSummaryCalculator.TIER_MULTIPLIERS.get(emp['family_status'], 1.0)
+                estimated_tier_premium = lcp_rate * tier_multiplier
+
+                # Estimate lives based on tier
+                lives = tier_lives.get(emp['family_status'], 1)
+
+                # Store employee detail record
+                results[metal]['employee_details'].append({
+                    'employee_id': emp['employee_id'],
+                    'first_name': emp['first_name'],
+                    'last_name': emp['last_name'],
+                    'state': emp['state'],
+                    'rating_area': emp['rating_area'],
+                    'family_status': emp['family_status'],
+                    'ee_age': emp['ee_age'],
+                    'lcp_plan_id': plan_id,
+                    'lcp_plan_name': plan_name or 'No plan found',
+                    'lcp_ee_rate': lcp_rate,
+                    'tier_multiplier': tier_multiplier,
+                    'estimated_tier_premium': estimated_tier_premium,
+                    'actuarial_value': actuarial_value,
+                    'current_ee_monthly': emp['current_ee'],
+                    'current_er_monthly': emp['current_er'],
+                    'current_total_monthly': emp['current_total'],
+                    'projected_2026_premium': emp['projected_2026']
+                })
+
+                # Add to state totals
+                state = emp['state']
+                if state not in results[metal]['by_state']:
+                    results[metal]['by_state'][state] = {
+                        'employees': 0,
+                        'lives': 0,
+                        'monthly': 0.0,
+                        'plan_name': f'Lowest Cost {metal} (varies by location)'
+                    }
+
+                results[metal]['by_state'][state]['employees'] += 1
+                results[metal]['by_state'][state]['lives'] += lives
+                results[metal]['by_state'][state]['monthly'] += estimated_tier_premium
+
+                results[metal]['total_monthly'] += estimated_tier_premium
+                results[metal]['employees_covered'] += 1
+                results[metal]['lives_covered'] += lives
+
+        # Calculate annual totals and average AV for each metal level
+        for metal in metal_levels:
+            results[metal]['total_annual'] = results[metal]['total_monthly'] * 12
+
+            # Calculate average actuarial value from collected values
+            av_values = results[metal].pop('_av_values', [])  # Remove temp list
+            if av_values:
+                results[metal]['average_av'] = round(sum(av_values) / len(av_values), 1)
+            else:
+                # Fallback to standard AV if no data
+                fallback_av = {'Bronze': 60.0, 'Silver': 70.0, 'Gold': 80.0}
+                results[metal]['average_av'] = fallback_av.get(metal)
+
+        logging.info(f"MULTI-METAL: Complete in {time.time() - start_time:.2f}s")
+        for metal in metal_levels:
+            avg_av = results[metal].get('average_av', 'N/A')
+            logging.info(f"  {metal}: ${results[metal]['total_monthly']:,.0f}/mo ({results[metal]['employees_covered']} employees, avg AV: {avg_av}%)")
+
+        return results

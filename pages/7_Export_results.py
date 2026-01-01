@@ -115,8 +115,8 @@ else:
         col1, col2 = st.columns(2)
 
         with col1:
-            client_name_raw = st.text_input("Client/Company Name", value="ABC Company", max_chars=100)
-            consultant_name_raw = st.text_input("Consultant Name", value="Your Name", max_chars=100)
+            client_name_raw = st.text_input("Client/company name", value="ABC Company", max_chars=100)
+            consultant_name_raw = st.text_input("Consultant name", value="Your Name", max_chars=100)
             # Sanitize inputs for safe PDF generation
             client_name = sanitize_text_input(client_name_raw)
             consultant_name = sanitize_text_input(consultant_name_raw)
@@ -591,20 +591,20 @@ with col2:
                 'change': ''
             })
             summary_rows.append({
-                'metric': 'Annual Employer Cost',
+                'metric': 'Annual employer cost',
                 'current_er_spend': current_er_annual,
                 'proposed_ichra': proposed_ichra_annual,
                 'change': change_annual
             })
             summary_rows.append({
-                'metric': 'Monthly Employer Cost',
+                'metric': 'Monthly employer cost',
                 'current_er_spend': current_er_monthly,
                 'proposed_ichra': proposed_ichra_monthly,
                 'change': proposed_ichra_monthly - current_er_monthly
             })
         else:
             summary_rows.append({
-                'metric': 'Total Employees',
+                'metric': 'Total employees',
                 'current_group': len(census_df),
                 'proposed_ichra': len(contribution_analysis),
                 'change': ''

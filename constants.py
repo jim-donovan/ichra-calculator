@@ -319,12 +319,16 @@ APP_CONFIG = {
     'initial_sidebar_state': 'expanded'
 }
 
-# Page names for navigation (4-page structure)
+# Page names for navigation (8-page structure)
 PAGE_NAMES = {
     'census': '1️⃣ Employee census',
-    'contribution_eval': '2️⃣ Contribution evaluation',
-    'employer_summary': '3️⃣ Employer summary',
-    'export': '4️⃣ Export results'
+    'dashboard': '2️⃣ ICHRA dashboard',
+    'contribution_eval': '3️⃣ Contribution evaluation',
+    'lcsp_analysis': '4️⃣ LCSP analysis',
+    'employer_summary': '5️⃣ Employer summary',
+    'individual_analysis': '6️⃣ Individual analysis',
+    'export': '7️⃣ Export results',
+    'proposal': '8️⃣ Proposal generator'
 }
 
 # Help text
@@ -433,6 +437,66 @@ FIT_SCORE_THRESHOLDS = {
     'strong': 70,     # >= 70: Strong Fit
     'moderate': 50,   # >= 50: Moderate Fit
     'needs_review': 0 # < 50: Needs Review
+}
+
+# ==============================================================================
+# ICHRA DASHBOARD CONFIGURATION
+# ==============================================================================
+# Centralized configuration for ICHRA comparison dashboard
+# These values replace hardcoded constants throughout the dashboard
+
+# Plan years for comparison
+CURRENT_PLAN_YEAR = 2025
+RENEWAL_PLAN_YEAR = 2026
+
+# Cooperative Health Access Plan configuration
+COOPERATIVE_CONFIG = {
+    'default_discount_ratio': 0.72,  # Default: Cooperative cost as % of Silver LCSP
+    'dpc_monthly_cost': 70,          # Direct Primary Care monthly cost ($70/mo)
+    'employer_pays_100_pct': True,   # Cooperative is typically 100% employer-paid
+}
+
+# Metal level cost ratios relative to Silver (used as fallback when actual rates unavailable)
+# Bronze typically ~80% of Silver cost, Gold ~120%
+METAL_COST_RATIOS = {
+    'Bronze': 0.80,
+    'Silver': 1.00,
+    'Gold': 1.20,
+}
+
+# Default adoption rate assumptions for blended cost calculations
+# These are user-adjustable via dashboard sliders
+DEFAULT_ADOPTION_RATES = {
+    'Cooperative': 70,    # 70% expected to choose cooperative
+    'ICHRA Silver': 20,   # 20% expected to choose Silver marketplace plan
+    'ICHRA Gold': 10,     # 10% expected to choose Gold marketplace plan
+}
+
+# Workforce demographic thresholds
+OLDER_POPULATION_WARNING_AGE = 45  # Show warning if avg employee age exceeds this
+
+# Display placeholder values for messaging when actual data unavailable
+# These appear in "Current plan problems" section
+DISPLAY_PLACEHOLDERS = {
+    'typical_deductible': 6300,          # $6,300 typical group plan deductible
+    'employee_annual_cost_min': 14000,   # Low estimate for annual employee cost
+    'employee_annual_cost_max': 36000,   # High estimate for annual employee cost
+}
+
+# Tier colors for workforce composition charts
+TIER_COLORS = {
+    'EE': '#2b7fff',   # Blue - Employee Only
+    'ES': '#ad46ff',   # Purple - Employee + Spouse
+    'EC': '#f6339a',   # Pink - Employee + Children
+    'F': '#ff6900',    # Orange - Family
+}
+
+# Tier display labels
+TIER_LABELS = {
+    'EE': 'EE Only',
+    'ES': 'EE + Spouse',
+    'EC': 'EE + Children',
+    'F': 'Family',
 }
 
 if __name__ == "__main__":
