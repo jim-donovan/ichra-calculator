@@ -19,6 +19,7 @@ kaleido==0.2.1  # Plotly static image export (compatible with Plotly 5.x)
 
 # PDF generation
 reportlab>=4.0.0
+playwright>=1.40.0  # HTML to PDF rendering
 
 # PowerPoint generation
 python-pptx>=0.6.21

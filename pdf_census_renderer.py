@@ -9,13 +9,49 @@ Renders census analysis report as PDF by:
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
-from playwright.sync_api import sync_playwright
 from jinja2 import Environment, FileSystemLoader
 from io import BytesIO
 from pathlib import Path
 import base64
 import pandas as pd
 import logging
+import subprocess
+import sys
+
+# Flag to track if browser has been installed this session
+_browser_installed = False
+
+
+def _ensure_playwright_browser():
+    """Ensure Playwright Chromium browser is installed."""
+    global _browser_installed
+    if _browser_installed:
+        return
+
+    try:
+        # Try to import and check if browser exists
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            # Try to launch - if it fails, browser needs to be installed
+            try:
+                browser = p.chromium.launch(headless=True)
+                browser.close()
+                _browser_installed = True
+                return
+            except Exception:
+                pass
+
+        # Browser not installed, install it
+        logging.info("Installing Playwright Chromium browser...")
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+            capture_output=True
+        )
+        _browser_installed = True
+        logging.info("Playwright Chromium browser installed successfully")
+    except Exception as e:
+        logging.warning(f"Could not install Playwright browser: {e}")
 
 
 @dataclass
@@ -89,6 +125,12 @@ class CensusAnalysisPDFRenderer:
         Returns:
             BytesIO buffer containing the PDF
         """
+        # Ensure browser is installed
+        _ensure_playwright_browser()
+
+        # Import playwright here (lazy import)
+        from playwright.sync_api import sync_playwright
+
         # 1. Render HTML with Jinja2
         template = self.env.get_template('census_analysis.html')
         html_content = template.render(data=data)

@@ -18,7 +18,7 @@ logging.basicConfig(
 from database import get_database_connection
 from utils import CensusProcessor, ContributionComparison
 from constants import FAMILY_STATUS_CODES
-from pdf_census_renderer import generate_census_analysis_pdf, build_census_analysis_data
+# PDF renderer imported lazily when needed (requires playwright)
 
 
 # Page config
@@ -181,6 +181,9 @@ if st.session_state.census_df is not None:
         if st.button("📄 Export PDF", type="secondary", width="stretch", key="pdf_export_nav"):
             with st.spinner("Generating PDF..."):
                 try:
+                    # Lazy import PDF renderer (requires playwright)
+                    from pdf_census_renderer import generate_census_analysis_pdf
+
                     # Generate chart images
                     from visualization_helpers import (
                         generate_age_distribution_chart,
@@ -959,6 +962,9 @@ else:
                         if st.button("📄 Export PDF", type="secondary", width="stretch", key="pdf_export_upload"):
                             with st.spinner("Generating PDF..."):
                                 try:
+                                    # Lazy import PDF renderer (requires playwright)
+                                    from pdf_census_renderer import generate_census_analysis_pdf
+
                                     # Generate chart images
                                     from visualization_helpers import (
                                         generate_age_distribution_chart,
