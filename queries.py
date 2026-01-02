@@ -172,6 +172,7 @@ WHERE
             JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
             WHERE p.hios_plan_id IN ({plan_placeholders})
                 AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                AND br.rate_effective_date = '2026-01-01'
             GROUP BY p.hios_plan_id
         )
         SELECT *
@@ -368,6 +369,146 @@ WHERE
             AND market = 'Individual'
         """
         return db.execute_query(query, tuple(params))
+
+    @staticmethod
+    def get_counties_by_zip_batch(db: DatabaseConnection,
+                                   zip_state_pairs: List[tuple]) -> pd.DataFrame:
+        """
+        Batch lookup county and rating area for multiple (zip, state) pairs.
+        Much more efficient than calling get_county_by_zip() in a loop.
+
+        Args:
+            db: Database connection
+            zip_state_pairs: List of (zip_code, state_code) tuples
+
+        Returns:
+            DataFrame with columns: zip, state_code, county, rating_area_id, city
+        """
+        import logging
+        import time
+
+        if not zip_state_pairs:
+            return pd.DataFrame(columns=['zip', 'state_code', 'county', 'rating_area_id', 'city'])
+
+        # Normalize and deduplicate pairs
+        unique_pairs = []
+        seen = set()
+        for zip_code, state_code in zip_state_pairs:
+            # Handle ZIP+4 format and ensure 5 digits
+            zip_clean = str(zip_code).strip().split('-')[0].zfill(5)[:5]
+            state_clean = str(state_code).strip().upper()
+            key = (zip_clean, state_clean)
+            if key not in seen:
+                seen.add(key)
+                unique_pairs.append(key)
+
+        logging.info(f"ZIP BATCH: Looking up {len(unique_pairs)} unique ZIP/state pairs")
+        query_start = time.time()
+
+        # Build query with IN clause for efficiency
+        zips = [p[0] for p in unique_pairs]
+        states = list(set(p[1] for p in unique_pairs))
+
+        query = """
+        SELECT
+            zc."ZIP" as zip,
+            UPPER(zc."State") as state_code,
+            ra.county,
+            ra.rating_area_id,
+            zc."USPS Default City for ZIP" as city
+        FROM zip_to_county_correct zc
+        JOIN rbis_state_rating_area_amended ra
+            ON zc."County FIPS code" = ra."FIPS"
+        WHERE zc."ZIP" IN %s
+            AND UPPER(zc."State") IN %s
+            AND ra.market = 'Individual'
+        """
+
+        result = db.execute_query(query, (tuple(zips), tuple(states)))
+        logging.info(f"ZIP BATCH: Primary query returned {len(result)} rows in {time.time() - query_start:.3f}s")
+
+        # Find missing pairs that need fallback lookup
+        found_pairs = set()
+        if not result.empty:
+            for _, row in result.iterrows():
+                found_pairs.add((row['zip'], row['state_code']))
+
+        missing_pairs = [p for p in unique_pairs if p not in found_pairs]
+
+        if missing_pairs:
+            logging.info(f"ZIP BATCH: {len(missing_pairs)} pairs need fallback lookup")
+
+            # State name map for fallback query
+            state_name_map = {
+                'CA': 'California', 'NY': 'New York', 'TX': 'Texas', 'FL': 'Florida',
+                'IL': 'Illinois', 'PA': 'Pennsylvania', 'OH': 'Ohio', 'GA': 'Georgia',
+                'NC': 'North Carolina', 'MI': 'Michigan', 'NJ': 'New Jersey', 'VA': 'Virginia',
+                'WA': 'Washington', 'AZ': 'Arizona', 'MA': 'Massachusetts', 'TN': 'Tennessee',
+                'IN': 'Indiana', 'MO': 'Missouri', 'MD': 'Maryland', 'WI': 'Wisconsin',
+                'CO': 'Colorado', 'MN': 'Minnesota', 'SC': 'South Carolina', 'AL': 'Alabama',
+                'LA': 'Louisiana', 'KY': 'Kentucky', 'OR': 'Oregon', 'OK': 'Oklahoma',
+                'CT': 'Connecticut', 'IA': 'Iowa', 'MS': 'Mississippi', 'AR': 'Arkansas',
+                'UT': 'Utah', 'KS': 'Kansas', 'NV': 'Nevada', 'NM': 'New Mexico',
+                'NE': 'Nebraska', 'WV': 'West Virginia', 'ID': 'Idaho', 'HI': 'Hawaii',
+                'NH': 'New Hampshire', 'ME': 'Maine', 'RI': 'Rhode Island', 'MT': 'Montana',
+                'DE': 'Delaware', 'SD': 'South Dakota', 'ND': 'North Dakota', 'AK': 'Alaska',
+                'VT': 'Vermont', 'WY': 'Wyoming', 'DC': 'District of Columbia'
+            }
+
+            # Build fallback query using 3-digit ZIP prefixes
+            fallback_conditions = []
+            fallback_params = []
+            for zip_code, state_code in missing_pairs:
+                state_full = state_name_map.get(state_code)
+                if state_full:
+                    zip_prefix = zip_code[:3]
+                    fallback_conditions.append("(state = %s AND three_digit_zip = %s)")
+                    fallback_params.extend([state_full, zip_prefix])
+
+            if fallback_conditions:
+                fallback_query = f"""
+                SELECT DISTINCT ON (three_digit_zip, state)
+                    three_digit_zip as zip_prefix,
+                    state as state_full,
+                    county,
+                    rating_area_id,
+                    '' as city
+                FROM rbis_state_rating_area_20251019202724
+                WHERE ({" OR ".join(fallback_conditions)})
+                    AND market = 'Individual'
+                """
+
+                fallback_result = db.execute_query(fallback_query, tuple(fallback_params))
+
+                if not fallback_result.empty:
+                    # Map fallback results back to original ZIP codes
+                    state_code_map = {v: k for k, v in state_name_map.items()}
+                    fallback_rows = []
+                    for zip_code, state_code in missing_pairs:
+                        zip_prefix = zip_code[:3]
+                        state_full = state_name_map.get(state_code)
+                        if state_full:
+                            match = fallback_result[
+                                (fallback_result['zip_prefix'] == zip_prefix) &
+                                (fallback_result['state_full'] == state_full)
+                            ]
+                            if not match.empty:
+                                row = match.iloc[0]
+                                fallback_rows.append({
+                                    'zip': zip_code,
+                                    'state_code': state_code,
+                                    'county': row['county'],
+                                    'rating_area_id': row['rating_area_id'],
+                                    'city': ''
+                                })
+
+                    if fallback_rows:
+                        fallback_df = pd.DataFrame(fallback_rows)
+                        result = pd.concat([result, fallback_df], ignore_index=True)
+                        logging.info(f"ZIP BATCH: Added {len(fallback_rows)} rows from fallback")
+
+        logging.info(f"ZIP BATCH: Total lookup completed in {time.time() - query_start:.3f}s")
+        return result
 
     @staticmethod
     def get_counties_by_state(db: DatabaseConnection, state: str) -> pd.DataFrame:
@@ -1518,6 +1659,7 @@ class FinancialQueries:
         FROM rbis_insurance_plan_base_rates_20251019202724
         WHERE plan_id IN %s
           AND market_coverage = 'Individual'
+          AND rate_effective_date = '2026-01-01'
         """
 
         return pd.read_sql(query, db.engine, params=(tuple(plan_ids),))

@@ -678,6 +678,9 @@ def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = 
     if not family_col:
         return tier_costs
 
+    # OPTIMIZATION: Build cooperative rate lookup once for O(1) access
+    coop_lookup = build_cooperative_rate_lookup(coop_rates_df) if coop_rates_df is not None else {}
+
     # Pre-calculate metal costs by tier from multi_metal_results
     metal_costs_by_tier = {}
     if multi_metal_results:
@@ -742,14 +745,15 @@ def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = 
                 tier_costs[tier_name][metal_key] = cost
 
             # Cooperative - use rate table if available, otherwise ratio of silver
-            if coop_rates_df is not None and not coop_rates_df.empty:
+            if coop_lookup:
                 # Look up cooperative rate for each employee in tier and average
+                # OPTIMIZED: Uses pre-built lookup dict for O(1) access
                 age_col = 'age' if 'age' in tier_employees.columns else None
                 coop_rates = []
                 if age_col:
                     for _, emp_row in tier_employees.iterrows():
                         emp_age = int(emp_row.get(age_col, 40))
-                        coop_rate = get_cooperative_rate(emp_age, status_code, coop_rates_df)
+                        coop_rate = get_cooperative_rate_fast(emp_age, status_code, coop_lookup)
                         if coop_rate > 0:
                             coop_rates.append(coop_rate)
                 if coop_rates:
@@ -803,6 +807,42 @@ def load_cooperative_rate_table(db: DatabaseConnection = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _get_age_band(age: int) -> str:
+    """Convert age to cooperative rate age band."""
+    if age < 30:
+        return "18-29"
+    elif age < 40:
+        return "30-39"
+    elif age < 50:
+        return "40-49"
+    elif age < 60:
+        return "50-59"
+    else:
+        return "60-64"
+
+
+def build_cooperative_rate_lookup(coop_rates_df: pd.DataFrame, deductible: str = "2.5k") -> Dict:
+    """
+    Build a lookup dictionary from cooperative rates DataFrame for O(1) access.
+
+    Args:
+        coop_rates_df: DataFrame from load_cooperative_rate_table()
+        deductible: "1k" or "2.5k" (default "2.5k")
+
+    Returns:
+        Dict mapping (age_band, family_status) -> rate
+    """
+    if coop_rates_df is None or coop_rates_df.empty:
+        return {}
+
+    col = 'deductible_2_5k' if deductible == "2.5k" else 'deductible_1k'
+    lookup = {}
+    for _, row in coop_rates_df.iterrows():
+        key = (row['age_band'], row['family_status'])
+        lookup[key] = float(row[col]) if pd.notna(row[col]) else 0
+    return lookup
+
+
 def get_cooperative_rate(age: int, family_status: str, coop_rates_df: pd.DataFrame,
                          deductible: str = "2.5k") -> float:
     """
@@ -824,17 +864,7 @@ def get_cooperative_rate(age: int, family_status: str, coop_rates_df: pd.DataFra
     status_map = {"EE": "EE", "ES": "ES", "EC": "EC", "F": "F"}
     fs = status_map.get(family_status, "EE")
 
-    # Determine age band
-    if age < 30:
-        age_band = "18-29"
-    elif age < 40:
-        age_band = "30-39"
-    elif age < 50:
-        age_band = "40-49"
-    elif age < 60:
-        age_band = "50-59"
-    else:
-        age_band = "60-64"
+    age_band = _get_age_band(age)
 
     # Look up rate
     row = coop_rates_df[(coop_rates_df['age_band'] == age_band) &
@@ -843,6 +873,28 @@ def get_cooperative_rate(age: int, family_status: str, coop_rates_df: pd.DataFra
         col = 'deductible_2_5k' if deductible == "2.5k" else 'deductible_1k'
         return float(row[col].iloc[0])
     return 0
+
+
+def get_cooperative_rate_fast(age: int, family_status: str, lookup: Dict) -> float:
+    """
+    Fast O(1) lookup for cooperative rate using pre-built dictionary.
+
+    Args:
+        age: Employee age
+        family_status: EE, ES, EC, or F
+        lookup: Dictionary from build_cooperative_rate_lookup()
+
+    Returns:
+        Monthly cooperative rate
+    """
+    if not lookup:
+        return 0
+
+    status_map = {"EE": "EE", "ES": "ES", "EC": "EC", "F": "F"}
+    fs = status_map.get(family_status, "EE")
+    age_band = _get_age_band(age)
+
+    return lookup.get((age_band, fs), 0)
 
 
 def calculate_tier_costs_by_age(census_df: pd.DataFrame, multi_metal_results: Dict = None,
@@ -1174,6 +1226,8 @@ def calculate_company_totals(census_df: pd.DataFrame, contribution_analysis: Dic
         # Cooperative - use rate table if available, otherwise ratio of silver
         if coop_rates_df is not None and not coop_rates_df.empty:
             # Sum cooperative rates from rate table for each employee
+            # OPTIMIZED: Use pre-built lookup dictionary for O(1) access per employee
+            coop_lookup = build_cooperative_rate_lookup(coop_rates_df)
             coop_total = 0
             age_col = 'age' if 'age' in census_df.columns else None
             family_col = 'family_status' if 'family_status' in census_df.columns else None
@@ -1181,7 +1235,7 @@ def calculate_company_totals(census_df: pd.DataFrame, contribution_analysis: Dic
                 for _, emp_row in census_df.iterrows():
                     emp_age = int(emp_row.get(age_col, 40))
                     emp_fs = emp_row.get(family_col, 'EE')
-                    coop_rate = get_cooperative_rate(emp_age, emp_fs, coop_rates_df)
+                    coop_rate = get_cooperative_rate_fast(emp_age, emp_fs, coop_lookup)
                     if coop_rate > 0:
                         coop_total += coop_rate
             if coop_total > 0:

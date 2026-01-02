@@ -6,6 +6,8 @@ Handles age-banding, ACA 3-child rule, and NY/VT family-tier states.
 """
 
 import warnings
+import logging
+import time
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
@@ -821,38 +823,48 @@ class FinancialSummaryCalculator:
         # Batch query: Get lowest cost plan for all unique (state, rating_area, age) combos
         lcsp_lookup = {}
         if location_keys:
-            # Build batch query using UNION ALL pattern
-            # Get metal level filter (Bronze includes Expanded Bronze)
-            metal_clause, metal_values = FinancialSummaryCalculator.get_metal_level_filter(metal_level)
-            union_queries = []
-            params = []
-            for state, rating_area_str, age_band in location_keys:
-                union_queries.append(f"""
-                (SELECT
-                    %s as state,
-                    %s as rating_area_str,
-                    %s as age_band,
-                    p.plan_marketing_name,
-                    r.individual_rate as lcsp_rate
-                FROM rbis_insurance_plan_20251019202724 p
-                JOIN rbis_insurance_plan_base_rates_20251019202724 r
-                    ON p.hios_plan_id = r.plan_id
-                WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
-                  AND p.market_coverage = 'Individual'
-                  AND p.plan_effective_date = '2026-01-01'
-                  AND {metal_clause}
-                  AND r.market_coverage = 'Individual'
-                  AND r.rating_area_id = %s
-                  AND r.age = %s
-                ORDER BY r.individual_rate ASC
-                LIMIT 1)
-                """)
-                params.extend([state, rating_area_str, age_band, state] + metal_values + [rating_area_str, age_band])
+            # OPTIMIZED: Single DISTINCT ON query instead of N UNION ALL subqueries
+            # Extract unique values for IN clauses
+            states = list(set(k[0] for k in location_keys))
+            rating_areas = list(set(k[1] for k in location_keys))
+            age_bands = list(set(k[2] for k in location_keys))
 
-            batch_query = "\nUNION ALL\n".join(union_queries)
+            # Determine metal levels to query (Bronze includes Expanded Bronze)
+            if metal_level == 'Bronze':
+                metal_levels_list = ['Bronze', 'Expanded Bronze']
+            else:
+                metal_levels_list = [metal_level]
+
+            batch_query = """
+            SELECT DISTINCT ON (state, rating_area_str, age_band)
+                SUBSTRING(p.hios_plan_id, 6, 2) as state,
+                r.rating_area_id as rating_area_str,
+                r.age as age_band,
+                p.plan_marketing_name,
+                r.individual_rate as lcsp_rate
+            FROM rbis_insurance_plan_20251019202724 p
+            JOIN rbis_insurance_plan_base_rates_20251019202724 r
+                ON p.hios_plan_id = r.plan_id
+            WHERE SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+              AND p.market_coverage = 'Individual'
+              AND p.plan_effective_date = '2026-01-01'
+              AND p.level_of_coverage IN %s
+              AND r.market_coverage = 'Individual'
+              AND r.rating_area_id IN %s
+              AND r.age IN %s
+            ORDER BY state, rating_area_str, age_band, r.individual_rate ASC
+            """
 
             try:
-                batch_df = pd.read_sql(batch_query, db.engine, params=tuple(params))
+                query_start = time.time()
+                batch_df = pd.read_sql(batch_query, db.engine, params=(
+                    tuple(states),
+                    tuple(metal_levels_list),
+                    tuple(rating_areas),
+                    tuple(age_bands)
+                ))
+                logging.info(f"LCSP SCENARIO: Query returned {len(batch_df)} rows in {time.time() - query_start:.2f}s")
+
                 for _, row in batch_df.iterrows():
                     key = (row['state'], row['rating_area_str'], row['age_band'])
                     lcsp_lookup[key] = {
@@ -1070,53 +1082,54 @@ class FinancialSummaryCalculator:
         lcp_lookup = {}
 
         if location_keys:
-            # Build batch query for ALL metal levels at once
-            # Includes join to plan_variant table to get issuer_actuarial_value
-            union_queries = []
-            params = []
-            for state, rating_area_str, age_band in location_keys:
-                for metal in metal_levels:
-                    # Get metal level filter (Bronze includes Expanded Bronze)
-                    metal_clause, metal_values = FinancialSummaryCalculator.get_metal_level_filter(metal)
-                    union_queries.append(f"""
-                    (SELECT
-                        %s as state,
-                        %s as rating_area_str,
-                        %s as age_band,
-                        %s as metal_level,
-                        p.hios_plan_id as lcp_plan_id,
-                        p.plan_marketing_name,
-                        r.individual_rate as lcp_rate,
-                        v.issuer_actuarial_value
-                    FROM rbis_insurance_plan_20251019202724 p
-                    JOIN rbis_insurance_plan_base_rates_20251019202724 r
-                        ON p.hios_plan_id = r.plan_id
-                    LEFT JOIN rbis_insurance_plan_variant_20251019202724 v
-                        ON p.hios_plan_id = v.hios_plan_id
-                        AND v.csr_variation_type = 'Exchange variant (no CSR)'
-                    WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
-                      AND p.market_coverage = 'Individual'
-                      AND p.plan_effective_date = '2026-01-01'
-                      AND {metal_clause}
-                      AND r.market_coverage = 'Individual'
-                      AND r.rating_area_id = %s
-                      AND r.age = %s
-                    ORDER BY r.individual_rate ASC
-                    LIMIT 1)
-                    """)
-                    params.extend([state, rating_area_str, age_band, metal, state] + metal_values + [rating_area_str, age_band])
+            # Extract unique states, rating areas, and age bands
+            states = list(set(k[0] for k in location_keys))
+            rating_areas = list(set(k[1] for k in location_keys))
+            age_bands = list(set(k[2] for k in location_keys))
 
-            batch_query = "\nUNION ALL\n".join(union_queries)
-            logging.info(f"MULTI-METAL: Executing batch query with {len(union_queries)} UNION ALLs")
+            # Single efficient query using DISTINCT ON to get lowest cost plan per grouping
+            # This replaces 100+ UNION ALL subqueries with one query
+            batch_query = """
+            SELECT DISTINCT ON (state, rating_area_id, age, metal_level)
+                SUBSTRING(p.hios_plan_id, 6, 2) as state,
+                r.rating_area_id as rating_area_str,
+                r.age as age_band,
+                p.level_of_coverage as metal_level,
+                p.hios_plan_id as lcp_plan_id,
+                p.plan_marketing_name,
+                r.individual_rate as lcp_rate,
+                v.issuer_actuarial_value
+            FROM rbis_insurance_plan_20251019202724 p
+            JOIN rbis_insurance_plan_base_rates_20251019202724 r
+                ON p.hios_plan_id = r.plan_id
+            LEFT JOIN rbis_insurance_plan_variant_20251019202724 v
+                ON p.hios_plan_id = v.hios_plan_id
+                AND v.csr_variation_type = 'Exchange variant (no CSR)'
+            WHERE SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+              AND p.market_coverage = 'Individual'
+              AND p.plan_effective_date = '2026-01-01'
+              AND p.level_of_coverage IN ('Bronze', 'Expanded Bronze', 'Silver', 'Gold')
+              AND r.market_coverage = 'Individual'
+              AND r.rating_area_id IN %s
+              AND r.age IN %s
+            ORDER BY state, rating_area_id, age, metal_level, r.individual_rate ASC
+            """
             query_start = time.time()
 
             try:
-                batch_df = pd.read_sql(batch_query, db.engine, params=tuple(params))
+                batch_df = pd.read_sql(batch_query, db.engine, params=(
+                    tuple(states),
+                    tuple(rating_areas),
+                    tuple(age_bands)
+                ))
                 logging.info(f"MULTI-METAL: Query returned {len(batch_df)} rows in {time.time() - query_start:.2f}s")
 
                 for _, row in batch_df.iterrows():
                     loc_key = (row['state'], row['rating_area_str'], row['age_band'])
                     metal = row['metal_level']
+
+                    # Map "Expanded Bronze" to "Bronze" for lookup
+                    lookup_metal = 'Bronze' if metal == 'Expanded Bronze' else metal
 
                     if loc_key not in lcp_lookup:
                         lcp_lookup[loc_key] = {}
@@ -1130,16 +1143,21 @@ class FinancialSummaryCalculator:
                         except (ValueError, TypeError):
                             pass
 
-                    lcp_lookup[loc_key][metal] = {
-                        'rate': float(row['lcp_rate']) if pd.notna(row['lcp_rate']) else 0.0,
-                        'plan_id': row.get('lcp_plan_id'),
-                        'plan_name': row['plan_marketing_name'],
-                        'actuarial_value': av_pct
-                    }
+                    # Only store if we don't have this metal yet, or if this rate is lower
+                    # (handles Bronze vs Expanded Bronze - keep lowest rate)
+                    existing = lcp_lookup[loc_key].get(lookup_metal)
+                    rate = float(row['lcp_rate']) if pd.notna(row['lcp_rate']) else 0.0
+                    if existing is None or rate < existing['rate']:
+                        lcp_lookup[loc_key][lookup_metal] = {
+                            'rate': rate,
+                            'plan_id': row.get('lcp_plan_id'),
+                            'plan_name': row['plan_marketing_name'],
+                            'actuarial_value': av_pct
+                        }
 
-                    # Collect unique AV values per metal level (from query results, not per-employee)
-                    if av_pct is not None:
-                        results[metal]['_av_values'].append(av_pct)
+                        # Collect unique AV values per metal level (from query results, not per-employee)
+                        if av_pct is not None and lookup_metal in results:
+                            results[lookup_metal]['_av_values'].append(av_pct)
 
             except (ValueError, TypeError) as e:
                 for metal in metal_levels:

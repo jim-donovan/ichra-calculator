@@ -822,12 +822,39 @@ class CensusProcessor:
         errors = []
 
         total_rows = len(df)
-        zip_lookup_times = []
-        logging.info(f"CENSUS PARSE: Beginning row iteration for {total_rows} rows")
+        logging.info(f"CENSUS PARSE: Beginning batch ZIP lookup for {total_rows} rows")
 
+        # OPTIMIZATION: Batch lookup all ZIP codes at once instead of N+1 queries
+        # Step 1: Collect all unique (zip, state) pairs
+        zip_state_pairs = []
         for idx, row in df.iterrows():
-            # Log progress every 10 rows or for first 5
-            if idx < 5 or idx % 10 == 0:
+            home_zip_raw = str(row['Home Zip']).strip()
+            home_zip = home_zip_raw.split('-')[0].zfill(5)[:5]
+            home_state = str(row['Home State']).strip().upper()
+            zip_state_pairs.append((home_zip, home_state))
+
+        # Step 2: Batch lookup all ZIPs at once (single DB round-trip)
+        batch_start = time.time()
+        zip_lookup_df = PlanQueries.get_counties_by_zip_batch(db, zip_state_pairs)
+        batch_elapsed = time.time() - batch_start
+        logging.info(f"CENSUS PARSE: Batch ZIP lookup completed in {batch_elapsed:.3f}s for {len(zip_state_pairs)} pairs")
+
+        # Step 3: Build lookup dictionary for O(1) access
+        zip_lookup = {}
+        for _, row in zip_lookup_df.iterrows():
+            key = (row['zip'], row['state_code'])
+            zip_lookup[key] = {
+                'county': row['county'],
+                'rating_area_id': row['rating_area_id'],
+                'city': row.get('city', '')
+            }
+
+        logging.info(f"CENSUS PARSE: Built lookup dict with {len(zip_lookup)} entries")
+
+        # Step 4: Process each row using the pre-built lookup
+        for idx, row in df.iterrows():
+            # Log progress every 50 rows
+            if idx % 50 == 0:
                 elapsed = time.time() - parse_start
                 logging.info(f"CENSUS PARSE: Processing row {idx+1}/{total_rows} ({elapsed:.1f}s elapsed)")
 
@@ -862,29 +889,19 @@ class CensusProcessor:
                     errors.append(f"Row {idx+2}: Employee age {employee_age} appears invalid. Check DOB: {ee_dob}")
                     continue
 
-                # Look up county and rating area from ZIP
-                if idx < 3:
-                    logging.info(f"CENSUS PARSE: About to call get_county_by_zip({home_zip}, {home_state})...")
-                zip_start = time.time()
-                county_result = PlanQueries.get_county_by_zip(db, home_zip, home_state)
-                if idx < 3:
-                    logging.info(f"CENSUS PARSE: get_county_by_zip returned in {time.time() - zip_start:.3f}s")
-                zip_elapsed = time.time() - zip_start
-                zip_lookup_times.append(zip_elapsed)
+                # Look up county and rating area from pre-built dictionary (O(1) lookup)
+                lookup_key = (home_zip, home_state)
+                county_data = zip_lookup.get(lookup_key)
 
-                if idx < 5:
-                    logging.info(f"CENSUS PARSE: ZIP lookup for {home_zip} ({home_state}) took {zip_elapsed:.3f}s")
-
-                if county_result.empty:
+                if county_data is None:
                     errors.append(f"Row {idx+2}: ZIP code {home_zip} not found for state {home_state}")
                     continue
 
-                county = county_result.iloc[0]['county']
-                rating_area_id = county_result.iloc[0]['rating_area_id']
-                city = county_result.iloc[0]['city']
+                county = county_data['county']
+                rating_area_id = county_data['rating_area_id']
+                city = county_data.get('city', '')
 
                 # Log canonical rating area assignment
-                import logging
                 logging.debug(
                     f"CENSUS LOAD: Employee {employee_number}, ZIP {home_zip} ({home_state}) "
                     f"→ County '{county}' → rating_area_id = {rating_area_id}"
