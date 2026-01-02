@@ -1,0 +1,357 @@
+"""
+Census Analysis PDF Renderer using Playwright + Jinja2
+
+Renders census analysis report as PDF by:
+1. Loading HTML templates with Jinja2
+2. Rendering with Playwright headless Chromium
+3. Generating pixel-perfect PDF output
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
+from playwright.sync_api import sync_playwright
+from jinja2 import Environment, FileSystemLoader
+from io import BytesIO
+from pathlib import Path
+import base64
+import pandas as pd
+import logging
+
+
+@dataclass
+class CensusAnalysisData:
+    """Data container for census analysis PDF generation."""
+
+    client_name: str = ""
+
+    # Summary metrics
+    total_employees: int = 0
+    total_dependents: int = 0
+    covered_lives: int = 0
+    states_count: int = 0
+    avg_age_all: float = 0.0
+    median_age_all: float = 0.0
+    age_range_min: int = 0
+    age_range_max: int = 0
+
+    # Employee demographics
+    ee_avg_age: float = 0.0
+    ee_median_age: float = 0.0
+    ee_youngest: int = 0
+    ee_oldest: int = 0
+
+    # Dependent overview
+    coverage_burden: float = 1.0
+    dep_avg_age: float = 0.0
+    dep_median_age: float = 0.0
+    dep_youngest: int = 0
+    dep_oldest: int = 0
+    children_count: int = 0
+    children_pct: float = 0.0
+    spouses_count: int = 0
+    spouses_pct: float = 0.0
+
+    # State distribution: [{'state': 'MO', 'count': 49, 'pct': 92.5}, ...]
+    employees_by_state: List[Dict] = field(default_factory=list)
+
+    # Plan availability: [{'state', 'county', 'rating_area', 'employees', 'plans'}, ...]
+    plan_availability: List[Dict] = field(default_factory=list)
+
+    # Family status breakdown: [{'code': 'EE', 'description': 'Employee Only', 'count': 51, 'pct': 96.2}, ...]
+    family_status_breakdown: List[Dict] = field(default_factory=list)
+
+    # Chart images (base64 encoded PNG)
+    age_dist_chart: str = ""
+    state_chart: str = ""
+    family_status_chart: str = ""
+    dependent_age_chart: str = ""
+
+
+class CensusAnalysisPDFRenderer:
+    """Render census analysis as PDF using Playwright + Jinja2"""
+
+    TEMPLATE_DIR = Path(__file__).parent / 'templates' / 'census_analysis'
+
+    def __init__(self):
+        """Initialize renderer with Jinja2 environment."""
+        self.env = Environment(
+            loader=FileSystemLoader(str(self.TEMPLATE_DIR)),
+            autoescape=False  # We control the HTML, no XSS risk
+        )
+
+    def generate(self, data: CensusAnalysisData) -> BytesIO:
+        """
+        Generate PDF from HTML templates.
+
+        Args:
+            data: CensusAnalysisData instance with all census fields
+
+        Returns:
+            BytesIO buffer containing the PDF
+        """
+        # 1. Render HTML with Jinja2
+        template = self.env.get_template('census_analysis.html')
+        html_content = template.render(data=data)
+
+        # 2. Convert to PDF with Playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+
+            # Set content and wait for fonts/images to load
+            page.set_content(html_content, wait_until='networkidle')
+
+            # Generate PDF with portrait letter size
+            pdf_bytes = page.pdf(
+                format='Letter',
+                landscape=False,
+                print_background=True,
+                margin={
+                    'top': '0',
+                    'right': '0',
+                    'bottom': '0',
+                    'left': '0'
+                }
+            )
+
+            browser.close()
+
+        # Return as BytesIO buffer
+        buffer = BytesIO(pdf_bytes)
+        buffer.seek(0)
+        return buffer
+
+    def generate_html(self, data: CensusAnalysisData) -> str:
+        """
+        Generate HTML only (useful for debugging).
+
+        Args:
+            data: CensusAnalysisData instance
+
+        Returns:
+            Rendered HTML string
+        """
+        template = self.env.get_template('census_analysis.html')
+        return template.render(data=data)
+
+    def save_html(self, data: CensusAnalysisData, path: str) -> None:
+        """
+        Save rendered HTML to file for debugging.
+
+        Args:
+            data: CensusAnalysisData instance
+            path: Output file path
+        """
+        html_content = self.generate_html(data)
+        with open(path, 'w') as f:
+            f.write(html_content)
+
+
+def build_census_analysis_data(
+    employees_df: pd.DataFrame,
+    dependents_df: pd.DataFrame,
+    plan_availability_df: pd.DataFrame,
+    client_name: str = "",
+    chart_images: Optional[Dict[str, bytes]] = None
+) -> CensusAnalysisData:
+    """
+    Build CensusAnalysisData from census DataFrames.
+
+    Args:
+        employees_df: Employee census DataFrame with 'age', 'state', 'family_status' columns
+        dependents_df: Dependents DataFrame with 'age', 'relationship' columns
+        plan_availability_df: Plan availability DataFrame with 'state', 'county', 'rating_area_id', 'employees', 'plan_count'
+        client_name: Client/company name
+        chart_images: Dict of chart name -> PNG bytes
+
+    Returns:
+        CensusAnalysisData instance
+    """
+    from constants import FAMILY_STATUS_CODES
+
+    data = CensusAnalysisData(client_name=client_name)
+
+    # Basic counts
+    data.total_employees = len(employees_df)
+    data.total_dependents = len(dependents_df) if dependents_df is not None else 0
+    data.covered_lives = data.total_employees + data.total_dependents
+    data.states_count = employees_df['state'].nunique() if 'state' in employees_df.columns else 0
+
+    # All covered lives age stats
+    if 'age' in employees_df.columns:
+        all_ages = employees_df['age'].dropna()
+        if dependents_df is not None and len(dependents_df) > 0 and 'age' in dependents_df.columns:
+            dep_ages = dependents_df['age'].dropna()
+            all_ages = pd.concat([all_ages, dep_ages])
+
+        if len(all_ages) > 0:
+            data.avg_age_all = float(all_ages.mean())
+            data.median_age_all = float(all_ages.median())
+            data.age_range_min = int(all_ages.min())
+            data.age_range_max = int(all_ages.max())
+
+    # Employee demographics
+    if 'age' in employees_df.columns:
+        ee_ages = employees_df['age'].dropna()
+        if len(ee_ages) > 0:
+            data.ee_avg_age = float(ee_ages.mean())
+            data.ee_median_age = float(ee_ages.median())
+            data.ee_youngest = int(ee_ages.min())
+            data.ee_oldest = int(ee_ages.max())
+
+    # Dependent overview
+    if dependents_df is not None and len(dependents_df) > 0:
+        data.coverage_burden = data.covered_lives / data.total_employees if data.total_employees > 0 else 1.0
+
+        if 'age' in dependents_df.columns:
+            dep_ages = dependents_df['age'].dropna()
+            if len(dep_ages) > 0:
+                data.dep_avg_age = float(dep_ages.mean())
+                data.dep_median_age = float(dep_ages.median())
+                data.dep_youngest = int(dep_ages.min())
+                data.dep_oldest = int(dep_ages.max())
+
+        # Relationship breakdown
+        if 'relationship' in dependents_df.columns:
+            rel_counts = dependents_df['relationship'].value_counts()
+            total_deps = len(dependents_df)
+
+            data.children_count = int(rel_counts.get('child', 0))
+            data.children_pct = (data.children_count / total_deps * 100) if total_deps > 0 else 0
+
+            data.spouses_count = int(rel_counts.get('spouse', 0))
+            data.spouses_pct = (data.spouses_count / total_deps * 100) if total_deps > 0 else 0
+
+    # State distribution
+    if 'state' in employees_df.columns:
+        state_counts = employees_df['state'].value_counts()
+        total_employees = len(employees_df)
+        data.employees_by_state = [
+            {
+                'state': state,
+                'count': int(count),
+                'pct': (count / total_employees * 100) if total_employees > 0 else 0
+            }
+            for state, count in state_counts.items()
+        ]
+
+    # Plan availability
+    if plan_availability_df is not None and len(plan_availability_df) > 0:
+        data.plan_availability = []
+        for _, row in plan_availability_df.iterrows():
+            data.plan_availability.append({
+                'state': row.get('state', ''),
+                'county': row.get('county', ''),
+                'rating_area': row.get('rating_area_id', row.get('rating_area', '')),
+                'employees': int(row.get('employees', 0)),
+                'plans': int(row.get('plan_count', row.get('plans', 0)))
+            })
+
+    # Family status breakdown
+    if 'family_status' in employees_df.columns:
+        fs_counts = employees_df['family_status'].value_counts()
+        total_employees = len(employees_df)
+        data.family_status_breakdown = []
+        for code, count in fs_counts.items():
+            desc = FAMILY_STATUS_CODES.get(code, code)
+            data.family_status_breakdown.append({
+                'code': code,
+                'description': desc,
+                'count': int(count),
+                'pct': (count / total_employees * 100) if total_employees > 0 else 0
+            })
+
+    # Chart images (convert to base64)
+    if chart_images:
+        if 'age_dist' in chart_images and chart_images['age_dist']:
+            data.age_dist_chart = base64.b64encode(chart_images['age_dist']).decode('utf-8')
+        if 'state' in chart_images and chart_images['state']:
+            data.state_chart = base64.b64encode(chart_images['state']).decode('utf-8')
+        if 'family_status' in chart_images and chart_images['family_status']:
+            data.family_status_chart = base64.b64encode(chart_images['family_status']).decode('utf-8')
+        if 'dependent_age' in chart_images and chart_images['dependent_age']:
+            data.dependent_age_chart = base64.b64encode(chart_images['dependent_age']).decode('utf-8')
+
+    return data
+
+
+def generate_census_analysis_pdf(
+    employees_df: pd.DataFrame,
+    dependents_df: pd.DataFrame,
+    plan_availability_df: pd.DataFrame,
+    client_name: str = "",
+    chart_images: Optional[Dict[str, bytes]] = None
+) -> BytesIO:
+    """
+    Convenience function to generate census analysis PDF.
+
+    Args:
+        employees_df: Employee census DataFrame
+        dependents_df: Dependents DataFrame
+        plan_availability_df: Plan availability DataFrame
+        client_name: Client/company name
+        chart_images: Dict of chart name -> PNG bytes
+
+    Returns:
+        BytesIO buffer containing the PDF
+    """
+    data = build_census_analysis_data(
+        employees_df=employees_df,
+        dependents_df=dependents_df,
+        plan_availability_df=plan_availability_df,
+        client_name=client_name,
+        chart_images=chart_images
+    )
+
+    renderer = CensusAnalysisPDFRenderer()
+    return renderer.generate(data)
+
+
+if __name__ == "__main__":
+    # Test with sample data
+    import numpy as np
+
+    # Create sample employee data
+    employees_df = pd.DataFrame({
+        'employee_id': range(1, 54),
+        'age': np.random.randint(22, 65, 53),
+        'state': np.random.choice(['MO', 'KS', 'AR'], 53, p=[0.9, 0.07, 0.03]),
+        'family_status': np.random.choice(['EE', 'ES', 'EC', 'F'], 53, p=[0.9, 0.04, 0.03, 0.03])
+    })
+
+    # Create sample dependent data
+    dependents_df = pd.DataFrame({
+        'dependent_id': range(1, 6),
+        'employee_id': [1, 1, 2, 3, 4],
+        'age': [8, 10, 35, 5, 55],
+        'relationship': ['child', 'child', 'spouse', 'child', 'spouse']
+    })
+
+    # Create sample plan availability data
+    plan_availability_df = pd.DataFrame({
+        'state': ['MO', 'MO', 'KS', 'AR'],
+        'county': ['JASPER', 'NEWTON', 'CHEROKEE', 'NEVADA'],
+        'rating_area_id': [7, 7, 7, 6],
+        'employees': [25, 15, 3, 1],
+        'plan_count': [105, 105, 56, 61]
+    })
+
+    # Generate PDF
+    data = build_census_analysis_data(
+        employees_df=employees_df,
+        dependents_df=dependents_df,
+        plan_availability_df=plan_availability_df,
+        client_name="Test Company"
+    )
+
+    renderer = CensusAnalysisPDFRenderer()
+
+    # Save HTML for debugging
+    renderer.save_html(data, '/tmp/census_analysis_test.html')
+    print("HTML saved to /tmp/census_analysis_test.html")
+
+    # Generate PDF
+    pdf_buffer = renderer.generate(data)
+    with open('/tmp/census_analysis_test.pdf', 'wb') as f:
+        f.write(pdf_buffer.read())
+    print("PDF saved to /tmp/census_analysis_test.pdf")

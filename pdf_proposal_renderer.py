@@ -164,6 +164,11 @@ class PDFProposalRenderer:
 
         for seg in segments:
             extent = seg['pct'] / 100 * 360
+
+            # Skip segments with 0 extent (causes division by zero in arc drawing)
+            if extent < 0.01:
+                continue
+
             self.c.setFillColor(HexColor(seg['color']))
 
             # Draw pie slice

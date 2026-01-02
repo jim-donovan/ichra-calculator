@@ -18,6 +18,7 @@ logging.basicConfig(
 from database import get_database_connection
 from utils import CensusProcessor, ContributionComparison
 from constants import FAMILY_STATUS_CODES
+from pdf_census_renderer import generate_census_analysis_pdf, build_census_analysis_data
 
 
 # Page config
@@ -173,6 +174,102 @@ if st.session_state.census_df is not None:
         min_age = int(all_ages.min())
         max_age = int(all_ages.max())
         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
+
+    # PDF Export Button
+    export_col1, export_col2 = st.columns([4, 1])
+    with export_col2:
+        if st.button("📄 Export PDF", type="secondary", width="stretch", key="pdf_export_nav"):
+            with st.spinner("Generating PDF..."):
+                try:
+                    # Generate chart images
+                    from visualization_helpers import (
+                        generate_age_distribution_chart,
+                        generate_state_distribution_chart,
+                        generate_family_composition_chart,
+                        generate_dependent_age_distribution_chart
+                    )
+
+                    chart_images = {}
+                    try:
+                        chart_images['age_dist'] = generate_age_distribution_chart(employees_df, return_image=True)
+                    except Exception:
+                        chart_images['age_dist'] = None
+
+                    try:
+                        chart_images['state'] = generate_state_distribution_chart(employees_df, return_image=True)
+                    except Exception:
+                        chart_images['state'] = None
+
+                    try:
+                        chart_images['family_status'] = generate_family_composition_chart(employees_df, return_image=True)
+                    except Exception:
+                        chart_images['family_status'] = None
+
+                    if not dependents_df.empty:
+                        try:
+                            chart_images['dependent_age'] = generate_dependent_age_distribution_chart(dependents_df, return_image=True)
+                        except Exception:
+                            chart_images['dependent_age'] = None
+
+                    # Build plan availability data
+                    plan_availability_df = pd.DataFrame()
+                    db = st.session_state.get('db')
+                    if 'rating_area_id' in employees_df.columns and db is not None:
+                        ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
+                        ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
+                        if not ra_counts.empty:
+                            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+                            query = """
+                            SELECT
+                                SUBSTRING(r.plan_id, 6, 2) as state,
+                                r.rating_area_id,
+                                COUNT(DISTINCT r.plan_id) as plan_count
+                            FROM rbis_insurance_plan_base_rates_20251019202724 r
+                            JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
+                            WHERE r.market_coverage = 'Individual'
+                              AND p.market_coverage = 'Individual'
+                              AND p.plan_effective_date = '2026-01-01'
+                            GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                            """
+                            try:
+                                plan_counts_df = db.execute_query(query)
+                                if not plan_counts_df.empty:
+                                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
+                                    plan_availability_df = ra_counts.merge(
+                                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
+                                        left_on=['state', 'rating_area_id'],
+                                        right_on=['state', 'rating_area_num'],
+                                        how='left'
+                                    )
+                                    plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
+                                    plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
+                            except Exception:
+                                pass
+
+                    # Get client name
+                    client_name = st.session_state.get('client_name', 'Client')
+
+                    # Generate PDF
+                    pdf_buffer = generate_census_analysis_pdf(
+                        employees_df=employees_df,
+                        dependents_df=dependents_df,
+                        plan_availability_df=plan_availability_df,
+                        client_name=client_name,
+                        chart_images=chart_images
+                    )
+
+                    # Offer download
+                    st.download_button(
+                        label="⬇️ Download Census Analysis PDF",
+                        data=pdf_buffer,
+                        file_name=f"census_analysis_{client_name.replace(' ', '_')}.pdf",
+                        mime="application/pdf",
+                        type="primary",
+                        key="pdf_download_nav"
+                    )
+                except Exception as e:
+                    st.error(f"Error generating PDF: {str(e)}")
+                    logging.exception("PDF generation error")
 
     st.markdown("---")
 
@@ -447,7 +544,7 @@ if st.session_state.census_df is not None:
         st.markdown("**Employees by County:**")
         county_counts = employees_df.groupby(['state', 'county']).size().reset_index(name='count')
         county_counts = county_counts.sort_values('count', ascending=False)
-        st.dataframe(county_counts, use_container_width=True, hide_index=True)
+        st.dataframe(county_counts, width="stretch", hide_index=True)
 
         # Plan availability by rating area
         st.markdown("---")
@@ -497,7 +594,7 @@ if st.session_state.census_df is not None:
                     merged = merged.sort_values(['state', 'county', 'rating_area_id'])
                     merged.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
                     merged['Plans Available'] = merged['Plans Available'].fillna(0).astype(int)
-                    st.dataframe(merged, use_container_width=True, hide_index=True)
+                    st.dataframe(merged, width="stretch", hide_index=True)
                 else:
                     st.info("No plan data available")
             else:
@@ -856,6 +953,102 @@ else:
                         max_age = int(all_ages.max())
                         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
 
+                    # PDF Export Button
+                    export_col1, export_col2 = st.columns([4, 1])
+                    with export_col2:
+                        if st.button("📄 Export PDF", type="secondary", width="stretch", key="pdf_export_upload"):
+                            with st.spinner("Generating PDF..."):
+                                try:
+                                    # Generate chart images
+                                    from visualization_helpers import (
+                                        generate_age_distribution_chart,
+                                        generate_state_distribution_chart,
+                                        generate_family_composition_chart,
+                                        generate_dependent_age_distribution_chart
+                                    )
+
+                                    chart_images = {}
+                                    try:
+                                        chart_images['age_dist'] = generate_age_distribution_chart(employees_df, return_image=True)
+                                    except Exception:
+                                        chart_images['age_dist'] = None
+
+                                    try:
+                                        chart_images['state'] = generate_state_distribution_chart(employees_df, return_image=True)
+                                    except Exception:
+                                        chart_images['state'] = None
+
+                                    try:
+                                        chart_images['family_status'] = generate_family_composition_chart(employees_df, return_image=True)
+                                    except Exception:
+                                        chart_images['family_status'] = None
+
+                                    if not dependents_df.empty:
+                                        try:
+                                            chart_images['dependent_age'] = generate_dependent_age_distribution_chart(dependents_df, return_image=True)
+                                        except Exception:
+                                            chart_images['dependent_age'] = None
+
+                                    # Build plan availability data
+                                    plan_availability_df = pd.DataFrame()
+                                    db = st.session_state.get('db')
+                                    if 'rating_area_id' in employees_df.columns and db is not None:
+                                        ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
+                                        ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
+                                        if not ra_counts.empty:
+                                            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+                                            query = """
+                                            SELECT
+                                                SUBSTRING(r.plan_id, 6, 2) as state,
+                                                r.rating_area_id,
+                                                COUNT(DISTINCT r.plan_id) as plan_count
+                                            FROM rbis_insurance_plan_base_rates_20251019202724 r
+                                            JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
+                                            WHERE r.market_coverage = 'Individual'
+                                              AND p.market_coverage = 'Individual'
+                                              AND p.plan_effective_date = '2026-01-01'
+                                            GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                                            """
+                                            try:
+                                                plan_counts_df = db.execute_query(query)
+                                                if not plan_counts_df.empty:
+                                                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
+                                                    plan_availability_df = ra_counts.merge(
+                                                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
+                                                        left_on=['state', 'rating_area_id'],
+                                                        right_on=['state', 'rating_area_num'],
+                                                        how='left'
+                                                    )
+                                                    plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
+                                                    plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
+                                            except Exception:
+                                                pass
+
+                                    # Get client name
+                                    client_name = st.session_state.get('client_name', 'Client')
+
+                                    # Generate PDF
+                                    pdf_buffer = generate_census_analysis_pdf(
+                                        employees_df=employees_df,
+                                        dependents_df=dependents_df,
+                                        plan_availability_df=plan_availability_df,
+                                        client_name=client_name,
+                                        chart_images=chart_images
+                                    )
+
+                                    # Offer download
+                                    st.download_button(
+                                        label="⬇️ Download Census Analysis PDF",
+                                        data=pdf_buffer,
+                                        file_name=f"census_analysis_{client_name.replace(' ', '_')}.pdf",
+                                        mime="application/pdf",
+                                        type="primary",
+                                        key="pdf_download_upload"
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error generating PDF: {str(e)}")
+                                    logging.exception("PDF generation error")
+
                     # Detailed breakdown
                     st.markdown("---")
                     st.subheader("📊 Census summary")
@@ -1131,7 +1324,7 @@ else:
                         st.markdown("**Employees by County:**")
                         county_counts = employees_df.groupby(['state', 'county']).size().reset_index(name='count')
                         county_counts = county_counts.sort_values('count', ascending=False)
-                        st.dataframe(county_counts, use_container_width=True, hide_index=True)
+                        st.dataframe(county_counts, width="stretch", hide_index=True)
 
                         # Plan availability by rating area
                         st.markdown("---")
@@ -1176,7 +1369,7 @@ else:
                                     merged = merged.sort_values(['state', 'county', 'rating_area_id'])
                                     merged.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
                                     merged['Plans Available'] = merged['Plans Available'].fillna(0).astype(int)
-                                    st.dataframe(merged, use_container_width=True, hide_index=True)
+                                    st.dataframe(merged, width="stretch", hide_index=True)
                                 else:
                                     st.info("No plan data available")
                             else:

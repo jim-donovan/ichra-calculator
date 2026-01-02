@@ -1608,7 +1608,6 @@ def generate_scenario_rates_csv(multi_metal_results: Dict, db, census_df: pd.Dat
             hios_plan_id,
             plan_marketing_name,
             plan_type,
-            issuer_name,
             level_of_coverage as metal_level
         FROM rbis_insurance_plan_20251019202724
         WHERE hios_plan_id IN %s
@@ -1618,7 +1617,6 @@ def generate_scenario_rates_csv(multi_metal_results: Dict, db, census_df: pd.Dat
             for _, row in plan_df.iterrows():
                 plan_metadata[row['hios_plan_id']] = {
                     'plan_type': row['plan_type'],
-                    'issuer_name': row['issuer_name'],
                     'metal_level': row['metal_level']
                 }
         except Exception as e:

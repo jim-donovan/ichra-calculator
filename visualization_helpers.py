@@ -90,11 +90,10 @@ def generate_state_distribution_chart(
         x=state_dist.index,
         y=state_dist.values,
         title=title,
-        labels={'x': 'State', 'y': 'Number of Employees'},
-        color=state_dist.values,
-        color_continuous_scale='Blues'
+        labels={'x': 'State', 'y': 'Number of Employees'}
     )
 
+    fig.update_traces(marker_color='#0D7377')  # GLOVE teal
     fig.update_layout(showlegend=False, height=400)
     fig.update_xaxes(title='State')
     fig.update_yaxes(title='Number of Employees')
@@ -175,11 +174,11 @@ def generate_savings_comparison_chart(
 def generate_family_composition_chart(
     census_df: pd.DataFrame,
     dependents_df: Optional[pd.DataFrame] = None,
-    title: str = 'Family Composition Distribution',
+    title: str = 'Family Status Distribution',
     return_image: bool = False
 ) -> Union[go.Figure, bytes]:
     """
-    Generate family composition bar chart.
+    Generate family status distribution pie chart.
 
     Args:
         census_df: Employee census DataFrame
@@ -190,50 +189,53 @@ def generate_family_composition_chart(
     Returns:
         Plotly Figure object or PNG image bytes
     """
-    # Count families by composition
-    family_comp_counts = {}
-
-    if dependents_df is not None and not dependents_df.empty:
-        for _, emp in census_df.iterrows():
-            employee_id = emp.get('employee_id', emp.name)
-
-            # Get dependents for this employee
-            emp_deps = dependents_df[dependents_df['employee_id'] == employee_id]
-
-            # Determine family composition
-            if emp_deps.empty:
-                comp = "Employee Only"
-            else:
-                has_spouse = not emp_deps[emp_deps['relationship'] == 'spouse'].empty
-                num_children = len(emp_deps[emp_deps['relationship'] == 'child'])
-
-                if has_spouse and num_children > 0:
-                    comp = f"EE + Spouse + {num_children} Child{'ren' if num_children > 1 else ''}"
-                elif has_spouse:
-                    comp = "EE + Spouse"
-                elif num_children > 0:
-                    comp = f"EE + {num_children} Child{'ren' if num_children > 1 else ''}"
-                else:
-                    comp = "Employee Only"
-
-            family_comp_counts[comp] = family_comp_counts.get(comp, 0) + 1
+    # Use family_status column if available
+    if 'family_status' in census_df.columns:
+        from constants import FAMILY_STATUS_CODES
+        status_counts = census_df['family_status'].value_counts()
+        labels = [f"{code} ({FAMILY_STATUS_CODES.get(code, code)})" for code in status_counts.index]
+        values = status_counts.values
     else:
-        # No dependents data - all employee only
-        family_comp_counts['Employee Only'] = len(census_df)
+        # Fallback: count families by composition from dependents
+        family_comp_counts = {}
 
-    # Create figure
-    fig = px.bar(
-        x=list(family_comp_counts.keys()),
-        y=list(family_comp_counts.values()),
+        if dependents_df is not None and not dependents_df.empty:
+            for _, emp in census_df.iterrows():
+                employee_id = emp.get('employee_id', emp.name)
+                emp_deps = dependents_df[dependents_df['employee_id'] == employee_id]
+
+                if emp_deps.empty:
+                    comp = "Employee Only"
+                else:
+                    has_spouse = not emp_deps[emp_deps['relationship'] == 'spouse'].empty
+                    num_children = len(emp_deps[emp_deps['relationship'] == 'child'])
+
+                    if has_spouse and num_children > 0:
+                        comp = "Family"
+                    elif has_spouse:
+                        comp = "EE + Spouse"
+                    elif num_children > 0:
+                        comp = "EE + Children"
+                    else:
+                        comp = "Employee Only"
+
+                family_comp_counts[comp] = family_comp_counts.get(comp, 0) + 1
+        else:
+            family_comp_counts['Employee Only'] = len(census_df)
+
+        labels = list(family_comp_counts.keys())
+        values = list(family_comp_counts.values())
+
+    # Create pie chart
+    fig = px.pie(
+        values=values,
+        names=labels,
         title=title,
-        labels={'x': 'Family Type', 'y': 'Number of Employees'},
-        color=list(family_comp_counts.values()),
-        color_continuous_scale='Greens'
+        color_discrete_sequence=px.colors.qualitative.Set3
     )
 
-    fig.update_layout(showlegend=False, height=400)
-    fig.update_xaxes(title='Family Type', tickangle=-45)
-    fig.update_yaxes(title='Number of Employees')
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(showlegend=True, height=400)
 
     if return_image:
         return fig.to_image(format="png", width=600, height=400)
@@ -275,11 +277,10 @@ def generate_dependent_age_distribution_chart(
         x=dep_age_dist.index,
         y=dep_age_dist.values,
         title=title,
-        labels={'x': 'Age Group', 'y': 'Number of Dependents'},
-        color=dep_age_dist.values,
-        color_continuous_scale='Purples'
+        labels={'x': 'Age Group', 'y': 'Number of Dependents'}
     )
 
+    fig.update_traces(marker_color='#7c3aed')  # Purple
     fig.update_layout(showlegend=False, height=400)
     fig.update_xaxes(title='Age Group')
     fig.update_yaxes(title='Number of Dependents')

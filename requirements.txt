@@ -15,6 +15,7 @@ openpyxl>=3.1.0  # Excel file reading for non-traditional rate configuration
 
 # Visualization
 plotly>=5.17.0
+kaleido==0.2.1  # Plotly static image export (compatible with Plotly 5.x)
 
 # PDF generation
 reportlab>=4.0.0

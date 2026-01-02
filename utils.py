@@ -855,8 +855,8 @@ class CensusProcessor:
                 # Validate employee age range
                 # Note: ACA rates use "64 and over" band for ages 64+, so older employees are valid
                 # Medicare eligibility starts at 65, but employees may still use ICHRA marketplace plans
-                if employee_age < 18:
-                    errors.append(f"Row {idx+2}: Employee age {employee_age} is under 18. Check DOB: {ee_dob}")
+                if employee_age < 16:
+                    errors.append(f"Row {idx+2}: Employee age {employee_age} is under 16. Check DOB: {ee_dob}")
                     continue
                 if employee_age > 120:
                     errors.append(f"Row {idx+2}: Employee age {employee_age} appears invalid. Check DOB: {ee_dob}")

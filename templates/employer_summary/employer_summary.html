@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employer Summary - {{ data.client_name }}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 11px;
+            line-height: 1.4;
+            color: #1a1a1a;
+            background: white;
+        }
+
+        .page {
+            width: 8.5in;
+            height: 11in;
+            padding: 0.5in;
+            background: white;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #0D7377;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #0D7377;
+        }
+
+        .header .client-name {
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* Strategy info banner */
+        .strategy-banner {
+            background: #f5f5f5;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .strategy-banner strong {
+            color: #1a1a1a;
+        }
+
+        /* Section Headers */
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e5e5e5;
+        }
+
+        .section-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        /* Top Metrics Row */
+        .metrics-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .metric-card {
+            text-align: center;
+            padding: 20px 16px;
+            background: #fafafa;
+            border-radius: 8px;
+        }
+
+        .metric-card .label {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        .metric-card.highlight {
+            background: #f0fdfa;
+            border: 2px solid #0D7377;
+        }
+
+        .metric-card.highlight .value {
+            color: #0D7377;
+        }
+
+        /* Comparison Cards */
+        .comparison-section {
+            margin-bottom: 32px;
+        }
+
+        .comparison-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .comparison-card {
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid;
+        }
+
+        .comparison-card.primary {
+            background: #f0fdf4;
+            border-color: #22c55e;
+        }
+
+        .comparison-card.secondary {
+            background: #fafafa;
+            border-color: #0D7377;
+        }
+
+        .comparison-card .card-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .comparison-card .card-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 4px;
+        }
+
+        .comparison-card .card-delta {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+
+        .card-delta.positive {
+            background: #dcfce7;
+            color: #16a34a;
+        }
+
+        .card-delta.negative {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .comparison-card .card-caption {
+            font-size: 10px;
+            color: #666;
+        }
+
+        .comparison-card .card-caption strong {
+            color: #1a1a1a;
+        }
+
+        /* Breakdown Grid */
+        .breakdown-section {
+            margin-bottom: 24px;
+        }
+
+        .breakdown-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+        }
+
+        .breakdown-column {
+            padding: 20px;
+            background: #fafafa;
+            border-radius: 8px;
+        }
+
+        .breakdown-column h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #1a1a1a;
+        }
+
+        .breakdown-column.ichra {
+            background: #f0fdfa;
+        }
+
+        .breakdown-column.ichra h3 {
+            color: #0D7377;
+        }
+
+        .breakdown-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e5e5;
+        }
+
+        .breakdown-item:last-child {
+            border-bottom: none;
+        }
+
+        .breakdown-item .label {
+            color: #666;
+        }
+
+        .breakdown-item .value {
+            font-weight: 600;
+        }
+
+        .breakdown-item.total {
+            font-weight: 600;
+            border-top: 2px solid #ccc;
+            margin-top: 8px;
+            padding-top: 12px;
+        }
+
+        .breakdown-item.total .label,
+        .breakdown-item.total .value {
+            font-weight: 700;
+        }
+
+        .renewal-increase {
+            font-size: 11px;
+            color: #f97316;
+            margin-top: 8px;
+        }
+
+        /* Key Insight Box */
+        .insight-box {
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 24px;
+        }
+
+        .insight-box .icon {
+            font-size: 14px;
+            margin-right: 8px;
+        }
+
+        .insight-box p {
+            font-size: 11px;
+            color: #92400e;
+        }
+
+        .insight-box strong {
+            color: #78350f;
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: auto;
+            padding-top: 16px;
+            border-top: 1px solid #e5e5e5;
+            font-size: 9px;
+            color: #999;
+            text-align: center;
+            position: absolute;
+            bottom: 0.5in;
+            left: 0.5in;
+            right: 0.5in;
+        }
+
+        @media print {
+            .page {
+                margin: 0;
+                padding: 0.4in;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="header">
+            <h1>Employer Cost Summary</h1>
+            <span class="client-name">{{ data.client_name }}</span>
+        </div>
+
+        <!-- Strategy Info -->
+        <div class="strategy-banner">
+            <strong>Strategy:</strong> {{ data.strategy_name }} ·
+            <strong>{{ data.employees_covered }}</strong> employees ·
+            <strong>ER share:</strong> {{ "%.1f"|format(data.er_share_pct) }}%
+        </div>
+
+        <!-- Top Metrics: Current ER / Projected Renewal ER / Proposed ICHRA -->
+        <div class="section-header">
+            <h2>Employer Cost Comparison</h2>
+        </div>
+
+        <div class="metrics-row">
+            <div class="metric-card">
+                <div class="label">Current ER (2025)</div>
+                <div class="value">${{ "{:,.0f}".format(data.current_er_annual) }}</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Projected Renewal ER</div>
+                <div class="value">${{ "{:,.0f}".format(data.projected_er_annual) }}</div>
+            </div>
+            <div class="metric-card highlight">
+                <div class="label">Proposed ICHRA</div>
+                <div class="value">${{ "{:,.0f}".format(data.proposed_ichra_annual) }}</div>
+            </div>
+        </div>
+
+        <!-- Comparison Cards -->
+        <div class="comparison-section">
+            <div class="comparison-row">
+                <div class="comparison-card secondary">
+                    <div class="card-label">ICHRA vs Current ER</div>
+                    <div class="card-value">${{ "{:,.0f}".format(data.delta_vs_current|abs) }}</div>
+                    <div class="card-delta {{ 'positive' if data.delta_vs_current <= 0 else 'negative' }}">
+                        {% if data.delta_vs_current <= 0 %}↓{% else %}↑{% endif %} {{ "%.1f"|format(data.delta_vs_current_pct|abs) }}%
+                    </div>
+                    <div class="card-caption">
+                        {% if data.delta_vs_current <= 0 %}
+                        ICHRA saves vs current
+                        {% else %}
+                        ICHRA costs more than current
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="comparison-card primary">
+                    <div class="card-label">ICHRA vs Renewal ER</div>
+                    <div class="card-value">${{ "{:,.0f}".format(data.savings_vs_renewal_er) }}</div>
+                    <div class="card-delta positive">
+                        ↑ {{ "%.1f"|format(data.savings_vs_renewal_er_pct) }}% savings
+                    </div>
+                    <div class="card-caption">
+                        <strong>Primary comparison</strong> - avoiding the renewal
+                    </div>
+                </div>
+
+                <div class="comparison-card secondary">
+                    <div class="card-label">ICHRA vs Renewal Total</div>
+                    <div class="card-value">${{ "{:,.0f}".format(data.savings_vs_renewal_total) }}</div>
+                    <div class="card-delta positive">
+                        ↑ {{ "%.1f"|format(data.savings_vs_renewal_total_pct) }}%
+                    </div>
+                    <div class="card-caption">
+                        Total premium comparison*
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Insight -->
+        <div class="insight-box">
+            <p>
+                <span class="icon">💡</span>
+                <strong>Key insight:</strong> ICHRA is employer contribution only. 'vs Renewal ER' shows what you save by switching to ICHRA instead of accepting the renewal. 'vs Renewal Total' includes employee premiums and appears larger but isn't an apples-to-apples comparison.
+            </p>
+        </div>
+
+        <!-- Detailed Breakdown -->
+        <div class="breakdown-section">
+            <div class="section-header">
+                <h2>Cost Breakdown Details</h2>
+            </div>
+
+            <div class="breakdown-grid">
+                <div class="breakdown-column">
+                    <h3>Current (2025)</h3>
+                    <div class="breakdown-item">
+                        <span class="label">ER</span>
+                        <span class="value">${{ "{:,.2f}".format(data.current_er_annual) }}/yr</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="label">EE</span>
+                        <span class="value">${{ "{:,.2f}".format(data.current_ee_annual) }}/yr</span>
+                    </div>
+                    <div class="breakdown-item total">
+                        <span class="label">Total</span>
+                        <span class="value">${{ "{:,.2f}".format(data.current_total_annual) }}/yr</span>
+                    </div>
+                </div>
+
+                <div class="breakdown-column">
+                    <h3>2026 Renewal (Projected)</h3>
+                    <div class="breakdown-item">
+                        <span class="label">ER</span>
+                        <span class="value">${{ "{:,.2f}".format(data.projected_er_annual) }}/yr</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="label">EE</span>
+                        <span class="value">${{ "{:,.2f}".format(data.projected_ee_annual) }}/yr</span>
+                    </div>
+                    <div class="breakdown-item total">
+                        <span class="label">Total</span>
+                        <span class="value">${{ "{:,.2f}".format(data.renewal_total_annual) }}/yr</span>
+                    </div>
+                    {% if data.renewal_increase_pct != 0 %}
+                    <div class="renewal-increase">
+                        +{{ "%.1f"|format(data.renewal_increase_pct) }}% increase from current
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="breakdown-column ichra">
+                    <h3>Proposed ICHRA</h3>
+                    <div class="breakdown-item">
+                        <span class="label">ER Budget</span>
+                        <span class="value">${{ "{:,.2f}".format(data.proposed_ichra_annual) }}/yr</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="label">Avg/Employee</span>
+                        <span class="value">${{ "{:,.2f}".format(data.avg_per_employee_monthly) }}/mo</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="label">Employees</span>
+                        <span class="value">{{ data.employees_covered }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            Generated by GLOVE Benefits | ICHRA Calculator
+        </div>
+    </div>
+</body>
+</html>

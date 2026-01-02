@@ -264,6 +264,47 @@ if has_individual_contribs:
             )
             st.caption("Total premium comparison*")
 
+        # === PDF EXPORT BUTTON ===
+        st.markdown("")
+        export_col1, export_col2 = st.columns([4, 1])
+        with export_col2:
+            if st.button("📄 Export PDF", type="secondary", width="stretch", key="employer_summary_pdf_export"):
+                with st.spinner("Generating PDF..."):
+                    try:
+                        from pdf_employer_summary_renderer import generate_employer_summary_pdf, build_employer_summary_data
+
+                        # Build renewal data dict
+                        renewal_data = {
+                            'renewal_total_annual': renewal_total_annual,
+                            'projected_er_annual': projected_er_annual_2026,
+                            'projected_ee_annual': projected_ee_annual_2026
+                        }
+
+                        # Get client name
+                        client_name = st.session_state.get('client_name', 'Client')
+
+                        # Generate PDF
+                        pdf_buffer = generate_employer_summary_pdf(
+                            strategy_results=strategy_results,
+                            contrib_totals=contrib_totals,
+                            renewal_data=renewal_data,
+                            client_name=client_name
+                        )
+
+                        # Offer download
+                        st.download_button(
+                            label="⬇️ Download Employer Summary PDF",
+                            data=pdf_buffer,
+                            file_name=f"employer_summary_{client_name.replace(' ', '_')}.pdf",
+                            mime="application/pdf",
+                            type="primary",
+                            key="employer_summary_pdf_download"
+                        )
+                    except Exception as e:
+                        st.error(f"Error generating PDF: {str(e)}")
+                        import logging
+                        logging.exception("Employer summary PDF generation error")
+
         # === DETAILS IN EXPANDER ===
         with st.expander("View cost breakdown details"):
             st.caption(f"Strategy: {strategy_name} · {employees_covered} employees · ER share: {er_pct*100:.1f}%")
