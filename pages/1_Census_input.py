@@ -222,20 +222,25 @@ if st.session_state.census_df is not None:
                         ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
                         if not ra_counts.empty:
                             ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+                            # Build optimized query that only looks at relevant states/rating areas
+                            states = ra_counts['state'].unique().tolist()
+                            rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+
                             query = """
                             SELECT
-                                SUBSTRING(r.plan_id, 6, 2) as state,
+                                SUBSTRING(p.hios_plan_id, 6, 2) as state,
                                 r.rating_area_id,
-                                COUNT(DISTINCT r.plan_id) as plan_count
-                            FROM rbis_insurance_plan_base_rates_20251019202724 r
-                            JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
-                            WHERE r.market_coverage = 'Individual'
-                              AND p.market_coverage = 'Individual'
+                                COUNT(DISTINCT p.hios_plan_id) as plan_count
+                            FROM rbis_insurance_plan_20251019202724 p
+                            JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
+                            WHERE p.market_coverage = 'Individual'
                               AND p.plan_effective_date = '2026-01-01'
-                            GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                              AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+                              AND r.rating_area_id IN %s
+                            GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
                             """
                             try:
-                                plan_counts_df = db.execute_query(query)
+                                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
                                 if not plan_counts_df.empty:
                                     plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
                                     plan_availability_df = ra_counts.merge(
@@ -562,25 +567,25 @@ if st.session_state.census_df is not None:
             ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
 
             if not ra_counts.empty:
-                # Build state/rating area pairs for batch query
-                ra_pairs = []
-                for _, row in ra_counts.iterrows():
-                    ra_pairs.append((row['state'], f"Rating Area {int(row['rating_area_id'])}"))
+                # Build optimized query that only looks at relevant states/rating areas
+                states = ra_counts['state'].unique().tolist()
+                rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
 
-                # Single batch query for all rating areas
+                # Single batch query filtered to relevant rating areas
                 query = """
                 SELECT
-                    SUBSTRING(r.plan_id, 6, 2) as state,
+                    SUBSTRING(p.hios_plan_id, 6, 2) as state,
                     r.rating_area_id,
-                    COUNT(DISTINCT r.plan_id) as plan_count
-                FROM rbis_insurance_plan_base_rates_20251019202724 r
-                JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
-                WHERE r.market_coverage = 'Individual'
-                  AND p.market_coverage = 'Individual'
+                    COUNT(DISTINCT p.hios_plan_id) as plan_count
+                FROM rbis_insurance_plan_20251019202724 p
+                JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
+                WHERE p.market_coverage = 'Individual'
                   AND p.plan_effective_date = '2026-01-01'
-                GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                  AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+                  AND r.rating_area_id IN %s
+                GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
                 """
-                plan_counts_df = db.execute_query(query)
+                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
 
                 if not plan_counts_df.empty:
                     # Extract rating area number from string like "Rating Area 1"
@@ -1003,20 +1008,25 @@ else:
                                         ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
                                         if not ra_counts.empty:
                                             ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+                                            # Build optimized query that only looks at relevant states/rating areas
+                                            states = ra_counts['state'].unique().tolist()
+                                            rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+
                                             query = """
                                             SELECT
-                                                SUBSTRING(r.plan_id, 6, 2) as state,
+                                                SUBSTRING(p.hios_plan_id, 6, 2) as state,
                                                 r.rating_area_id,
-                                                COUNT(DISTINCT r.plan_id) as plan_count
-                                            FROM rbis_insurance_plan_base_rates_20251019202724 r
-                                            JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
-                                            WHERE r.market_coverage = 'Individual'
-                                              AND p.market_coverage = 'Individual'
+                                                COUNT(DISTINCT p.hios_plan_id) as plan_count
+                                            FROM rbis_insurance_plan_20251019202724 p
+                                            JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
+                                            WHERE p.market_coverage = 'Individual'
                                               AND p.plan_effective_date = '2026-01-01'
-                                            GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                                              AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+                                              AND r.rating_area_id IN %s
+                                            GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
                                             """
                                             try:
-                                                plan_counts_df = db.execute_query(query)
+                                                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
                                                 if not plan_counts_df.empty:
                                                     plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
                                                     plan_availability_df = ra_counts.merge(
@@ -1345,20 +1355,25 @@ else:
                             ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
 
                             if not ra_counts.empty:
-                                # Single batch query for all rating areas
+                                # Build optimized query that only looks at relevant states/rating areas
+                                states = ra_counts['state'].unique().tolist()
+                                rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+
+                                # Single batch query filtered to relevant rating areas
                                 query = """
                                 SELECT
-                                    SUBSTRING(r.plan_id, 6, 2) as state,
+                                    SUBSTRING(p.hios_plan_id, 6, 2) as state,
                                     r.rating_area_id,
-                                    COUNT(DISTINCT r.plan_id) as plan_count
-                                FROM rbis_insurance_plan_base_rates_20251019202724 r
-                                JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
-                                WHERE r.market_coverage = 'Individual'
-                                  AND p.market_coverage = 'Individual'
+                                    COUNT(DISTINCT p.hios_plan_id) as plan_count
+                                FROM rbis_insurance_plan_20251019202724 p
+                                JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
+                                WHERE p.market_coverage = 'Individual'
                                   AND p.plan_effective_date = '2026-01-01'
-                                GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                                  AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+                                  AND r.rating_area_id IN %s
+                                GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
                                 """
-                                plan_counts_df = db.execute_query(query)
+                                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
 
                                 if not plan_counts_df.empty:
                                     # Extract rating area number from string like "Rating Area 1"
