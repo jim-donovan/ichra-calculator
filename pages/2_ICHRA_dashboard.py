@@ -16,9 +16,10 @@ from typing import Dict, List, Optional, Any
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from database import get_database_connection
+from database import get_database_connection, DatabaseConnection
 from utils import ContributionComparison, PremiumCalculator
 from financial_calculator import FinancialSummaryCalculator
+from queries import get_plan_deductible_and_moop_batch
 from constants import (
     FAMILY_STATUS_CODES,
     AFFORDABILITY_THRESHOLD_2026,
@@ -500,11 +501,15 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
     if dashboard_config and 'cooperative_ratio' in dashboard_config:
         cooperative_ratio = dashboard_config['cooperative_ratio']
 
+    # Load cooperative rate table from database
+    coop_rates_df = load_cooperative_rate_table(db)
+
     data.tier_costs = calculate_tier_costs(
         census_df, contribution_analysis, db,
         multi_metal_results=data.multi_metal_results,
         renewal_monthly=renewal_monthly,
-        cooperative_ratio=cooperative_ratio
+        cooperative_ratio=cooperative_ratio,
+        coop_rates_df=coop_rates_df
     )
 
     # ==========================================================================
@@ -515,7 +520,8 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
         multi_metal_results=data.multi_metal_results,
         contribution_pct=data.contribution_pct,
         renewal_monthly=renewal_monthly,
-        cooperative_ratio=cooperative_ratio
+        cooperative_ratio=cooperative_ratio,
+        coop_rates_df=coop_rates_df
     )
 
     # ==========================================================================
@@ -540,7 +546,9 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
         census_df, contribution_analysis, data.tier_costs,
         data.multi_metal_results, data.contribution_pct,
         cooperative_ratio=cooperative_ratio,
-        dependents_df=dependents_df
+        dependents_df=dependents_df,
+        db=db,
+        coop_rates_df=coop_rates_df
     )
 
     # ==========================================================================
@@ -573,7 +581,8 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
 def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = None,
                          db=None, multi_metal_results: Dict = None,
                          renewal_monthly: float = None,
-                         cooperative_ratio: float = None) -> Dict[str, Dict[str, float]]:
+                         cooperative_ratio: float = None,
+                         coop_rates_df: pd.DataFrame = None) -> Dict[str, Dict[str, float]]:
     """
     Calculate average costs per family status tier.
 
@@ -682,10 +691,30 @@ def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = 
         if tier_name in metal_costs_by_tier:
             for metal_key, cost in metal_costs_by_tier[tier_name].items():
                 tier_costs[tier_name][metal_key] = cost
-            # Cooperative estimate using configured ratio
-            silver_cost = metal_costs_by_tier[tier_name].get('ICHRA Silver', 0)
-            if silver_cost > 0:
-                tier_costs[tier_name]['Cooperative'] = round(silver_cost * cooperative_ratio, 0)
+
+            # Cooperative - use rate table if available, otherwise ratio of silver
+            if coop_rates_df is not None and not coop_rates_df.empty:
+                # Look up cooperative rate for each employee in tier and average
+                age_col = 'age' if 'age' in tier_employees.columns else None
+                coop_rates = []
+                if age_col:
+                    for _, emp_row in tier_employees.iterrows():
+                        emp_age = int(emp_row.get(age_col, 40))
+                        coop_rate = get_cooperative_rate(emp_age, status_code, coop_rates_df)
+                        if coop_rate > 0:
+                            coop_rates.append(coop_rate)
+                if coop_rates:
+                    tier_costs[tier_name]['Cooperative'] = round(sum(coop_rates) / len(coop_rates), 0)
+                else:
+                    # Fallback to ratio if no rates found
+                    silver_cost = metal_costs_by_tier[tier_name].get('ICHRA Silver', 0)
+                    if silver_cost > 0:
+                        tier_costs[tier_name]['Cooperative'] = round(silver_cost * cooperative_ratio, 0)
+            else:
+                # Fallback to ratio if no rate table
+                silver_cost = metal_costs_by_tier[tier_name].get('ICHRA Silver', 0)
+                if silver_cost > 0:
+                    tier_costs[tier_name]['Cooperative'] = round(silver_cost * cooperative_ratio, 0)
         elif contribution_analysis:
             # Fallback to contribution_analysis if multi_metal not available
             ichra_costs = []
@@ -708,11 +737,331 @@ def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = 
     return tier_costs
 
 
+def load_cooperative_rate_table(db: DatabaseConnection = None) -> pd.DataFrame:
+    """Load the HAP cooperative rate table from database."""
+    if db is None:
+        return pd.DataFrame()
+
+    query = """
+    SELECT age_band, family_status, deductible_1k, deductible_2_5k
+    FROM hap_cooperative_rates
+    ORDER BY age_band, family_status
+    """
+    try:
+        return pd.read_sql(query, db.engine)
+    except Exception as e:
+        print(f"Error loading cooperative rates: {e}")
+        return pd.DataFrame()
+
+
+def get_cooperative_rate(age: int, family_status: str, coop_rates_df: pd.DataFrame,
+                         deductible: str = "2.5k") -> float:
+    """
+    Look up cooperative rate based on age and family status.
+
+    Args:
+        age: Employee age
+        family_status: EE, ES, EC, or F
+        coop_rates_df: DataFrame from load_cooperative_rate_table()
+        deductible: "1k" or "2.5k" (default "2.5k")
+
+    Returns:
+        Monthly cooperative rate
+    """
+    if coop_rates_df is None or coop_rates_df.empty:
+        return 0
+
+    # Map family status codes
+    status_map = {"EE": "EE", "ES": "ES", "EC": "EC", "F": "F"}
+    fs = status_map.get(family_status, "EE")
+
+    # Determine age band
+    if age < 30:
+        age_band = "18-29"
+    elif age < 40:
+        age_band = "30-39"
+    elif age < 50:
+        age_band = "40-49"
+    elif age < 60:
+        age_band = "50-59"
+    else:
+        age_band = "60-64"
+
+    # Look up rate
+    row = coop_rates_df[(coop_rates_df['age_band'] == age_band) &
+                        (coop_rates_df['family_status'] == fs)]
+    if not row.empty:
+        col = 'deductible_2_5k' if deductible == "2.5k" else 'deductible_1k'
+        return float(row[col].iloc[0])
+    return 0
+
+
+def calculate_tier_costs_by_age(census_df: pd.DataFrame, multi_metal_results: Dict = None,
+                                 mode: str = "youngest", cooperative_ratio: float = None,
+                                 coop_rates_df: pd.DataFrame = None) -> Dict[str, Dict[str, float]]:
+    """
+    Calculate tier costs using youngest or oldest employee per tier.
+
+    Args:
+        census_df: Employee census DataFrame
+        multi_metal_results: Results from calculate_multi_metal_scenario()
+        mode: "youngest" or "oldest"
+        cooperative_ratio: Cooperative cost as fraction of Silver
+        coop_rates_df: Cooperative rate table DataFrame
+
+    Returns dict with structure:
+    {
+        "Employee Only": {"ICHRA Bronze": X, "ICHRA Silver": Y, ...},
+        ...
+    }
+    """
+    if cooperative_ratio is None:
+        cooperative_ratio = COOPERATIVE_CONFIG['default_discount_ratio']
+
+    tier_mapping = {
+        "EE": "Employee Only",
+        "ES": "Employee + Spouse",
+        "EC": "Employee + Children",
+        "F": "Family",
+    }
+
+    tier_costs = {
+        "Employee Only": {},
+        "Employee + Spouse": {},
+        "Employee + Children": {},
+        "Family": {},
+    }
+
+    family_col = 'family_status' if 'family_status' in census_df.columns else None
+    if not family_col and 'Family Status' in census_df.columns:
+        family_col = 'Family Status'
+    if not family_col:
+        return tier_costs
+
+    age_col = 'age' if 'age' in census_df.columns else None
+    if not age_col:
+        return tier_costs
+
+    # For each tier, find the youngest or oldest employee
+    for status_code, tier_name in tier_mapping.items():
+        tier_employees = census_df[census_df[family_col] == status_code]
+        if tier_employees.empty:
+            continue
+
+        # Sort by age and pick first (youngest) or last (oldest)
+        sorted_tier = tier_employees.sort_values(age_col)
+        if mode == "youngest":
+            target_employee = sorted_tier.iloc[0]
+        else:  # oldest
+            target_employee = sorted_tier.iloc[-1]
+
+        emp_id = target_employee.get('employee_id')
+        emp_age = int(target_employee.get(age_col, 0))
+
+        # Current and renewal costs for this specific employee
+        current_er = target_employee.get('current_er_monthly', 0) or 0
+        current_ee = target_employee.get('current_ee_monthly', 0) or 0
+        current_total = current_er + current_ee
+        if current_total > 0:
+            tier_costs[tier_name][f'Current {CURRENT_PLAN_YEAR}'] = round(current_total, 0)
+
+        # Get 2026 projected premium if available
+        projected_2026 = target_employee.get('projected_2026_premium', 0) or 0
+        if projected_2026 > 0:
+            tier_costs[tier_name][f'Renewal {RENEWAL_PLAN_YEAR}'] = round(projected_2026, 0)
+
+        # Get ICHRA costs from multi_metal_results for this specific employee
+        if multi_metal_results:
+            for metal in ['Bronze', 'Silver', 'Gold']:
+                metal_data = multi_metal_results.get(metal, {})
+                employee_details = metal_data.get('employee_details', [])
+                for emp_detail in employee_details:
+                    if emp_detail.get('employee_id') == emp_id:
+                        premium = emp_detail.get('estimated_tier_premium', 0)
+                        if premium > 0:
+                            tier_costs[tier_name][f'ICHRA {metal}'] = round(premium, 0)
+                        break
+
+            # Cooperative - use rate table if available, otherwise use ratio
+            silver_cost = tier_costs[tier_name].get('ICHRA Silver', 0)
+            if coop_rates_df is not None and not coop_rates_df.empty:
+                coop_rate = get_cooperative_rate(emp_age, status_code, coop_rates_df)
+                if coop_rate > 0:
+                    tier_costs[tier_name]['Cooperative'] = round(coop_rate, 0)
+                elif silver_cost > 0:
+                    tier_costs[tier_name]['Cooperative'] = round(silver_cost * cooperative_ratio, 0)
+            elif silver_cost > 0:
+                tier_costs[tier_name]['Cooperative'] = round(silver_cost * cooperative_ratio, 0)
+
+    return tier_costs
+
+
+def calculate_age_bracket_costs(census_df: pd.DataFrame, multi_metal_results: Dict = None,
+                                 cooperative_ratio: float = None,
+                                 coop_rates_df: pd.DataFrame = None) -> Dict[str, Dict[str, float]]:
+    """
+    Calculate average costs by age bracket using individual ee_rate (not tier premium).
+
+    Age brackets: 18-29, 30-39, 40-49, 50-59, 60-64, 65+
+
+    For each bracket, calculates average of individual rates for employees in that bracket.
+    This shows true age-based cost differences without family status multipliers.
+
+    Args:
+        census_df: Employee census DataFrame
+        multi_metal_results: Results from calculate_multi_metal_scenario()
+        cooperative_ratio: Cooperative cost as fraction of Silver
+        coop_rates_df: Cooperative rate table DataFrame
+
+    Returns:
+        Dict with age bracket keys and scenario cost values
+    """
+    if cooperative_ratio is None:
+        cooperative_ratio = COOPERATIVE_CONFIG['default_discount_ratio']
+
+    # Define age brackets
+    age_brackets = [
+        ("18-29", 18, 29),
+        ("30-39", 30, 39),
+        ("40-49", 40, 49),
+        ("50-59", 50, 59),
+        ("60-64", 60, 64),
+        ("65+", 65, 999),
+    ]
+
+    # Initialize results
+    bracket_costs = {}
+    for bracket_name, _, _ in age_brackets:
+        bracket_costs[bracket_name] = {
+            'count': 0,
+            f'Current {CURRENT_PLAN_YEAR}': 0,
+            f'Renewal {RENEWAL_PLAN_YEAR}': 0,
+            'ICHRA Bronze': 0,
+            'ICHRA Silver': 0,
+            'ICHRA Gold': 0,
+            'Cooperative': 0,
+        }
+
+    if census_df is None or census_df.empty:
+        return bracket_costs
+
+    # Build employee lookup from multi_metal_results (using ee_rate, not tier_premium)
+    emp_metal_rates = {}  # emp_id -> {Bronze: rate, Silver: rate, Gold: rate}
+    if multi_metal_results:
+        for metal in ['Bronze', 'Silver', 'Gold']:
+            metal_data = multi_metal_results.get(metal, {})
+            for emp_detail in metal_data.get('employee_details', []):
+                emp_id = emp_detail.get('employee_id')
+                if emp_id not in emp_metal_rates:
+                    emp_metal_rates[emp_id] = {}
+                # Use ee_rate (individual rate) not estimated_tier_premium
+                emp_metal_rates[emp_id][metal] = emp_detail.get('lcp_ee_rate', 0) or 0
+
+    # Collect costs per bracket
+    bracket_data = {b[0]: {'current': [], 'renewal': [], 'bronze': [], 'silver': [], 'gold': [], 'coop': [], 'ages': []}
+                    for b in age_brackets}
+
+    age_col = 'age' if 'age' in census_df.columns else None
+    if not age_col:
+        return bracket_costs
+
+    for _, row in census_df.iterrows():
+        age = int(row.get(age_col, 0))
+        emp_id = row.get('employee_id', '')
+        family_status = row.get('family_status', 'EE')
+
+        # Find which bracket this employee belongs to
+        bracket_name = None
+        for name, min_age, max_age in age_brackets:
+            if min_age <= age <= max_age:
+                bracket_name = name
+                break
+
+        if not bracket_name:
+            continue
+
+        # Current costs (total premium for reference)
+        current_er = row.get('current_er_monthly', 0) or 0
+        current_ee = row.get('current_ee_monthly', 0) or 0
+        current_total = current_er + current_ee
+        if current_total > 0:
+            bracket_data[bracket_name]['current'].append(current_total)
+
+        # Renewal (projected 2026 premium)
+        # Try to get from multi_metal_results first
+        projected_2026 = 0
+        if emp_id in emp_metal_rates and multi_metal_results:
+            # Look up projected_2026_premium from any metal's employee_details
+            for metal in ['Silver', 'Bronze', 'Gold']:
+                metal_data = multi_metal_results.get(metal, {})
+                for emp_detail in metal_data.get('employee_details', []):
+                    if emp_detail.get('employee_id') == emp_id:
+                        projected_2026 = emp_detail.get('projected_2026_premium', 0) or 0
+                        break
+                if projected_2026 > 0:
+                    break
+
+        if projected_2026 > 0:
+            bracket_data[bracket_name]['renewal'].append(projected_2026)
+
+        # ICHRA rates (individual ee_rate)
+        if emp_id in emp_metal_rates:
+            rates = emp_metal_rates[emp_id]
+            if rates.get('Bronze', 0) > 0:
+                bracket_data[bracket_name]['bronze'].append(rates['Bronze'])
+            if rates.get('Silver', 0) > 0:
+                bracket_data[bracket_name]['silver'].append(rates['Silver'])
+            if rates.get('Gold', 0) > 0:
+                bracket_data[bracket_name]['gold'].append(rates['Gold'])
+
+            # Cooperative - use rate table with actual family status, otherwise ratio of silver
+            silver_rate = rates.get('Silver', 0)
+            if coop_rates_df is not None and not coop_rates_df.empty:
+                # Get rate from cooperative table using actual family status
+                coop_rate = get_cooperative_rate(age, family_status, coop_rates_df)
+                if coop_rate > 0:
+                    bracket_data[bracket_name]['coop'].append(coop_rate)
+                elif silver_rate > 0:
+                    bracket_data[bracket_name]['coop'].append(silver_rate * cooperative_ratio)
+            elif silver_rate > 0:
+                bracket_data[bracket_name]['coop'].append(silver_rate * cooperative_ratio)
+
+        bracket_data[bracket_name]['ages'].append(age)
+
+    # Calculate averages for each bracket (for row display) and sums (for totals)
+    for bracket_name, data in bracket_data.items():
+        count = len(data['ages'])
+        bracket_costs[bracket_name]['count'] = count
+
+        if count > 0:
+            if data['current']:
+                bracket_costs[bracket_name][f'Current {CURRENT_PLAN_YEAR}'] = round(sum(data['current']) / len(data['current']), 0)
+                bracket_costs[bracket_name][f'Current {CURRENT_PLAN_YEAR}_sum'] = sum(data['current'])
+            if data['renewal']:
+                bracket_costs[bracket_name][f'Renewal {RENEWAL_PLAN_YEAR}'] = round(sum(data['renewal']) / len(data['renewal']), 0)
+                bracket_costs[bracket_name][f'Renewal {RENEWAL_PLAN_YEAR}_sum'] = sum(data['renewal'])
+            if data['bronze']:
+                bracket_costs[bracket_name]['ICHRA Bronze'] = round(sum(data['bronze']) / len(data['bronze']), 0)
+                bracket_costs[bracket_name]['ICHRA Bronze_sum'] = sum(data['bronze'])
+            if data['silver']:
+                bracket_costs[bracket_name]['ICHRA Silver'] = round(sum(data['silver']) / len(data['silver']), 0)
+                bracket_costs[bracket_name]['ICHRA Silver_sum'] = sum(data['silver'])
+            if data['gold']:
+                bracket_costs[bracket_name]['ICHRA Gold'] = round(sum(data['gold']) / len(data['gold']), 0)
+                bracket_costs[bracket_name]['ICHRA Gold_sum'] = sum(data['gold'])
+            if data['coop']:
+                bracket_costs[bracket_name]['Cooperative'] = round(sum(data['coop']) / len(data['coop']), 0)
+                bracket_costs[bracket_name]['Cooperative_sum'] = sum(data['coop'])
+
+    return bracket_costs
+
+
 def calculate_company_totals(census_df: pd.DataFrame, contribution_analysis: Dict = None,
                               tier_costs: Dict = None, multi_metal_results: Dict = None,
                               contribution_pct: float = 0.65,
                               renewal_monthly: float = None,
-                              cooperative_ratio: float = None) -> Dict[str, float]:
+                              cooperative_ratio: float = None,
+                              coop_rates_df: pd.DataFrame = None) -> Dict[str, float]:
     """
     Calculate company-wide totals for each scenario.
 
@@ -744,20 +1093,26 @@ def calculate_company_totals(census_df: pd.DataFrame, contribution_analysis: Dic
     if census_df is None or census_df.empty:
         return totals
 
-    # Sum current costs from census - TOTAL PREMIUM (ER + EE)
-    current_total = 0
+    # Sum current costs from census - EMPLOYER PORTION ONLY for fair comparison
+    current_er_total = 0
+    current_total = 0  # Total premium (ER + EE) for calculating ER ratio
     if 'current_er_monthly' in census_df.columns:
-        er_sum = census_df['current_er_monthly'].fillna(0).sum()
-        current_total += er_sum if pd.notna(er_sum) else 0
+        current_er_total = census_df['current_er_monthly'].fillna(0).sum()
+        current_er_total = current_er_total if pd.notna(current_er_total) else 0
     if 'current_ee_monthly' in census_df.columns:
         ee_sum = census_df['current_ee_monthly'].fillna(0).sum()
-        current_total += ee_sum if pd.notna(ee_sum) else 0
-    totals[f'Current {CURRENT_PLAN_YEAR}'] = current_total
+        current_total = current_er_total + (ee_sum if pd.notna(ee_sum) else 0)
+    else:
+        current_total = current_er_total
+    totals[f'Current {CURRENT_PLAN_YEAR}'] = current_er_total  # ER only
 
-    # Renewal costs - TOTAL PREMIUM, use actual data from Page 3 if available
-    # No fallback - require actual renewal data
+    # Renewal costs - EMPLOYER PORTION (apply same ER ratio as current plan)
     if renewal_monthly and renewal_monthly > 0:
-        totals[f'Renewal {RENEWAL_PLAN_YEAR}'] = renewal_monthly
+        if current_total > 0:
+            er_ratio = current_er_total / current_total
+        else:
+            er_ratio = contribution_pct  # Fallback to ICHRA contribution %
+        totals[f'Renewal {RENEWAL_PLAN_YEAR}'] = renewal_monthly * er_ratio
 
     # ICHRA costs - use actual data from multi_metal_results if available
     if multi_metal_results:
@@ -767,9 +1122,29 @@ def calculate_company_totals(census_df: pd.DataFrame, contribution_analysis: Dic
             # Apply contribution percentage (what employer pays)
             totals[f'ICHRA {metal}'] = total_monthly * contribution_pct
 
-        # Cooperative estimate using configured ratio
-        silver_total = multi_metal_results.get('Silver', {}).get('total_monthly', 0)
-        totals['Cooperative'] = silver_total * cooperative_ratio
+        # Cooperative - use rate table if available, otherwise ratio of silver
+        if coop_rates_df is not None and not coop_rates_df.empty:
+            # Sum cooperative rates from rate table for each employee
+            coop_total = 0
+            age_col = 'age' if 'age' in census_df.columns else None
+            family_col = 'family_status' if 'family_status' in census_df.columns else None
+            if age_col and family_col:
+                for _, emp_row in census_df.iterrows():
+                    emp_age = int(emp_row.get(age_col, 40))
+                    emp_fs = emp_row.get(family_col, 'EE')
+                    coop_rate = get_cooperative_rate(emp_age, emp_fs, coop_rates_df)
+                    if coop_rate > 0:
+                        coop_total += coop_rate
+            if coop_total > 0:
+                totals['Cooperative'] = coop_total
+            else:
+                # Fallback to ratio if no rates found
+                silver_total = multi_metal_results.get('Silver', {}).get('total_monthly', 0)
+                totals['Cooperative'] = silver_total * cooperative_ratio
+        else:
+            # Fallback to ratio if no rate table
+            silver_total = multi_metal_results.get('Silver', {}).get('total_monthly', 0)
+            totals['Cooperative'] = silver_total * cooperative_ratio
 
     elif contribution_analysis:
         # Fallback to contribution_analysis if multi_metal not available
@@ -794,7 +1169,9 @@ def select_employee_examples(census_df: pd.DataFrame, contribution_analysis: Dic
                               tier_costs: Dict = None, multi_metal_results: Dict = None,
                               contribution_pct: float = 0.65,
                               cooperative_ratio: float = None,
-                              dependents_df: pd.DataFrame = None) -> List[Dict]:
+                              dependents_df: pd.DataFrame = None,
+                              db=None,
+                              coop_rates_df: pd.DataFrame = None) -> List[Dict]:
     """Select 3 representative employees: youngest, mid-age family, oldest."""
     examples = []
 
@@ -804,13 +1181,15 @@ def select_employee_examples(census_df: pd.DataFrame, contribution_analysis: Dic
     # Sort by age to find youngest/oldest
     sorted_df = census_df.sort_values('age')
 
-    # Youngest (Employee Only preferred)
+    # Youngest Employee Only (EE status only)
     ee_only = sorted_df[sorted_df['family_status'] == 'EE']
     if not ee_only.empty:
         youngest = ee_only.iloc[0]
         examples.append(build_employee_example(
             youngest, "Youngest Employee", contribution_analysis, tier_costs,
-            multi_metal_results, contribution_pct, cooperative_ratio, dependents_df
+            multi_metal_results, contribution_pct, cooperative_ratio, dependents_df, db,
+            use_ee_rate_only=True,  # ICHRA is individual-level
+            coop_rates_df=coop_rates_df
         ))
 
     # Mid-age family (Family status preferred)
@@ -820,14 +1199,16 @@ def select_employee_examples(census_df: pd.DataFrame, contribution_analysis: Dic
         mid_family = families.iloc[mid_idx]
         examples.append(build_employee_example(
             mid_family, "Mid-Age Family", contribution_analysis, tier_costs,
-            multi_metal_results, contribution_pct, cooperative_ratio, dependents_df
+            multi_metal_results, contribution_pct, cooperative_ratio, dependents_df, db,
+            coop_rates_df=coop_rates_df
         ))
 
     # Oldest
     oldest = sorted_df.iloc[-1]
     examples.append(build_employee_example(
         oldest, "Oldest Employee", contribution_analysis, tier_costs,
-        multi_metal_results, contribution_pct, cooperative_ratio, dependents_df
+        multi_metal_results, contribution_pct, cooperative_ratio, dependents_df, db,
+        coop_rates_df=coop_rates_df
     ))
 
     return examples
@@ -837,8 +1218,16 @@ def build_employee_example(employee_row: pd.Series, label: str,
                            contribution_analysis: Dict = None, tier_costs: Dict = None,
                            multi_metal_results: Dict = None, contribution_pct: float = 0.65,
                            cooperative_ratio: float = None,
-                           dependents_df: pd.DataFrame = None) -> Dict:
-    """Build employee example dict from census row."""
+                           dependents_df: pd.DataFrame = None,
+                           db=None,
+                           use_ee_rate_only: bool = False,
+                           coop_rates_df: pd.DataFrame = None) -> Dict:
+    """Build employee example dict from census row.
+
+    Args:
+        use_ee_rate_only: If True, use individual ee_rate instead of estimated_tier_premium
+                          (ignores family status multiplier). Used for youngest employee.
+    """
     # Use provided cooperative_ratio or fall back to constant
     if cooperative_ratio is None:
         cooperative_ratio = COOPERATIVE_CONFIG['default_discount_ratio']
@@ -879,22 +1268,105 @@ def build_employee_example(employee_row: pd.Series, label: str,
         'ee_rate': None,
     }
 
-    # Get employee details from multi_metal_results (Silver LCSP)
-    if multi_metal_results and 'Silver' in multi_metal_results:
-        silver_details = multi_metal_results['Silver'].get('employee_details', [])
-        # Find this employee's LCSP data
-        for emp_detail in silver_details:
-            if emp_detail.get('employee_id') == emp_id:
-                emp_detail_found = emp_detail
-                ichra_premium = emp_detail.get('estimated_tier_premium', 0)
-                projected_2026_premium = emp_detail.get('projected_2026_premium', 0) or 0
-                plan_details = {
-                    'plan_id': emp_detail.get('lcp_plan_id'),
-                    'plan_name': emp_detail.get('lcp_plan_name'),
-                    'actuarial_value': emp_detail.get('actuarial_value'),
-                    'ee_rate': emp_detail.get('lcp_ee_rate', 0),
-                }
-                break
+    # Comprehensive metal plan details for Bronze, Silver, Gold
+    metal_plan_details = {}
+
+    # Get employee details from multi_metal_results for all metal levels
+    if multi_metal_results:
+        # Collect plan IDs for batch metadata lookup
+        plan_ids_to_fetch = []
+
+        for metal in ['Bronze', 'Silver', 'Gold']:
+            if metal in multi_metal_results:
+                metal_details = multi_metal_results[metal].get('employee_details', [])
+                for emp_detail in metal_details:
+                    if emp_detail.get('employee_id') == emp_id:
+                        plan_id = emp_detail.get('lcp_plan_id')
+                        metal_plan_details[metal] = {
+                            'plan_id': plan_id,
+                            'plan_name': emp_detail.get('lcp_plan_name'),
+                            'actuarial_value': emp_detail.get('actuarial_value'),
+                            'ee_rate': emp_detail.get('lcp_ee_rate', 0),
+                            'estimated_tier_premium': emp_detail.get('estimated_tier_premium', 0),
+                            'issuer_name': None,
+                            'plan_type': None,
+                            'deductible': None,
+                            'moop': None,
+                            'hsa_eligible': None,
+                        }
+                        if plan_id:
+                            plan_ids_to_fetch.append(plan_id)
+
+                        # Use Silver for the main ICHRA premium calculation
+                        if metal == 'Silver':
+                            # Use ee_rate (individual only) if flag is set, otherwise use tier premium
+                            if use_ee_rate_only:
+                                ichra_premium = emp_detail.get('lcp_ee_rate', 0)
+                            else:
+                                ichra_premium = emp_detail.get('estimated_tier_premium', 0)
+                            projected_2026_premium = emp_detail.get('projected_2026_premium', 0) or 0
+                            plan_details = {
+                                'plan_id': plan_id,
+                                'plan_name': emp_detail.get('lcp_plan_name'),
+                                'actuarial_value': emp_detail.get('actuarial_value'),
+                                'ee_rate': emp_detail.get('lcp_ee_rate', 0),
+                            }
+                        break
+
+        # Batch fetch plan metadata from database (deductible, moop)
+        if db is not None and plan_ids_to_fetch:
+            try:
+                plan_ids_tuple = tuple(set(plan_ids_to_fetch))
+
+                # Query deductible and MOOP separately then combine
+                # Deductible query - check for both Medical EHB and Combined Medical/Drug patterns
+                ded_query = """
+                SELECT plan_id, individual_ded_moop_amount as deductible
+                FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
+                WHERE plan_id IN %s
+                  AND network_type = 'In Network'
+                  AND (
+                      moop_ded_type LIKE '%%Medical EHB Deductible%%'
+                      OR moop_ded_type LIKE '%%Combined Medical and Drug EHB Deductible%%'
+                  )
+                  AND individual_ded_moop_amount NOT IN ('Not Applicable', 'N/A', '')
+                """
+                ded_df = pd.read_sql(ded_query, db.engine, params=(plan_ids_tuple,))
+
+                # MOOP query
+                moop_query = """
+                SELECT plan_id, individual_ded_moop_amount as moop
+                FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
+                WHERE plan_id IN %s
+                  AND network_type = 'In Network'
+                  AND moop_ded_type LIKE '%%Maximum Out of Pocket%%'
+                """
+                moop_df = pd.read_sql(moop_query, db.engine, params=(plan_ids_tuple,))
+
+                # Build lookup
+                plan_info_lookup = {pid: {'deductible': None, 'moop': None} for pid in plan_ids_tuple}
+
+                for _, row in ded_df.iterrows():
+                    pid = row['plan_id']
+                    if pid in plan_info_lookup:
+                        plan_info_lookup[pid]['deductible'] = float(row['deductible']) if pd.notna(row['deductible']) else None
+
+                for _, row in moop_df.iterrows():
+                    pid = row['plan_id']
+                    if pid in plan_info_lookup:
+                        plan_info_lookup[pid]['moop'] = float(row['moop']) if pd.notna(row['moop']) else None
+
+                # Update metal_plan_details with fetched metadata
+                for metal, details in metal_plan_details.items():
+                    plan_id = details.get('plan_id')
+                    if plan_id:
+                        info = plan_info_lookup.get(plan_id, {})
+                        details['deductible'] = info.get('deductible')
+                        details['moop'] = info.get('moop')
+
+            except Exception as e:
+                import logging
+                logging.warning(f"Error fetching plan metadata for employee examples: {e}")
 
     # Fallback to contribution_analysis if no multi_metal data
     if ichra_premium == 0 and contribution_analysis and emp_id in contribution_analysis:
@@ -923,14 +1395,38 @@ def build_employee_example(employee_row: pd.Series, label: str,
         ichra_er = ichra_premium * contribution_pct
         ichra_ee = ichra_premium - ichra_er
 
-    # Cooperative estimate using configured ratio (100% employer paid, $0 employee)
-    coop_er = ichra_premium * cooperative_ratio if ichra_premium > 0 else 0
+    # Calculate Bronze and Gold costs from metal_plan_details
+    bronze_premium = 0
+    gold_premium = 0
+    if metal_plan_details:
+        bronze_details = metal_plan_details.get('Bronze', {})
+        gold_details = metal_plan_details.get('Gold', {})
+        if use_ee_rate_only:
+            bronze_premium = bronze_details.get('ee_rate', 0) or 0
+            gold_premium = gold_details.get('ee_rate', 0) or 0
+        else:
+            bronze_premium = bronze_details.get('estimated_tier_premium', 0) or 0
+            gold_premium = gold_details.get('estimated_tier_premium', 0) or 0
+
+    bronze_er = bronze_premium * contribution_pct if bronze_premium > 0 else 0
+    bronze_ee = bronze_premium - bronze_er if bronze_premium > 0 else 0
+    gold_er = gold_premium * contribution_pct if gold_premium > 0 else 0
+    gold_ee = gold_premium - gold_er if gold_premium > 0 else 0
+
+    # Cooperative - use rate table if available, otherwise ratio of silver (100% employer paid, $0 employee)
+    if coop_rates_df is not None and not coop_rates_df.empty:
+        coop_rate = get_cooperative_rate(age, family_status, coop_rates_df)
+        coop_er = coop_rate if coop_rate > 0 else (ichra_premium * cooperative_ratio if ichra_premium > 0 else 0)
+    else:
+        coop_er = ichra_premium * cooperative_ratio if ichra_premium > 0 else 0
     coop_ee = 0
 
     costs = {
         "Current": {"employer": round(current_er, 0), "employee": round(current_ee, 0)},
         "Renewal": {"employer": round(renewal_er, 0), "employee": round(renewal_ee, 0)},
+        "ICHRA Bronze": {"employer": round(bronze_er, 0), "employee": round(bronze_ee, 0)},
         "ICHRA Silver": {"employer": round(ichra_er, 0), "employee": round(ichra_ee, 0)},
+        "ICHRA Gold": {"employer": round(gold_er, 0), "employee": round(gold_ee, 0)},
         "Cooperative": {"employer": round(coop_er, 0), "employee": round(coop_ee, 0)},
     }
 
@@ -966,6 +1462,10 @@ def build_employee_example(employee_row: pd.Series, label: str,
                 if dep_age is not None and not pd.isna(dep_age):
                     family_ages.append({'relationship': rel, 'age': int(dep_age)})
 
+    # Calculate current and renewal totals for variance calculations
+    current_total = current_er + current_ee
+    renewal_total_monthly = costs['Renewal']['employer'] + costs['Renewal']['employee']
+
     return {
         "name": first_name,
         "label": label,
@@ -976,9 +1476,190 @@ def build_employee_example(employee_row: pd.Series, label: str,
         "family_ages": family_ages,
         "costs": costs,
         "plan_details": plan_details,
+        "metal_plan_details": metal_plan_details,  # Bronze, Silver, Gold with full metadata
+        "current_total_monthly": current_total,
+        "renewal_total_monthly": renewal_total_monthly,
         "winner": winner,
         "insight": insight,
+        "use_ee_rate_only": use_ee_rate_only,  # Flag to use individual rate in displays
     }
+
+
+# =============================================================================
+# CSV EXPORT FUNCTIONS
+# =============================================================================
+
+def generate_scenario_rates_csv(multi_metal_results: Dict, db, census_df: pd.DataFrame,
+                                 dependents_df: pd.DataFrame = None,
+                                 scenario_mode: str = "all") -> pd.DataFrame:
+    """
+    Generate detailed CSV data for plans used in the Monthly Premium by Scenario table.
+
+    Includes Bronze, Silver, Gold plan details with:
+    - Employee metadata (name, age, zip, state, rating area, family status)
+    - Plan details (plan ID, name, metal level, plan type, actuarial value)
+    - Costs (EE rate, tier premium, deductible, MOOP)
+
+    Args:
+        multi_metal_results: Results from calculate_multi_metal_scenario()
+        db: Database connection for fetching plan metadata
+        census_df: Employee census DataFrame
+        dependents_df: Dependents DataFrame (optional)
+        scenario_mode: "all" for all employees, "youngest" for youngest per tier,
+                       "oldest" for oldest per tier
+
+    Returns:
+        DataFrame ready for CSV export
+    """
+    if not multi_metal_results or db is None:
+        return pd.DataFrame()
+
+    all_rows = []
+
+    # Determine which employee IDs to include based on scenario_mode
+    included_employee_ids = None  # None means include all
+    if scenario_mode in ["youngest", "oldest"] and census_df is not None and not census_df.empty:
+        included_employee_ids = set()
+        family_col = 'family_status' if 'family_status' in census_df.columns else None
+        age_col = 'age' if 'age' in census_df.columns else None
+
+        if family_col and age_col:
+            for status_code in ['EE', 'ES', 'EC', 'F']:
+                tier_employees = census_df[census_df[family_col] == status_code]
+                if not tier_employees.empty:
+                    sorted_tier = tier_employees.sort_values(age_col)
+                    if scenario_mode == "youngest":
+                        target_emp = sorted_tier.iloc[0]
+                    else:  # oldest
+                        target_emp = sorted_tier.iloc[-1]
+                    emp_id = target_emp.get('employee_id')
+                    if emp_id:
+                        included_employee_ids.add(emp_id)
+
+    # Collect all unique plan IDs across all metal levels (filtered by scenario)
+    all_plan_ids = set()
+    for metal in ['Bronze', 'Silver', 'Gold']:
+        metal_data = multi_metal_results.get(metal, {})
+        for emp in metal_data.get('employee_details', []):
+            # Filter by included employees if mode is youngest/oldest
+            if included_employee_ids is not None:
+                if emp.get('employee_id') not in included_employee_ids:
+                    continue
+            plan_id = emp.get('lcp_plan_id')
+            if plan_id:
+                all_plan_ids.add(plan_id)
+
+    # Batch fetch plan metadata (type, issuer, deductible, MOOP)
+    plan_metadata = {}
+    if all_plan_ids:
+        # Get plan type and issuer from plan table
+        plan_ids_tuple = tuple(all_plan_ids)
+        plan_query = """
+        SELECT
+            hios_plan_id,
+            plan_marketing_name,
+            plan_type,
+            issuer_name,
+            level_of_coverage as metal_level
+        FROM rbis_insurance_plan_20251019202724
+        WHERE hios_plan_id IN %s
+        """
+        try:
+            plan_df = pd.read_sql(plan_query, db.engine, params=(plan_ids_tuple,))
+            for _, row in plan_df.iterrows():
+                plan_metadata[row['hios_plan_id']] = {
+                    'plan_type': row['plan_type'],
+                    'issuer_name': row['issuer_name'],
+                    'metal_level': row['metal_level']
+                }
+        except Exception as e:
+            import logging
+            logging.warning(f"Error fetching plan metadata: {e}")
+
+        # Get deductible and MOOP
+        ded_moop = get_plan_deductible_and_moop_batch(db, list(all_plan_ids))
+        for plan_id, values in ded_moop.items():
+            if plan_id in plan_metadata:
+                plan_metadata[plan_id]['individual_deductible'] = values.get('individual_deductible')
+                plan_metadata[plan_id]['individual_moop'] = values.get('individual_moop')
+            else:
+                plan_metadata[plan_id] = {
+                    'individual_deductible': values.get('individual_deductible'),
+                    'individual_moop': values.get('individual_moop')
+                }
+
+    # Build employee zip lookup from census
+    zip_lookup = {}
+    for _, row in census_df.iterrows():
+        emp_id = row.get('employee_id', row.get('Employee Number', ''))
+        zip_code = row.get('zip', row.get('Home Zip', ''))
+        county = row.get('county', '')
+        zip_lookup[emp_id] = {'zip': zip_code, 'county': county}
+
+    # Process each metal level
+    for metal in ['Bronze', 'Silver', 'Gold']:
+        metal_data = multi_metal_results.get(metal, {})
+        employee_details = metal_data.get('employee_details', [])
+
+        for emp in employee_details:
+            # Filter by included employees if mode is youngest/oldest
+            if included_employee_ids is not None:
+                if emp.get('employee_id') not in included_employee_ids:
+                    continue
+            plan_id = emp.get('lcp_plan_id')
+            meta = plan_metadata.get(plan_id, {}) if plan_id else {}
+            emp_zip_data = zip_lookup.get(emp.get('employee_id'), {})
+
+            row = {
+                # Employee info
+                'employee_id': emp.get('employee_id'),
+                'first_name': emp.get('first_name'),
+                'last_name': emp.get('last_name'),
+                'age': emp.get('ee_age'),
+                'family_status': emp.get('family_status'),
+                'state': emp.get('state'),
+                'zip': emp_zip_data.get('zip', ''),
+                'county': emp_zip_data.get('county', ''),
+                'rating_area': emp.get('rating_area'),
+
+                # Metal level
+                'metal_level': metal,
+
+                # Plan details
+                'plan_id': plan_id,
+                'plan_name': emp.get('lcp_plan_name'),
+                'plan_type': meta.get('plan_type', ''),
+                'issuer_name': meta.get('issuer_name', ''),
+                'actuarial_value': emp.get('actuarial_value'),
+
+                # Costs
+                'ee_monthly_rate': emp.get('lcp_ee_rate'),
+                'tier_multiplier': emp.get('tier_multiplier'),
+                'estimated_tier_premium': emp.get('estimated_tier_premium'),
+
+                # Deductible/MOOP
+                'individual_deductible': meta.get('individual_deductible'),
+                'individual_moop': meta.get('individual_moop'),
+
+                # Current plan comparison
+                'current_ee_monthly': emp.get('current_ee_monthly'),
+                'current_er_monthly': emp.get('current_er_monthly'),
+                'projected_2026_premium': emp.get('projected_2026_premium'),
+            }
+            all_rows.append(row)
+
+    if not all_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_rows)
+
+    # Sort by metal level (Bronze, Silver, Gold) then by employee
+    metal_order = {'Bronze': 1, 'Silver': 2, 'Gold': 3}
+    df['_metal_sort'] = df['metal_level'].map(metal_order)
+    df = df.sort_values(['_metal_sort', 'last_name', 'first_name'])
+    df = df.drop(columns=['_metal_sort'])
+
+    return df
 
 
 # =============================================================================
@@ -1152,9 +1833,10 @@ def render_plan_problems(data: DashboardData):
 # COMPARISON TABLE
 # =============================================================================
 
-def render_comparison_table(data: DashboardData):
-    # Title and subtitle row with legend
-    title_col, legend_col = st.columns([2, 1])
+def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFrame = None,
+                             dependents_df: pd.DataFrame = None):
+    # Title and subtitle row with scenario selector
+    title_col, selector_col = st.columns([2, 1])
 
     with title_col:
         st.markdown("""
@@ -1162,27 +1844,45 @@ def render_comparison_table(data: DashboardData):
         <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Monthly costs if all employees enrolled in each option</p>
         """, unsafe_allow_html=True)
 
-    with legend_col:
-        st.markdown("""
-        <div style="display: flex; gap: 16px; justify-content: flex-end; align-items: center; margin-top: 8px;">
-            <span style="display: flex; align-items: center; gap: 4px;">
-                <span style="width: 12px; height: 12px; background: #00a63e; border-radius: 50%; display: inline-block;"></span>
-                <span style="font-size: 14px; color: #364153;">Lowest cost</span>
-            </span>
-            <span style="display: flex; align-items: center; gap: 4px;">
-                <span style="width: 12px; height: 12px; border: 2px solid #6a7282; border-radius: 50%; display: inline-block;"></span>
-                <span style="font-size: 14px; color: #364153;">Average cost</span>
-            </span>
-            <span style="display: flex; align-items: center; gap: 4px;">
-                <span style="width: 12px; height: 12px; border: 2px solid #6a7282; border-radius: 50%; display: inline-block;"></span>
-                <span style="font-size: 14px; color: #364153;">Highest cost</span>
-            </span>
-        </div>
-        """, unsafe_allow_html=True)
+    with selector_col:
+        # Scenario selector
+        scenario_options = ["Lowest average cost", "Youngest cost", "Oldest cost"]
+        selected_scenario = st.radio(
+            "Cost view",
+            scenario_options,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="scenario_cost_view"
+        )
+
+    # Calculate tier costs based on selected scenario
+    if selected_scenario == "Lowest average cost":
+        # Use the pre-calculated average tier costs
+        tier_costs_display = data.tier_costs
+    else:
+        # Calculate youngest or oldest tier costs
+        mode = "youngest" if selected_scenario == "Youngest cost" else "oldest"
+        coop_rates_df = load_cooperative_rate_table(db)
+        tier_costs_display = calculate_tier_costs_by_age(
+            census_df,
+            multi_metal_results=data.multi_metal_results,
+            mode=mode,
+            cooperative_ratio=COOPERATIVE_CONFIG['default_discount_ratio'],
+            coop_rates_df=coop_rates_df
+        )
 
     # Helper to format currency or show N/A
     def fmt(val):
         return f"${val:,.0f}" if val and val > 0 else "N/A"
+
+    # Helper to format savings (handles positive and negative)
+    def fmt_savings(amount, pct):
+        if amount is None or amount == 0:
+            return ("N/A", "#6b7280")  # Gray for no data
+        elif amount > 0:
+            return (f"${amount:,.0f}", "#00a63e")  # Green for savings
+        else:
+            return (f"-${abs(amount):,.0f}", "#dc2626")  # Red for cost increase
 
     # Get DPC cost from constants
     dpc_cost = COOPERATIVE_CONFIG['dpc_monthly_cost']
@@ -1193,15 +1893,35 @@ def render_comparison_table(data: DashboardData):
     renewal_key = f"Renewal {RENEWAL_PLAN_YEAR}"
     scenarios = [current_key, renewal_key, "ICHRA Bronze", "ICHRA Silver", "ICHRA Gold", "Cooperative"]
 
+    # Map tier names to family status codes and multipliers
+    tier_info = {
+        "Employee Only": {"code": "EE", "multiplier": 1.0},
+        "Employee + Spouse": {"code": "ES", "multiplier": 1.5},
+        "Employee + Children": {"code": "EC", "multiplier": 1.3},
+        "Family": {"code": "F", "multiplier": 1.8},
+    }
+
+    # Count employees per tier
+    tier_counts = {}
+    if census_df is not None and not census_df.empty and 'family_status' in census_df.columns:
+        for tier_name, info in tier_info.items():
+            tier_counts[tier_name] = len(census_df[census_df['family_status'] == info['code']])
+    else:
+        tier_counts = {tier: 0 for tier in tiers}
+
     # Build tier rows HTML
     tier_rows = ""
     for tier in tiers:
-        tier_data = data.tier_costs.get(tier, {})
+        tier_data = tier_costs_display.get(tier, {})
         # Find lowest cost for this tier
         ichra_costs = [tier_data.get(s, 0) for s in scenarios[2:]]  # ICHRA options only
         min_cost = min([c for c in ichra_costs if c > 0]) if any(c > 0 for c in ichra_costs) else 0
 
-        tier_rows += f"<tr><td>{tier}</td>"
+        # Get count and multiplier for this tier
+        count = tier_counts.get(tier, 0)
+        multiplier = tier_info.get(tier, {}).get('multiplier', 1.0)
+
+        tier_rows += f'''<tr><td>{tier}<br><span class="tier-subtitle">{count} employees · {multiplier}x multiplier</span></td>'''
         for scenario in scenarios:
             val = tier_data.get(scenario, 0)
             is_lowest = val > 0 and val == min_cost and scenario in scenarios[2:]
@@ -1210,8 +1930,26 @@ def render_comparison_table(data: DashboardData):
         tier_rows += "</tr>"
 
     # Build totals row with savings
-    totals = data.company_totals
+    totals = data.company_totals  # ER portion only
     savings = data.savings_vs_renewal
+
+    # Calculate total premium (ER + EE combined) for each scenario
+    total_premium = {}
+    # Current: sum of all premiums from census
+    if census_df is not None and not census_df.empty:
+        current_er = census_df['current_er_monthly'].fillna(0).sum() if 'current_er_monthly' in census_df.columns else 0
+        current_ee = census_df['current_ee_monthly'].fillna(0).sum() if 'current_ee_monthly' in census_df.columns else 0
+        total_premium[current_key] = current_er + current_ee
+        # Renewal: full premium
+        total_premium[renewal_key] = data.renewal_premium if data.renewal_premium else 0
+    # ICHRA: full premium from multi_metal_results
+    if data.multi_metal_results:
+        for metal in ['Bronze', 'Silver', 'Gold']:
+            metal_data = data.multi_metal_results.get(metal, {})
+            total_premium[f'ICHRA {metal}'] = metal_data.get('total_monthly', 0)
+        # Cooperative: Silver total * cooperative ratio (employer pays all)
+        silver_total = data.multi_metal_results.get('Silver', {}).get('total_monthly', 0)
+        total_premium['Cooperative'] = silver_total * COOPERATIVE_CONFIG['default_discount_ratio']
 
     # Custom HTML table
     st.markdown(f"""
@@ -1258,6 +1996,7 @@ def render_comparison_table(data: DashboardData):
         .col-header-gold {{ background: #fefce8; color: #733e0a; }}
         .col-header-coop {{ background: #f0fdf4; color: #0d542b; }}
         .header-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+        .tier-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
         .silver-warning {{ font-size: 11px; color: #b45309; margin-top: 4px; }}
         .lowest-cost {{ color: #00a63e; font-weight: 700; }}
     </style>
@@ -1289,24 +2028,33 @@ def render_comparison_table(data: DashboardData):
         <tbody>
             {tier_rows}
             <tr class="total-row">
-                <td style="font-weight: 700;">COMPANY TOTAL</td>
-                <td style="font-weight: 700;">{fmt(totals.get(current_key, 0))}</td>
-                <td style="font-weight: 700;">{fmt(totals.get(renewal_key, 0))}</td>
-                <td>
-                    <span style="font-weight: 700;">{fmt(totals.get('ICHRA Bronze', 0))}</span><br>
-                    <span class="savings-cell">{fmt(savings.get('ICHRA Bronze', {}).get('amount', 0))}<br>({savings.get('ICHRA Bronze', {}).get('pct', 0):.1f}% vs renewal)</span>
+                <td style="font-weight: 700;">Total Premium</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get(current_key, 0))}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get(renewal_key, 0))}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get('ICHRA Bronze', 0))}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get('ICHRA Silver', 0))}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get('ICHRA Gold', 0))}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get('Cooperative', 0))}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: 600;">ER Savings vs Renewal</td>
+                <td></td>
+                <td style="color: #6b7280;">—</td>
+                <td style="color: {fmt_savings(savings.get('ICHRA Bronze', {}).get('amount'), savings.get('ICHRA Bronze', {}).get('pct'))[1]}; font-weight: 600;">
+                    {fmt_savings(savings.get('ICHRA Bronze', {}).get('amount'), savings.get('ICHRA Bronze', {}).get('pct'))[0]}<br>
+                    <span style="font-size: 12px;">({savings.get('ICHRA Bronze', {}).get('pct', 0):.1f}%)</span>
                 </td>
-                <td>
-                    <span style="font-weight: 700;">{fmt(totals.get('ICHRA Silver', 0))}</span><br>
-                    <span class="savings-cell">{fmt(savings.get('ICHRA Silver', {}).get('amount', 0))}<br>({savings.get('ICHRA Silver', {}).get('pct', 0):.1f}% vs renewal)</span>
+                <td style="color: {fmt_savings(savings.get('ICHRA Silver', {}).get('amount'), savings.get('ICHRA Silver', {}).get('pct'))[1]}; font-weight: 600;">
+                    {fmt_savings(savings.get('ICHRA Silver', {}).get('amount'), savings.get('ICHRA Silver', {}).get('pct'))[0]}<br>
+                    <span style="font-size: 12px;">({savings.get('ICHRA Silver', {}).get('pct', 0):.1f}%)</span>
                 </td>
-                <td>
-                    <span style="font-weight: 700;">{fmt(totals.get('ICHRA Gold', 0))}</span><br>
-                    <span class="savings-cell">{fmt(savings.get('ICHRA Gold', {}).get('amount', 0))}<br>({savings.get('ICHRA Gold', {}).get('pct', 0):.1f}% vs renewal)</span>
+                <td style="color: {fmt_savings(savings.get('ICHRA Gold', {}).get('amount'), savings.get('ICHRA Gold', {}).get('pct'))[1]}; font-weight: 600;">
+                    {fmt_savings(savings.get('ICHRA Gold', {}).get('amount'), savings.get('ICHRA Gold', {}).get('pct'))[0]}<br>
+                    <span style="font-size: 12px;">({savings.get('ICHRA Gold', {}).get('pct', 0):.1f}%)</span>
                 </td>
-                <td>
-                    <span style="font-weight: 700;">{fmt(totals.get('Cooperative', 0))}</span><br>
-                    <span class="savings-cell">{fmt(savings.get('Cooperative', {}).get('amount', 0))}<br>({savings.get('Cooperative', {}).get('pct', 0):.1f}% vs renewal)</span>
+                <td style="color: {fmt_savings(savings.get('Cooperative', {}).get('amount'), savings.get('Cooperative', {}).get('pct'))[1]}; font-weight: 600;">
+                    {fmt_savings(savings.get('Cooperative', {}).get('amount'), savings.get('Cooperative', {}).get('pct'))[0]}<br>
+                    <span style="font-size: 12px;">({savings.get('Cooperative', {}).get('pct', 0):.1f}%)</span>
                 </td>
             </tr>
             <tr>
@@ -1323,12 +2071,12 @@ def render_comparison_table(data: DashboardData):
     """, unsafe_allow_html=True)
 
     # Footer row
-    footer_col1, footer_col2 = st.columns([2, 1])
+    footer_col1, footer_col2, footer_col3 = st.columns([2, 1, 1])
 
     with footer_col1:
-        st.markdown("""
-        <p style="font-size: 14px; color: #4a5565;">
-            *Total monthly premium (ER + EE). ICHRA uses lowest cost plan rates by location/age.
+        st.markdown(f"""
+        <p style="font-size: 13px; color: #6b7280;">
+            Total Premium = ER + EE combined. ER Savings based on {int(data.contribution_pct * 100)}% employer contribution.
         </p>
         """, unsafe_allow_html=True)
 
@@ -1338,6 +2086,236 @@ def render_comparison_table(data: DashboardData):
             View contribution strategy →
         </p>
         """, unsafe_allow_html=True)
+
+    with footer_col3:
+        # CSV download button for detailed rate data
+        if data.multi_metal_results and db is not None and census_df is not None:
+            # Map selected scenario to CSV mode
+            if selected_scenario == "Youngest cost":
+                csv_scenario_mode = "youngest"
+            elif selected_scenario == "Oldest cost":
+                csv_scenario_mode = "oldest"
+            else:
+                csv_scenario_mode = "all"
+
+            csv_df = generate_scenario_rates_csv(
+                data.multi_metal_results, db, census_df, dependents_df,
+                scenario_mode=csv_scenario_mode
+            )
+            if not csv_df.empty:
+                csv_data = csv_df.to_csv(index=False)
+                # Include scenario mode in filename
+                scenario_suffix = f"_{csv_scenario_mode}" if csv_scenario_mode != "all" else ""
+                st.download_button(
+                    label="📥 Download rate details (CSV)",
+                    data=csv_data,
+                    file_name=f"ichra_scenario_rates{scenario_suffix}.csv",
+                    mime="text/csv",
+                    help="Download detailed plan data (Bronze, Silver, Gold) with deductibles, MOOP, and all employee metadata"
+                )
+
+
+# =============================================================================
+# AGE BRACKET TABLE
+# =============================================================================
+
+def render_age_bracket_table(data: DashboardData, db: DatabaseConnection = None, census_df: pd.DataFrame = None):
+    """
+    Render the Average Rates Across the Workforce table grouped by age bracket.
+
+    Shows individual ee_rate averages (not tier premiums) for each age group.
+    """
+    st.markdown("""
+    <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">Average rates across the workforce*</p>
+    <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Individual rates by age group (excludes family multipliers)</p>
+    """, unsafe_allow_html=True)
+
+    # Calculate age bracket costs
+    coop_rates_df = load_cooperative_rate_table(db)
+    bracket_costs = calculate_age_bracket_costs(
+        census_df,
+        multi_metal_results=data.multi_metal_results,
+        cooperative_ratio=COOPERATIVE_CONFIG['default_discount_ratio'],
+        coop_rates_df=coop_rates_df
+    )
+
+    # Get DPC cost from constants
+    dpc_cost = COOPERATIVE_CONFIG['dpc_monthly_cost']
+
+    # Define columns and keys
+    current_key = f"Current {CURRENT_PLAN_YEAR}"
+    renewal_key = f"Renewal {RENEWAL_PLAN_YEAR}"
+    scenarios = [current_key, renewal_key, "ICHRA Bronze", "ICHRA Silver", "ICHRA Gold", "Cooperative"]
+
+    # Helper to format currency or show N/A
+    def fmt(val):
+        return f"${val:,.0f}" if val and val > 0 else "N/A"
+
+    # Build age bracket rows - only show brackets with employees
+    age_brackets_ordered = ["18-29", "30-39", "40-49", "50-59", "60-64", "65+"]
+    bracket_rows = ""
+
+    # Calculate totals using actual sums from the data
+    totals = {s: 0 for s in scenarios}
+
+    for bracket in age_brackets_ordered:
+        bracket_data = bracket_costs.get(bracket, {})
+        count = bracket_data.get('count', 0)
+
+        if count == 0:
+            continue  # Skip empty brackets
+
+        # Add to totals using actual sums (not average * count)
+        for scenario in scenarios:
+            sum_key = f"{scenario}_sum"
+            sum_val = bracket_data.get(sum_key, 0)
+            if sum_val > 0:
+                totals[scenario] += sum_val
+
+        # Find lowest ICHRA cost for highlighting
+        ichra_vals = [bracket_data.get(s, 0) for s in ["ICHRA Bronze", "ICHRA Silver", "ICHRA Gold", "Cooperative"]]
+        min_cost = min([v for v in ichra_vals if v > 0]) if any(v > 0 for v in ichra_vals) else 0
+
+        bracket_rows += f'''<tr><td>{bracket}<br><span class="tier-subtitle">{count} employees</span></td>'''
+        for scenario in scenarios:
+            val = bracket_data.get(scenario, 0)
+            is_lowest = val > 0 and val == min_cost and scenario in ["ICHRA Bronze", "ICHRA Silver", "ICHRA Gold", "Cooperative"]
+            css_class = ' class="lowest-cost"' if is_lowest else ''
+            bracket_rows += f"<td{css_class}>{fmt(val)}</td>"
+        bracket_rows += "</tr>"
+
+    # Calculate vs Renewal and savings percentage
+    renewal_total = totals.get(renewal_key, 0)
+
+    def fmt_vs_renewal(scenario_total):
+        if renewal_total <= 0 or scenario_total <= 0:
+            return ("", "#6b7280")
+        diff = renewal_total - scenario_total
+        if diff > 0:
+            return (f"-${diff:,.0f}", "#00a63e")  # Savings (green)
+        elif diff < 0:
+            return (f"+${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
+        else:
+            return ("—", "#6b7280")
+
+    def fmt_savings_pct(scenario_total):
+        if renewal_total <= 0 or scenario_total <= 0:
+            return ("", "#6b7280")
+        diff = renewal_total - scenario_total
+        pct = (diff / renewal_total) * 100
+        if pct > 0:
+            return (f"{pct:.0f}%", "#00a63e")
+        elif pct < 0:
+            return ("—", "#6b7280")  # Don't show negative percentage
+        else:
+            return ("—", "#6b7280")
+
+    # Custom HTML table (matching scenario table style)
+    st.markdown(f"""
+    <style>
+        .age-bracket-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Poppins', sans-serif;
+            margin-bottom: 16px;
+        }}
+        .age-bracket-table th {{
+            padding: 12px 16px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+            border-bottom: 2px solid #e5e7eb;
+        }}
+        .age-bracket-table td {{
+            padding: 12px 16px;
+            text-align: center;
+            font-family: 'Inter', sans-serif;
+            font-size: 16px;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        .age-bracket-table td:first-child {{
+            text-align: left;
+            font-family: 'Poppins', sans-serif;
+            font-weight: 500;
+            color: #101828;
+        }}
+        .age-bracket-table .total-row td {{
+            font-weight: 700;
+            border-top: 2px solid #101828;
+            padding-top: 16px;
+        }}
+    </style>
+
+    <table class="age-bracket-table">
+        <thead>
+            <tr>
+                <th style="text-align: left; background: white;"></th>
+                <th class="col-header-current">
+                    {current_key}<br>
+                    <span class="header-subtitle">(for reference)</span>
+                </th>
+                <th class="col-header-renewal">
+                    {renewal_key}<br>
+                    <span class="header-subtitle">(for reference)</span>
+                </th>
+                <th class="col-header-bronze">
+                    ICHRA Bronze<br>
+                    <span class="header-subtitle">{data.metal_av.get('Bronze', 60):.1f}% AV</span>
+                </th>
+                <th class="col-header-silver">
+                    ICHRA Silver<br>
+                    <span class="header-subtitle">{data.metal_av.get('Silver', 70):.1f}% AV</span>
+                </th>
+                <th class="col-header-gold">
+                    ICHRA Gold<br>
+                    <span class="header-subtitle">{data.metal_av.get('Gold', 80):.1f}% AV</span>
+                </th>
+                <th class="col-header-coop">
+                    Cooperative<br>
+                    <span class="header-subtitle">Health Access + DPC (${dpc_cost}/mo)</span>
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            {bracket_rows}
+            <tr class="total-row">
+                <td style="font-weight: 700;">Total premium</td>
+                <td style="font-weight: 700;">{fmt(totals.get(current_key, 0))}</td>
+                <td style="font-weight: 700;">{fmt(totals.get(renewal_key, 0))}</td>
+                <td style="font-weight: 700;">{fmt(totals.get('ICHRA Bronze', 0))}</td>
+                <td style="font-weight: 700;">{fmt(totals.get('ICHRA Silver', 0))}</td>
+                <td style="font-weight: 700;">{fmt(totals.get('ICHRA Gold', 0))}</td>
+                <td style="font-weight: 700; color: #0d542b;">{fmt(totals.get('Cooperative', 0))}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: 600;">vs Renewal</td>
+                <td></td>
+                <td style="color: #6b7280;">—</td>
+                <td style="color: {fmt_vs_renewal(totals.get('ICHRA Bronze', 0))[1]}; font-weight: 600;">{fmt_vs_renewal(totals.get('ICHRA Bronze', 0))[0]}</td>
+                <td style="color: {fmt_vs_renewal(totals.get('ICHRA Silver', 0))[1]}; font-weight: 600;">{fmt_vs_renewal(totals.get('ICHRA Silver', 0))[0]}</td>
+                <td style="color: {fmt_vs_renewal(totals.get('ICHRA Gold', 0))[1]}; font-weight: 600;">{fmt_vs_renewal(totals.get('ICHRA Gold', 0))[0]}</td>
+                <td style="color: {fmt_vs_renewal(totals.get('Cooperative', 0))[1]}; font-weight: 600;">{fmt_vs_renewal(totals.get('Cooperative', 0))[0]}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: 600;">Premium savings</td>
+                <td></td>
+                <td></td>
+                <td style="color: {fmt_savings_pct(totals.get('ICHRA Bronze', 0))[1]}; font-weight: 600;">{fmt_savings_pct(totals.get('ICHRA Bronze', 0))[0]}</td>
+                <td style="color: {fmt_savings_pct(totals.get('ICHRA Silver', 0))[1]}; font-weight: 600;">{fmt_savings_pct(totals.get('ICHRA Silver', 0))[0]}</td>
+                <td style="color: {fmt_savings_pct(totals.get('ICHRA Gold', 0))[1]}; font-weight: 600;">{fmt_savings_pct(totals.get('ICHRA Gold', 0))[0]}</td>
+                <td style="color: {fmt_savings_pct(totals.get('Cooperative', 0))[1]}; font-weight: 700; font-size: 18px;">{fmt_savings_pct(totals.get('Cooperative', 0))[0]}</td>
+            </tr>
+        </tbody>
+    </table>
+    """, unsafe_allow_html=True)
+
+    # Footer note
+    st.markdown("""
+    <p style="font-size: 13px; color: #6b7280; margin-top: 8px;">
+        * Rates are calculated at the individual level based on state, rating area, and age.
+        Averages are calculated from these individual rates by age group.
+    </p>
+    """, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -1350,9 +2328,9 @@ def render_employee_card(employee):
     family_ages = employee.get('family_ages', [])
     if family_ages:
         age_parts = []
-        # Group by relationship type
-        spouse_ages = [f"Spouse ({fa['age']})" for fa in family_ages if fa.get('relationship') == 'SP']
-        child_ages = [str(fa['age']) for fa in family_ages if fa.get('relationship') == 'CH']
+        # Group by relationship type (values are 'spouse' and 'child' from dependents_df)
+        spouse_ages = [f"Spouse ({fa['age']})" for fa in family_ages if fa.get('relationship', '').lower() == 'spouse']
+        child_ages = [str(fa['age']) for fa in family_ages if fa.get('relationship', '').lower() == 'child']
         if spouse_ages:
             age_parts.extend(spouse_ages)
         if child_ages:
@@ -1376,6 +2354,7 @@ def render_employee_card(employee):
 
     # Mini comparison table with colored headers
     winner = employee['winner']
+    costs = employee['costs']
     st.markdown(f"""
     <style>
         .emp-table {{
@@ -1387,7 +2366,7 @@ def render_employee_card(employee):
         .emp-table th {{
             padding: 8px 6px;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             text-align: center;
             border-bottom: 1px solid #e5e7eb;
         }}
@@ -1407,41 +2386,51 @@ def render_employee_card(employee):
         }}
         .th-current {{ background: #eff6ff; color: #1c398e; }}
         .th-renewal {{ background: #fef2f2; color: #82181a; }}
-        .th-ichra {{ background: #f9fafb; color: #101828; }}
+        .th-bronze {{ background: #fef3c7; color: #92400e; }}
+        .th-silver {{ background: #f3f4f6; color: #374151; }}
+        .th-gold {{ background: #fef9c3; color: #854d0e; }}
         .th-coop {{ background: #f0fdf4; color: #0d542b; }}
     </style>
 
     <table class="emp-table">
         <thead>
             <tr>
-                <th style="text-align: left; background: white;">PLAN</th>
+                <th style="text-align: left; background: white;"></th>
                 <th class="th-current">Current</th>
                 <th class="th-renewal">Renewal</th>
-                <th class="th-ichra">ICHRA Silver</th>
-                <th class="th-coop">Cooperative</th>
+                <th class="th-bronze">Bronze</th>
+                <th class="th-silver">Silver</th>
+                <th class="th-gold">Gold</th>
+                <th class="th-coop">Coop</th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>Employer</td>
-                <td>${employee['costs']['Current']['employer']:,}</td>
-                <td>${employee['costs']['Renewal']['employer']:,}</td>
-                <td>${employee['costs']['ICHRA Silver']['employer']:,}</td>
-                <td>${employee['costs']['Cooperative']['employer']:,}</td>
+                <td>Employee</td>
+                <td>${costs['Current']['employee']:,.0f}</td>
+                <td>${costs['Renewal']['employee']:,.0f}</td>
+                <td>${costs['ICHRA Bronze']['employee']:,.0f}</td>
+                <td>${costs['ICHRA Silver']['employee']:,.0f}</td>
+                <td>${costs['ICHRA Gold']['employee']:,.0f}</td>
+                <td>${costs['Cooperative']['employee']:,.0f}</td>
             </tr>
             <tr>
-                <td>Employee</td>
-                <td>${employee['costs']['Current']['employee']:,}</td>
-                <td>${employee['costs']['Renewal']['employee']:,}</td>
-                <td>${employee['costs']['ICHRA Silver']['employee']:,}</td>
-                <td>${employee['costs']['Cooperative']['employee']:,}</td>
+                <td>Employer</td>
+                <td>${costs['Current']['employer']:,.0f}</td>
+                <td>${costs['Renewal']['employer']:,.0f}</td>
+                <td>${costs['ICHRA Bronze']['employer']:,.0f}</td>
+                <td>${costs['ICHRA Silver']['employer']:,.0f}</td>
+                <td>${costs['ICHRA Gold']['employer']:,.0f}</td>
+                <td>${costs['Cooperative']['employer']:,.0f}</td>
             </tr>
-            <tr class="winner-row">
-                <td>Winner</td>
-                <td>{'✓' if winner == 'Current' else ''}</td>
-                <td>{'✓' if winner == 'Renewal' else ''}</td>
-                <td>{'✓' if winner == 'ICHRA Silver' else ''}</td>
-                <td style="color: #00a63e;">{'✓' if winner == 'Cooperative' else ''}</td>
+            <tr style="border-top: 1px solid #e5e7eb; font-weight: 600;">
+                <td>Total</td>
+                <td>${costs['Current']['employee'] + costs['Current']['employer']:,.0f}</td>
+                <td>${costs['Renewal']['employee'] + costs['Renewal']['employer']:,.0f}</td>
+                <td>${costs['ICHRA Bronze']['employee'] + costs['ICHRA Bronze']['employer']:,.0f}</td>
+                <td>${costs['ICHRA Silver']['employee'] + costs['ICHRA Silver']['employer']:,.0f}</td>
+                <td>${costs['ICHRA Gold']['employee'] + costs['ICHRA Gold']['employer']:,.0f}</td>
+                <td>${costs['Cooperative']['employee'] + costs['Cooperative']['employer']:,.0f}</td>
             </tr>
         </tbody>
     </table>
@@ -1458,24 +2447,162 @@ def render_employee_card(employee):
     """, unsafe_allow_html=True)
 
     with st.expander("+ Show Plan Details"):
-        plan_details = employee.get('plan_details', {})
-        plan_name = plan_details.get('plan_name')
-        actuarial_value = plan_details.get('actuarial_value')
-        ee_rate = plan_details.get('ee_rate', 0)
+        metal_plan_details = employee.get('metal_plan_details', {})
+        current_total = employee.get('current_total_monthly', 0)
+        renewal_total = employee.get('renewal_total_monthly', 0)
+        use_ee_rate_only = employee.get('use_ee_rate_only', False)
 
-        if plan_name and plan_name != 'No plan found':
-            av_html = ""
-            if actuarial_value:
-                av_html = f'<p style="font-size: 14px; color: #364153; margin-bottom: 4px;"><strong>Actuarial Value:</strong> {actuarial_value:.0f}%</p>'
+        if metal_plan_details:
+            # Helper function to format currency
+            def fmt_currency(val):
+                if val is None:
+                    return "N/A"
+                return f"${val:,.0f}"
 
-            html_content = f"""<div style="padding: 8px 0;">
-<p style="font-weight: 600; color: #101828; margin-bottom: 8px;">ICHRA Silver - Lowest Cost Plan</p>
-<p style="font-size: 14px; color: #364153; margin-bottom: 4px;"><strong>Plan:</strong> {plan_name}</p>
-<p style="font-size: 14px; color: #364153; margin-bottom: 4px;"><strong>EE Monthly Rate:</strong> ${ee_rate:,.2f}</p>
-{av_html}
-<p style="font-size: 12px; color: #6b7280; margin-top: 8px;">This is the lowest cost Silver plan available in this employee's rating area. Actual plan selection may vary based on network preferences.</p>
-</div>"""
-            st.markdown(html_content, unsafe_allow_html=True)
+            # Helper to format variance with color
+            def fmt_variance(val):
+                if val is None:
+                    return ("N/A", "#6b7280")
+                elif val > 0:
+                    return (f"+${val:,.0f}", "#dc2626")  # Red for higher cost
+                elif val < 0:
+                    return (f"-${abs(val):,.0f}", "#00a63e")  # Green for savings
+                else:
+                    return ("$0", "#6b7280")
+
+            # Build data for each metal
+            plan_data = {}
+            for metal in ['Bronze', 'Silver', 'Gold']:
+                details = metal_plan_details.get(metal, {})
+                if details:
+                    if use_ee_rate_only:
+                        tier_premium = details.get('ee_rate', 0) or 0
+                    else:
+                        tier_premium = details.get('estimated_tier_premium', 0) or 0
+
+                    variance_current = (tier_premium - current_total) * 12 if current_total > 0 else None
+                    variance_renewal = (tier_premium - renewal_total) * 12 if renewal_total > 0 else None
+
+                    plan_data[metal] = {
+                        'plan_name': details.get('plan_name') or 'N/A',
+                        'deductible': details.get('deductible'),
+                        'moop': details.get('moop'),
+                        'annual_cost': tier_premium * 12 if tier_premium else None,
+                        'variance_current': variance_current,
+                        'variance_renewal': variance_renewal,
+                    }
+
+            if plan_data:
+                # Get plan names (allow wrapping)
+                bronze_name = plan_data.get('Bronze', {}).get('plan_name') or 'N/A'
+                silver_name = plan_data.get('Silver', {}).get('plan_name') or 'N/A'
+                gold_name = plan_data.get('Gold', {}).get('plan_name') or 'N/A'
+
+                # Get values with defaults
+                bronze = plan_data.get('Bronze', {})
+                silver = plan_data.get('Silver', {})
+                gold = plan_data.get('Gold', {})
+
+                # Format variance cells
+                bronze_vs_current = fmt_variance(bronze.get('variance_current'))
+                bronze_vs_renewal = fmt_variance(bronze.get('variance_renewal'))
+                silver_vs_current = fmt_variance(silver.get('variance_current'))
+                silver_vs_renewal = fmt_variance(silver.get('variance_renewal'))
+                gold_vs_current = fmt_variance(gold.get('variance_current'))
+                gold_vs_renewal = fmt_variance(gold.get('variance_renewal'))
+
+                st.markdown(f"""
+                <style>
+                    .plan-details-table {{
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-family: 'Poppins', sans-serif;
+                        margin-bottom: 8px;
+                    }}
+                    .plan-details-table th {{
+                        padding: 10px 12px;
+                        text-align: center;
+                        font-weight: 600;
+                        font-size: 13px;
+                        border-bottom: 2px solid #e5e7eb;
+                    }}
+                    .plan-details-table td {{
+                        padding: 8px 12px;
+                        text-align: center;
+                        font-family: 'Inter', sans-serif;
+                        font-size: 14px;
+                        border-bottom: 1px solid #e5e7eb;
+                    }}
+                    .plan-details-table td:first-child {{
+                        text-align: left;
+                        font-family: 'Poppins', sans-serif;
+                        font-weight: 500;
+                        color: #364153;
+                        font-size: 13px;
+                    }}
+                    .pd-header-bronze {{ background: #fef3c7; color: #92400e; }}
+                    .pd-header-silver {{ background: #f3f4f6; color: #374151; }}
+                    .pd-header-gold {{ background: #fef9c3; color: #854d0e; }}
+                    .pd-plan-name {{ font-size: 11px; font-weight: 400; color: #6b7280; margin-top: 4px; line-height: 1.3; }}
+                </style>
+
+                <table class="plan-details-table">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left; background: white;"></th>
+                            <th class="pd-header-bronze">
+                                Bronze
+                                <div class="pd-plan-name">{bronze_name}</div>
+                            </th>
+                            <th class="pd-header-silver">
+                                Silver
+                                <div class="pd-plan-name">{silver_name}</div>
+                            </th>
+                            <th class="pd-header-gold">
+                                Gold
+                                <div class="pd-plan-name">{gold_name}</div>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Deductible</td>
+                            <td>{fmt_currency(bronze.get('deductible'))}</td>
+                            <td>{fmt_currency(silver.get('deductible'))}</td>
+                            <td>{fmt_currency(gold.get('deductible'))}</td>
+                        </tr>
+                        <tr>
+                            <td>OOP Max</td>
+                            <td>{fmt_currency(bronze.get('moop'))}</td>
+                            <td>{fmt_currency(silver.get('moop'))}</td>
+                            <td>{fmt_currency(gold.get('moop'))}</td>
+                        </tr>
+                        <tr>
+                            <td>Annual Cost</td>
+                            <td>{fmt_currency(bronze.get('annual_cost'))}</td>
+                            <td>{fmt_currency(silver.get('annual_cost'))}</td>
+                            <td>{fmt_currency(gold.get('annual_cost'))}</td>
+                        </tr>
+                        <tr>
+                            <td>vs Current</td>
+                            <td style="color: {bronze_vs_current[1]};">{bronze_vs_current[0]}</td>
+                            <td style="color: {silver_vs_current[1]};">{silver_vs_current[0]}</td>
+                            <td style="color: {gold_vs_current[1]};">{gold_vs_current[0]}</td>
+                        </tr>
+                        <tr>
+                            <td>vs Renewal</td>
+                            <td style="color: {bronze_vs_renewal[1]};">{bronze_vs_renewal[0]}</td>
+                            <td style="color: {silver_vs_renewal[1]};">{silver_vs_renewal[0]}</td>
+                            <td style="color: {gold_vs_renewal[1]};">{gold_vs_renewal[0]}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                """, unsafe_allow_html=True)
+
+                rate_type = "individual (EE) rate" if use_ee_rate_only else "tier premium"
+                st.caption(f"Lowest cost plan at each metal level. Annual Cost = {rate_type} × 12.")
+            else:
+                st.info("Plan details not available.")
         else:
             st.info("Plan details not available. Complete contribution analysis to see plan options.")
 
@@ -1490,11 +2617,10 @@ def render_employee_examples(data: DashboardData):
         st.info("Employee examples will be available after census upload and contribution analysis")
         return
 
-    cols = st.columns(len(data.employee_examples))
-    for i, employee in enumerate(data.employee_examples):
-        with cols[i]:
-            with st.container(border=True):
-                render_employee_card(employee)
+    # Each employee example gets its own full-width row
+    for employee in data.employee_examples:
+        with st.container(border=True):
+            render_employee_card(employee)
 
 
 # =============================================================================
@@ -1697,13 +2823,20 @@ with col2:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Row 2: Comparison Table
+# Row 2: Comparison Table (by Family Status)
 with st.container(border=True):
-    render_comparison_table(data)
+    render_comparison_table(data, db=db, census_df=census_df,
+                            dependents_df=st.session_state.get('dependents_df'))
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Row 3: Employee Examples
+# Row 3: Age Bracket Table
+with st.container(border=True):
+    render_age_bracket_table(data, db=db, census_df=census_df)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Row 4: Employee Examples
 render_employee_examples(data)
 
 st.markdown("<br>", unsafe_allow_html=True)

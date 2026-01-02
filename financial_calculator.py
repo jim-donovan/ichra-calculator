@@ -31,6 +31,25 @@ class FinancialSummaryCalculator:
             return str(age)
 
     @staticmethod
+    def get_metal_level_filter(metal_level: str) -> Tuple[str, List[str]]:
+        """
+        Get SQL filter clause and values for metal level queries.
+        Bronze includes both 'Bronze' and 'Expanded Bronze'.
+        Excludes Catastrophic.
+
+        Args:
+            metal_level: 'Bronze', 'Silver', 'Gold', or 'Platinum'
+
+        Returns:
+            Tuple of (sql_clause, list_of_values)
+            e.g., ("p.level_of_coverage IN (%s, %s)", ['Bronze', 'Expanded Bronze'])
+        """
+        if metal_level == 'Bronze':
+            return ("p.level_of_coverage IN (%s, %s)", ['Bronze', 'Expanded Bronze'])
+        else:
+            return ("p.level_of_coverage = %s", [metal_level])
+
+    @staticmethod
     def get_states_from_census(census_df: pd.DataFrame) -> List[str]:
         """Get unique states from census, sorted by employee count descending"""
         state_col = None
@@ -101,6 +120,11 @@ class FinancialSummaryCalculator:
         if metal_levels is None:
             metal_levels = ['Gold', 'Silver', 'Bronze']
 
+        # Expand metal levels to include 'Expanded Bronze' when 'Bronze' is requested
+        expanded_levels = list(metal_levels)
+        if 'Bronze' in metal_levels and 'Expanded Bronze' not in expanded_levels:
+            expanded_levels.append('Expanded Bronze')
+
         result = {}
 
         for state in states:
@@ -119,7 +143,7 @@ class FinancialSummaryCalculator:
             """
 
             try:
-                df = pd.read_sql(query, db.engine, params=(state, tuple(metal_levels)))
+                df = pd.read_sql(query, db.engine, params=(state, tuple(expanded_levels)))
                 result[state] = df.to_dict('records')
             except Exception as e:
                 print(f"Error fetching plans for {state}: {e}")
@@ -168,12 +192,15 @@ class FinancialSummaryCalculator:
 
             # Try each rating area until we find plans
             plan_found = False
+            # Get metal level filter (Bronze includes Expanded Bronze)
+            metal_clause, metal_values = FinancialSummaryCalculator.get_metal_level_filter(metal_level)
+
             for rating_area in rating_areas:
                 if pd.isna(rating_area):
                     continue
                 rating_area = int(rating_area)
 
-                query = """
+                query = f"""
                 SELECT
                     p.hios_plan_id as plan_id,
                     p.plan_marketing_name as name,
@@ -184,7 +211,7 @@ class FinancialSummaryCalculator:
                 WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
                   AND p.market_coverage = 'Individual'
                   AND p.plan_effective_date = '2026-01-01'
-                  AND p.level_of_coverage = %s
+                  AND {metal_clause}
                   AND r.market_coverage = 'Individual'
                   AND r.rating_area_id = %s
                   AND r.age = %s
@@ -193,12 +220,8 @@ class FinancialSummaryCalculator:
                 """
 
                 try:
-                    df = pd.read_sql(query, db.engine, params=(
-                        state,
-                        metal_level,
-                        f"Rating Area {rating_area}",
-                        age_band
-                    ))
+                    params = [state] + metal_values + [f"Rating Area {rating_area}", age_band]
+                    df = pd.read_sql(query, db.engine, params=tuple(params))
                     if not df.empty:
                         result[state] = df.iloc[0]['plan_id']
                         plan_found = True
@@ -209,12 +232,8 @@ class FinancialSummaryCalculator:
             # If no plan found in any employee's rating area, try Rating Area 1 as fallback
             if not plan_found and 1 not in rating_areas:
                 try:
-                    df = pd.read_sql(query, db.engine, params=(
-                        state,
-                        metal_level,
-                        "Rating Area 1",
-                        age_band
-                    ))
+                    fallback_params = [state] + metal_values + ["Rating Area 1", age_band]
+                    df = pd.read_sql(query, db.engine, params=tuple(fallback_params))
                     if not df.empty:
                         result[state] = df.iloc[0]['plan_id']
                 except Exception as e:
@@ -803,10 +822,12 @@ class FinancialSummaryCalculator:
         lcsp_lookup = {}
         if location_keys:
             # Build batch query using UNION ALL pattern
+            # Get metal level filter (Bronze includes Expanded Bronze)
+            metal_clause, metal_values = FinancialSummaryCalculator.get_metal_level_filter(metal_level)
             union_queries = []
             params = []
             for state, rating_area_str, age_band in location_keys:
-                union_queries.append("""
+                union_queries.append(f"""
                 (SELECT
                     %s as state,
                     %s as rating_area_str,
@@ -819,14 +840,14 @@ class FinancialSummaryCalculator:
                 WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
                   AND p.market_coverage = 'Individual'
                   AND p.plan_effective_date = '2026-01-01'
-                  AND p.level_of_coverage = %s
+                  AND {metal_clause}
                   AND r.market_coverage = 'Individual'
                   AND r.rating_area_id = %s
                   AND r.age = %s
                 ORDER BY r.individual_rate ASC
                 LIMIT 1)
                 """)
-                params.extend([state, rating_area_str, age_band, state, metal_level, rating_area_str, age_band])
+                params.extend([state, rating_area_str, age_band, state] + metal_values + [rating_area_str, age_band])
 
             batch_query = "\nUNION ALL\n".join(union_queries)
 
@@ -1055,7 +1076,9 @@ class FinancialSummaryCalculator:
             params = []
             for state, rating_area_str, age_band in location_keys:
                 for metal in metal_levels:
-                    union_queries.append("""
+                    # Get metal level filter (Bronze includes Expanded Bronze)
+                    metal_clause, metal_values = FinancialSummaryCalculator.get_metal_level_filter(metal)
+                    union_queries.append(f"""
                     (SELECT
                         %s as state,
                         %s as rating_area_str,
@@ -1074,14 +1097,14 @@ class FinancialSummaryCalculator:
                     WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
                       AND p.market_coverage = 'Individual'
                       AND p.plan_effective_date = '2026-01-01'
-                      AND p.level_of_coverage = %s
+                      AND {metal_clause}
                       AND r.market_coverage = 'Individual'
                       AND r.rating_area_id = %s
                       AND r.age = %s
                     ORDER BY r.individual_rate ASC
                     LIMIT 1)
                     """)
-                    params.extend([state, rating_area_str, age_band, metal, state, metal, rating_area_str, age_band])
+                    params.extend([state, rating_area_str, age_band, metal, state] + metal_values + [rating_area_str, age_band])
 
             batch_query = "\nUNION ALL\n".join(union_queries)
             logging.info(f"MULTI-METAL: Executing batch query with {len(union_queries)} UNION ALLs")

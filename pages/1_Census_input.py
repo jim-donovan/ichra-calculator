@@ -152,6 +152,28 @@ if st.session_state.census_df is not None:
         unique_states = employees_df['state'].nunique()
         st.metric("States", unique_states)
 
+    # Covered lives age metrics
+    col1, col2, col3 = st.columns(3)
+
+    # Calculate ages of all covered lives
+    if not dependents_df.empty:
+        all_ages = pd.concat([employees_df['age'], dependents_df['age']])
+    else:
+        all_ages = employees_df['age']
+
+    with col1:
+        avg_age_covered = all_ages.mean()
+        st.metric("Avg age of covered lives", f"{avg_age_covered:.1f} yrs")
+
+    with col2:
+        median_age_covered = all_ages.median()
+        st.metric("Median age of covered lives", f"{median_age_covered:.1f} yrs")
+
+    with col3:
+        min_age = int(all_ages.min())
+        max_age = int(all_ages.max())
+        st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
+
     st.markdown("---")
 
     tab1, tab2, tab3, tab4 = st.tabs(["👥 Employees", "👶 Dependents", "📍 Geography", "📊 Demographics"])
@@ -346,10 +368,67 @@ if st.session_state.census_df is not None:
             pct = (count / len(employees_df)) * 100
             st.markdown(f"- **{state}:** {count} employees ({pct:.1f}%)")
 
+        st.markdown("---")
         st.markdown("**Employees by County:**")
         county_counts = employees_df.groupby(['state', 'county']).size().reset_index(name='count')
         county_counts = county_counts.sort_values('count', ascending=False)
-        st.dataframe(county_counts, width="stretch")
+        st.dataframe(county_counts, use_container_width=True, hide_index=True)
+
+        # Plan availability by rating area
+        st.markdown("---")
+        st.markdown("### 📋 Plan availability by rating area")
+        st.caption("Count of Individual marketplace plans available in each rating area")
+
+        db = st.session_state.get('db')
+        if 'rating_area_id' in employees_df.columns and db is not None:
+            # Get employee counts by state, county, and rating area
+            ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
+            ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
+            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+
+            if not ra_counts.empty:
+                # Build state/rating area pairs for batch query
+                ra_pairs = []
+                for _, row in ra_counts.iterrows():
+                    ra_pairs.append((row['state'], f"Rating Area {int(row['rating_area_id'])}"))
+
+                # Single batch query for all rating areas
+                query = """
+                SELECT
+                    SUBSTRING(r.plan_id, 6, 2) as state,
+                    r.rating_area_id,
+                    COUNT(DISTINCT r.plan_id) as plan_count
+                FROM rbis_insurance_plan_base_rates_20251019202724 r
+                JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
+                WHERE r.market_coverage = 'Individual'
+                  AND p.market_coverage = 'Individual'
+                  AND p.plan_effective_date = '2026-01-01'
+                GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                """
+                plan_counts_df = db.execute_query(query)
+
+                if not plan_counts_df.empty:
+                    # Extract rating area number from string like "Rating Area 1"
+                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
+
+                    # Merge with employee counts
+                    merged = ra_counts.merge(
+                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
+                        left_on=['state', 'rating_area_id'],
+                        right_on=['state', 'rating_area_num'],
+                        how='left'
+                    )
+                    merged = merged[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
+                    merged = merged.sort_values(['state', 'county', 'rating_area_id'])
+                    merged.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
+                    merged['Plans Available'] = merged['Plans Available'].fillna(0).astype(int)
+                    st.dataframe(merged, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No plan data available")
+            else:
+                st.info("No rating area data available")
+        else:
+            st.info("Rating area data not available. Ensure census has been processed.")
 
     with tab4:
         import plotly.express as px
@@ -680,6 +759,28 @@ else:
                         unique_states = employees_df['state'].nunique()
                         st.metric("States", unique_states)
 
+                    # Covered lives age metrics
+                    col1, col2, col3 = st.columns(3)
+
+                    # Calculate ages of all covered lives
+                    if not dependents_df.empty:
+                        all_ages = pd.concat([employees_df['age'], dependents_df['age']])
+                    else:
+                        all_ages = employees_df['age']
+
+                    with col1:
+                        avg_age_covered = all_ages.mean()
+                        st.metric("Avg age of covered lives", f"{avg_age_covered:.1f} yrs")
+
+                    with col2:
+                        median_age_covered = all_ages.median()
+                        st.metric("Median age of covered lives", f"{median_age_covered:.1f} yrs")
+
+                    with col3:
+                        min_age = int(all_ages.min())
+                        max_age = int(all_ages.max())
+                        st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
+
                     # Detailed breakdown
                     st.markdown("---")
                     st.subheader("📊 Census summary")
@@ -876,10 +977,62 @@ else:
                             pct = (count / len(employees_df)) * 100
                             st.markdown(f"- **{state}:** {count} employees ({pct:.1f}%)")
 
+                        st.markdown("---")
                         st.markdown("**Employees by County:**")
                         county_counts = employees_df.groupby(['state', 'county']).size().reset_index(name='count')
                         county_counts = county_counts.sort_values('count', ascending=False)
-                        st.dataframe(county_counts, width="stretch")
+                        st.dataframe(county_counts, use_container_width=True, hide_index=True)
+
+                        # Plan availability by rating area
+                        st.markdown("---")
+                        st.markdown("### 📋 Plan availability by rating area")
+                        st.caption("Count of Individual marketplace plans available in each rating area")
+
+                        db = st.session_state.get('db')
+                        if 'rating_area_id' in employees_df.columns and db is not None:
+                            # Get employee counts by state, county, and rating area
+                            ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
+                            ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
+                            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+
+                            if not ra_counts.empty:
+                                # Single batch query for all rating areas
+                                query = """
+                                SELECT
+                                    SUBSTRING(r.plan_id, 6, 2) as state,
+                                    r.rating_area_id,
+                                    COUNT(DISTINCT r.plan_id) as plan_count
+                                FROM rbis_insurance_plan_base_rates_20251019202724 r
+                                JOIN rbis_insurance_plan_20251019202724 p ON r.plan_id = p.hios_plan_id
+                                WHERE r.market_coverage = 'Individual'
+                                  AND p.market_coverage = 'Individual'
+                                  AND p.plan_effective_date = '2026-01-01'
+                                GROUP BY SUBSTRING(r.plan_id, 6, 2), r.rating_area_id
+                                """
+                                plan_counts_df = db.execute_query(query)
+
+                                if not plan_counts_df.empty:
+                                    # Extract rating area number from string like "Rating Area 1"
+                                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
+
+                                    # Merge with employee counts
+                                    merged = ra_counts.merge(
+                                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
+                                        left_on=['state', 'rating_area_id'],
+                                        right_on=['state', 'rating_area_num'],
+                                        how='left'
+                                    )
+                                    merged = merged[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
+                                    merged = merged.sort_values(['state', 'county', 'rating_area_id'])
+                                    merged.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
+                                    merged['Plans Available'] = merged['Plans Available'].fillna(0).astype(int)
+                                    st.dataframe(merged, use_container_width=True, hide_index=True)
+                                else:
+                                    st.info("No plan data available")
+                            else:
+                                st.info("No rating area data available")
+                        else:
+                            st.info("Rating area data not available. Ensure census has been processed.")
 
                     with tab4:
                         import plotly.express as px
