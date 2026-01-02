@@ -1025,10 +1025,6 @@ class CensusProcessor:
         total_elapsed = time.time() - parse_start
         logging.info(f"CENSUS PARSE: Row iteration complete in {total_elapsed:.1f}s")
         logging.info(f"CENSUS PARSE: Processed {len(employees)} employees, {len(dependents)} dependents, {len(errors)} errors")
-        if zip_lookup_times:
-            avg_zip = sum(zip_lookup_times) / len(zip_lookup_times)
-            total_zip = sum(zip_lookup_times)
-            logging.info(f"CENSUS PARSE: ZIP lookups - avg: {avg_zip:.3f}s, total: {total_zip:.1f}s")
 
         # Report errors if any
         if errors:
