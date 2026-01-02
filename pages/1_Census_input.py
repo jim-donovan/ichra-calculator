@@ -226,29 +226,104 @@ if st.session_state.census_df is not None:
 
     with tab2:
         if not dependents_df.empty:
-            st.markdown("### 👶 Dependent overview")
+            # Calculate key metrics
+            total_deps = len(dependents_df)
+            total_lives = len(employees_df) + total_deps
+            coverage_burden = total_lives / len(employees_df)
+            avg_age = dependents_df['age'].mean()
+            median_age = dependents_df['age'].median()
+            youngest = int(dependents_df['age'].min())
+            oldest = int(dependents_df['age'].max())
+            rel_counts = dependents_df['relationship'].value_counts()
 
+            # Styled header
+            st.markdown("""
+            <p style="font-size: 18px; font-weight: 700; color: #101828; margin-bottom: 16px;">
+                Dependent Overview
+            </p>
+            """, unsafe_allow_html=True)
+
+            # Key metrics row
+            metric_cols = st.columns(4)
+            metrics = [
+                ("Total Dependents", f"{total_deps}", "#3b82f6"),
+                ("Coverage Burden", f"{coverage_burden:.2f}:1", "#8b5cf6"),
+                ("Average Age", f"{avg_age:.1f}", "#10b981"),
+                ("Age Range", f"{youngest}–{oldest}", "#f59e0b"),
+            ]
+
+            for col, (label, value, color) in zip(metric_cols, metrics):
+                with col:
+                    st.markdown(f"""
+                    <div style="background: {color}10; border-left: 4px solid {color}; border-radius: 8px; padding: 12px 16px;">
+                        <p style="font-size: 12px; color: #6b7280; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;">{label}</p>
+                        <p style="font-size: 24px; font-weight: 700; color: #101828; margin: 4px 0 0 0; font-family: 'Inter', sans-serif;">{value}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+
+            # Two-column layout for relationship breakdown and age stats
             col1, col2 = st.columns(2)
+
             with col1:
-                st.markdown(f"**Total dependents:** {len(dependents_df)}")
-                total_lives = len(employees_df) + len(dependents_df)
-                ratio = total_lives / len(employees_df)
-                st.markdown(f"**Coverage burden:** {ratio:.2f}:1")
-                st.markdown(f"**Average age:** {dependents_df['age'].mean():.1f} years")
-                st.markdown(f"**Median age:** {dependents_df['age'].median():.1f} years")
+                st.markdown("""
+                <p style="font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 12px;">
+                    By Relationship
+                </p>
+                """, unsafe_allow_html=True)
+
+                # Progress bars for relationship breakdown
+                max_count = rel_counts.max() if not rel_counts.empty else 1
+                rel_colors = {'spouse': '#ec4899', 'child': '#3b82f6'}
+
+                for rel, count in rel_counts.items():
+                    pct = (count / total_deps) * 100
+                    bar_pct = (count / max_count) * 100
+                    color = rel_colors.get(rel, '#6b7280')
+
+                    st.markdown(f"""
+                    <div style="margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                            <span style="font-size: 14px; color: #374151;">{rel.title()}s</span>
+                            <span style="font-size: 14px; font-weight: 600; color: #101828;">{count} <span style="color: #9ca3af; font-weight: 400;">({pct:.0f}%)</span></span>
+                        </div>
+                        <div style="background: #e5e7eb; height: 8px; border-radius: 9999px;">
+                            <div style="background: {color}; height: 8px; border-radius: 9999px; width: {bar_pct}%;"></div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
             with col2:
-                st.markdown("**Age range:**")
-                st.markdown(f"- Youngest: {dependents_df['age'].min():.0f} years")
-                st.markdown(f"- Oldest: {dependents_df['age'].max():.0f} years")
+                st.markdown("""
+                <p style="font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 12px;">
+                    Age Statistics
+                </p>
+                """, unsafe_allow_html=True)
 
-            st.markdown("---")
-            # Overall breakdown by relationship
-            rel_counts = dependents_df['relationship'].value_counts()
-            st.markdown("**By relationship:**")
-            for rel, count in rel_counts.items():
-                pct = (count / len(dependents_df)) * 100
-                st.markdown(f"- **{rel.title()}s:** {count} ({pct:.1f}%)")
+                age_stats = [
+                    ("Youngest", f"{youngest} years"),
+                    ("Oldest", f"{oldest} years"),
+                    ("Average", f"{avg_age:.1f} years"),
+                    ("Median", f"{median_age:.1f} years"),
+                ]
+
+                for label, value in age_stats:
+                    st.markdown(f"""
+                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
+                        <span style="font-size: 14px; color: #6b7280;">{label}</span>
+                        <span style="font-size: 14px; font-weight: 500; color: #374151;">{value}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # Coverage burden footnote
+            st.markdown(f"""
+            <p style="font-size: 12px; color: #9ca3af; margin-top: 16px; font-style: italic;">
+                Coverage burden = (employees + dependents) ÷ employees = ({len(employees_df)} + {total_deps}) ÷ {len(employees_df)} = {coverage_burden:.2f} covered lives per employee
+            </p>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<hr style='border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;'>", unsafe_allow_html=True)
 
             # Children analysis
             children_df = dependents_df[dependents_df['relationship'] == 'child']
@@ -835,29 +910,104 @@ else:
 
                     with tab2:
                         if not dependents_df.empty:
-                            st.markdown("### 👶 Dependent overview")
+                            # Calculate key metrics
+                            total_deps = len(dependents_df)
+                            total_lives = len(employees_df) + total_deps
+                            coverage_burden = total_lives / len(employees_df)
+                            avg_age = dependents_df['age'].mean()
+                            median_age = dependents_df['age'].median()
+                            youngest = int(dependents_df['age'].min())
+                            oldest = int(dependents_df['age'].max())
+                            rel_counts = dependents_df['relationship'].value_counts()
 
+                            # Styled header
+                            st.markdown("""
+                            <p style="font-size: 18px; font-weight: 700; color: #101828; margin-bottom: 16px;">
+                                Dependent Overview
+                            </p>
+                            """, unsafe_allow_html=True)
+
+                            # Key metrics row
+                            metric_cols = st.columns(4)
+                            metrics = [
+                                ("Total Dependents", f"{total_deps}", "#3b82f6"),
+                                ("Coverage Burden", f"{coverage_burden:.2f}:1", "#8b5cf6"),
+                                ("Average Age", f"{avg_age:.1f}", "#10b981"),
+                                ("Age Range", f"{youngest}–{oldest}", "#f59e0b"),
+                            ]
+
+                            for col, (label, value, color) in zip(metric_cols, metrics):
+                                with col:
+                                    st.markdown(f"""
+                                    <div style="background: {color}10; border-left: 4px solid {color}; border-radius: 8px; padding: 12px 16px;">
+                                        <p style="font-size: 12px; color: #6b7280; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;">{label}</p>
+                                        <p style="font-size: 24px; font-weight: 700; color: #101828; margin: 4px 0 0 0; font-family: 'Inter', sans-serif;">{value}</p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                            st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+
+                            # Two-column layout for relationship breakdown and age stats
                             col1, col2 = st.columns(2)
+
                             with col1:
-                                st.markdown(f"**Total dependents:** {len(dependents_df)}")
-                                total_lives = len(employees_df) + len(dependents_df)
-                                ratio = total_lives / len(employees_df)
-                                st.markdown(f"**Coverage burden:** {ratio:.2f}:1")
-                                st.markdown(f"**Average age:** {dependents_df['age'].mean():.1f} years")
-                                st.markdown(f"**Median age:** {dependents_df['age'].median():.1f} years")
+                                st.markdown("""
+                                <p style="font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 12px;">
+                                    By Relationship
+                                </p>
+                                """, unsafe_allow_html=True)
+
+                                # Progress bars for relationship breakdown
+                                max_count = rel_counts.max() if not rel_counts.empty else 1
+                                rel_colors = {'spouse': '#ec4899', 'child': '#3b82f6'}
+
+                                for rel, count in rel_counts.items():
+                                    pct = (count / total_deps) * 100
+                                    bar_pct = (count / max_count) * 100
+                                    color = rel_colors.get(rel, '#6b7280')
+
+                                    st.markdown(f"""
+                                    <div style="margin-bottom: 12px;">
+                                        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                            <span style="font-size: 14px; color: #374151;">{rel.title()}s</span>
+                                            <span style="font-size: 14px; font-weight: 600; color: #101828;">{count} <span style="color: #9ca3af; font-weight: 400;">({pct:.0f}%)</span></span>
+                                        </div>
+                                        <div style="background: #e5e7eb; height: 8px; border-radius: 9999px;">
+                                            <div style="background: {color}; height: 8px; border-radius: 9999px; width: {bar_pct}%;"></div>
+                                        </div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
 
                             with col2:
-                                st.markdown("**Age range:**")
-                                st.markdown(f"- Youngest: {dependents_df['age'].min():.0f} years")
-                                st.markdown(f"- Oldest: {dependents_df['age'].max():.0f} years")
+                                st.markdown("""
+                                <p style="font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 12px;">
+                                    Age Statistics
+                                </p>
+                                """, unsafe_allow_html=True)
 
-                            st.markdown("---")
-                            # Overall breakdown by relationship
-                            rel_counts = dependents_df['relationship'].value_counts()
-                            st.markdown("**By relationship:**")
-                            for rel, count in rel_counts.items():
-                                pct = (count / len(dependents_df)) * 100
-                                st.markdown(f"- **{rel.title()}s:** {count} ({pct:.1f}%)")
+                                age_stats = [
+                                    ("Youngest", f"{youngest} years"),
+                                    ("Oldest", f"{oldest} years"),
+                                    ("Average", f"{avg_age:.1f} years"),
+                                    ("Median", f"{median_age:.1f} years"),
+                                ]
+
+                                for label, value in age_stats:
+                                    st.markdown(f"""
+                                    <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f3f4f6;">
+                                        <span style="font-size: 14px; color: #6b7280;">{label}</span>
+                                        <span style="font-size: 14px; font-weight: 500; color: #374151;">{value}</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                            # Coverage burden footnote
+                            st.markdown(f"""
+                            <p style="font-size: 12px; color: #9ca3af; margin-top: 16px; font-style: italic;">
+                                Coverage burden = (employees + dependents) ÷ employees = ({len(employees_df)} + {total_deps}) ÷ {len(employees_df)} = {coverage_burden:.2f} covered lives per employee
+                            </p>
+                            """, unsafe_allow_html=True)
+
+                            st.markdown("<hr style='border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;'>", unsafe_allow_html=True)
 
                             # Children analysis
                             children_df = dependents_df[dependents_df['relationship'] == 'child']

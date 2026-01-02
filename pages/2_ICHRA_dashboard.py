@@ -337,6 +337,10 @@ class DashboardData:
     # Multi-metal results from database (Bronze, Silver, Gold)
     multi_metal_results: Dict[str, Dict] = field(default_factory=dict)
 
+    # Diagnostic information for debugging
+    diagnostic_errors: List[str] = field(default_factory=list)
+    diagnostic_info: Dict[str, Any] = field(default_factory=dict)
+
     # Contribution percentage from Page 2
     contribution_pct: float = 0.65
 
@@ -477,21 +481,66 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
     # ==========================================================================
     if db is not None:
         try:
+            # Collect diagnostic info about census data before calculation
+            rating_area_col = 'rating_area_id' if 'rating_area_id' in census_df.columns else None
+            if rating_area_col:
+                ra_values = census_df[rating_area_col].dropna().unique().tolist()
+                null_ra_count = census_df[rating_area_col].isna().sum()
+                data.diagnostic_info['rating_areas_found'] = ra_values
+                data.diagnostic_info['employees_missing_rating_area'] = int(null_ra_count)
+                if null_ra_count > 0:
+                    data.diagnostic_errors.append(
+                        f"{null_ra_count} employees have no rating_area_id (ZIP lookup failed)"
+                    )
+            else:
+                data.diagnostic_errors.append("Census is missing 'rating_area_id' column - ZIP lookup may have failed")
+
+            # Get unique states
+            state_col = 'state' if 'state' in census_df.columns else 'Home State'
+            if state_col in census_df.columns:
+                data.diagnostic_info['states'] = census_df[state_col].unique().tolist()
+
             data.multi_metal_results = FinancialSummaryCalculator.calculate_multi_metal_scenario(
                 census_df, db, ['Bronze', 'Silver', 'Gold'], dependents_df
             )
             data.has_lcsp_data = True
 
-            # Extract average actuarial values from multi-metal results
+            # Extract average actuarial values and errors from multi-metal results
             for metal in ['Bronze', 'Silver', 'Gold']:
                 metal_data = data.multi_metal_results.get(metal, {})
                 avg_av = metal_data.get('average_av')
                 if avg_av is not None:
                     data.metal_av[metal] = avg_av
+
+                # Capture errors from the calculation
+                metal_errors = metal_data.get('errors', [])
+                if metal_errors:
+                    # Just show first few unique errors to avoid overwhelming
+                    unique_errors = list(set(metal_errors))[:5]
+                    data.diagnostic_errors.extend([f"[{metal}] {e}" for e in unique_errors])
+                    if len(metal_errors) > 5:
+                        data.diagnostic_errors.append(f"[{metal}] ...and {len(metal_errors) - 5} more errors")
+
+                # Check if we got zero results
+                total_monthly = metal_data.get('total_monthly', 0)
+                employees_covered = metal_data.get('employees_covered', 0)
+                data.diagnostic_info[f'{metal}_total_monthly'] = total_monthly
+                data.diagnostic_info[f'{metal}_employees_covered'] = employees_covered
+
+                if total_monthly == 0 and employees_covered > 0:
+                    data.diagnostic_errors.append(
+                        f"[{metal}] {employees_covered} employees processed but total premium is $0"
+                    )
+
         except Exception as e:
             import logging
+            import traceback
             logging.warning(f"Multi-metal calculation failed: {e}")
+            logging.warning(traceback.format_exc())
+            data.diagnostic_errors.append(f"Multi-metal calculation exception: {str(e)}")
             data.multi_metal_results = {}
+    else:
+        data.diagnostic_errors.append("Database connection is None - cannot calculate ICHRA rates")
 
     # ==========================================================================
     # TIER-LEVEL COSTS (average per family status)
@@ -2733,10 +2782,64 @@ if census_df is None or (hasattr(census_df, 'empty') and census_df.empty):
 
 # Get database connection
 db = None
+db_health_issues = []
 try:
     db = get_database_connection()
+
+    # Quick health check for required tables
+    if db is not None:
+        try:
+            # Check for critical tables needed for ICHRA calculations
+            table_check_query = """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN (
+                'zip_to_county_correct',
+                'rbis_state_rating_area_amended',
+                'rbis_insurance_plan_base_rates_20251019202724',
+                'rbis_insurance_plan_20251019202724'
+              )
+            """
+            existing_tables = db.execute_query(table_check_query)
+            existing_table_names = existing_tables['table_name'].tolist() if not existing_tables.empty else []
+
+            required_tables = [
+                'zip_to_county_correct',
+                'rbis_state_rating_area_amended',
+                'rbis_insurance_plan_base_rates_20251019202724',
+                'rbis_insurance_plan_20251019202724'
+            ]
+
+            missing_tables = [t for t in required_tables if t not in existing_table_names]
+            if missing_tables:
+                db_health_issues.append(f"Missing tables: {', '.join(missing_tables)}")
+
+            # Check if rating area table has FIPS column (needed for ZIP lookup)
+            if 'rbis_state_rating_area_amended' in existing_table_names:
+                fips_check = db.execute_query("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'rbis_state_rating_area_amended'
+                      AND column_name = 'FIPS'
+                """)
+                if fips_check.empty:
+                    db_health_issues.append("Table 'rbis_state_rating_area_amended' is missing 'FIPS' column for ZIP lookup")
+
+        except Exception as health_check_error:
+            db_health_issues.append(f"Health check failed: {str(health_check_error)}")
+
 except Exception as e:
     st.warning(f"Database connection unavailable: {e}")
+    db_health_issues.append(f"Connection failed: {str(e)}")
+
+# Show database health issues if any
+if db_health_issues:
+    with st.sidebar:
+        with st.expander("🔴 Database Issues", expanded=True):
+            st.error("Database configuration issues detected:")
+            for issue in db_health_issues:
+                st.markdown(f"- {issue}")
 
 # =============================================================================
 # SIDEBAR: Scenario Settings (User-Adjustable)
@@ -2804,6 +2907,47 @@ data = load_dashboard_data(
     db=db,
     dashboard_config=st.session_state.get('dashboard_config')
 )
+
+# ==========================================================================
+# DIAGNOSTIC DISPLAY - Show errors if ICHRA calculations failed
+# ==========================================================================
+if data.diagnostic_errors:
+    with st.expander("⚠️ **ICHRA Calculation Issues Detected** - Click to view details", expanded=True):
+        st.error("The ICHRA columns are showing N/A or $0 due to the following issues:")
+        for error in data.diagnostic_errors:
+            st.markdown(f"- {error}")
+
+        # Show diagnostic info
+        if data.diagnostic_info:
+            st.markdown("---")
+            st.markdown("**Diagnostic Information:**")
+            diag_cols = st.columns(2)
+            with diag_cols[0]:
+                if 'states' in data.diagnostic_info:
+                    st.markdown(f"**States in census:** {', '.join(map(str, data.diagnostic_info['states']))}")
+                if 'rating_areas_found' in data.diagnostic_info:
+                    ra_list = data.diagnostic_info['rating_areas_found']
+                    if ra_list:
+                        st.markdown(f"**Rating areas found:** {', '.join(map(str, ra_list[:10]))}{'...' if len(ra_list) > 10 else ''}")
+                    else:
+                        st.markdown("**Rating areas found:** None (ZIP lookup failed)")
+                if 'employees_missing_rating_area' in data.diagnostic_info:
+                    st.markdown(f"**Employees missing rating area:** {data.diagnostic_info['employees_missing_rating_area']}")
+            with diag_cols[1]:
+                for metal in ['Bronze', 'Silver', 'Gold']:
+                    monthly = data.diagnostic_info.get(f'{metal}_total_monthly', 'N/A')
+                    covered = data.diagnostic_info.get(f'{metal}_employees_covered', 'N/A')
+                    if monthly != 'N/A':
+                        st.markdown(f"**{metal}:** ${monthly:,.0f}/mo ({covered} employees)")
+
+        st.markdown("---")
+        st.markdown("**Common causes:**")
+        st.markdown("""
+        1. **Missing database tables** - `zip_to_county_correct` or `rbis_state_rating_area_amended` may not exist
+        2. **FIPS column mismatch** - The rating area table may be missing the `"FIPS"` column for ZIP→County joins
+        3. **No plans for rating area** - The state/rating area combination may have no Individual marketplace plans
+        4. **Column name case sensitivity** - PostgreSQL quoted columns like `"ZIP"` require exact case matching
+        """)
 
 # Header
 render_header(data)
