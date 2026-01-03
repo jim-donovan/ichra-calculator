@@ -1685,14 +1685,20 @@ class FinancialQueries:
             p.plan_marketing_name as name,
             p.level_of_coverage as metal,
             p.plan_type as type,
-            d.individual_medical_deductible_innetwork as deductible,
-            d.individual_medical_moops_innetwork as oopm
+            ded.individual_ded_moop_amount as deductible,
+            moop.individual_ded_moop_amount as oopm
         FROM rbis_insurance_plan_20251019202724 p
-        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 d
-            ON p.hios_plan_id = d.hios_plan_id
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 ded
+            ON p.hios_plan_id = ded.plan_id
+            AND ded.variant_component = 'Exchange variant (no CSR)'
+            AND ded.moop_ded_type LIKE '%%Deductible%%'
+            AND ded.network_type = 'In Network'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 moop
+            ON p.hios_plan_id = moop.plan_id
+            AND moop.variant_component = 'Exchange variant (no CSR)'
+            AND moop.moop_ded_type LIKE '%%Out of Pocket%%'
+            AND moop.network_type = 'In Network'
         WHERE p.hios_plan_id = %s
-          AND (d.csr_variation_type = 'Exchange variant (no CSR)'
-               OR d.csr_variation_type IS NULL)
         LIMIT 1
         """
 
@@ -1723,17 +1729,612 @@ class FinancialQueries:
             p.plan_marketing_name as name,
             p.level_of_coverage as metal,
             p.plan_type as type,
-            d.individual_medical_deductible_innetwork as deductible,
-            d.individual_medical_moops_innetwork as oopm
+            ded.individual_ded_moop_amount as deductible,
+            moop.individual_ded_moop_amount as oopm
         FROM rbis_insurance_plan_20251019202724 p
-        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 d
-            ON p.hios_plan_id = d.hios_plan_id
-            AND d.csr_variation_type = 'Exchange variant (no CSR)'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 ded
+            ON p.hios_plan_id = ded.plan_id
+            AND ded.variant_component = 'Exchange variant (no CSR)'
+            AND ded.moop_ded_type LIKE '%%Deductible%%'
+            AND ded.network_type = 'In Network'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 moop
+            ON p.hios_plan_id = moop.plan_id
+            AND moop.variant_component = 'Exchange variant (no CSR)'
+            AND moop.moop_ded_type LIKE '%%Out of Pocket%%'
+            AND moop.network_type = 'In Network'
         WHERE p.hios_plan_id IN %s
         ORDER BY p.hios_plan_id
         """
 
         return pd.read_sql(query, db.engine, params=(tuple(plan_ids),))
+
+
+# =============================================================================
+# HEALTH CHECK QUERIES (used by pages/2_ICHRA_dashboard.py)
+# =============================================================================
+
+class HealthCheckQueries:
+    """Database health check queries for verifying required tables and schema."""
+
+    REQUIRED_TABLES = [
+        'zip_to_county_correct',
+        'rbis_state_rating_area_amended',
+        'rbis_insurance_plan_base_rates_20251019202724',
+        'rbis_insurance_plan_20251019202724'
+    ]
+
+    @staticmethod
+    def check_required_tables(db: DatabaseConnection) -> list:
+        """
+        Check which required tables exist in the database.
+
+        Returns:
+            List of table names that exist.
+        """
+        query = """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN %s
+        """
+        result = db.execute_query(query, (tuple(HealthCheckQueries.REQUIRED_TABLES),))
+        return result['table_name'].tolist() if not result.empty else []
+
+    @staticmethod
+    def get_missing_tables(db: DatabaseConnection) -> list:
+        """
+        Get list of missing required tables.
+
+        Returns:
+            List of table names that are missing.
+        """
+        existing = HealthCheckQueries.check_required_tables(db)
+        return [t for t in HealthCheckQueries.REQUIRED_TABLES if t not in existing]
+
+    @staticmethod
+    def check_fips_column(db: DatabaseConnection) -> bool:
+        """
+        Check if rbis_state_rating_area_amended has FIPS column for ZIP lookup.
+
+        Returns:
+            True if FIPS column exists, False otherwise.
+        """
+        query = """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'rbis_state_rating_area_amended'
+          AND column_name = 'FIPS'
+        """
+        result = db.execute_query(query)
+        return not result.empty
+
+
+# =============================================================================
+# MARKETPLACE QUERIES (used by pages/3, pages/6 for AI-powered evaluation)
+# =============================================================================
+
+class MarketplaceQueries:
+    """
+    Marketplace plan lookup queries for AI advisor tools.
+    These queries support pages/3_Contribution_evaluation.py and pages/6_Individual_analysis.py.
+    """
+
+    @staticmethod
+    def get_rate_by_plan_area_age(
+        db: DatabaseConnection,
+        plan_id: str,
+        rating_area_id: int,
+        age_band: str
+    ) -> Optional[float]:
+        """
+        Get individual rate for a specific plan, rating area, and age band.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+            rating_area_id: Integer rating area (1-26 depending on state)
+            age_band: Age band string (e.g., "35", "0-14", "64 and over")
+
+        Returns:
+            Individual rate as float, or None if not found.
+        """
+        query = """
+        SELECT individual_rate
+        FROM rbis_insurance_plan_base_rates_20251019202724
+        WHERE plan_id = %s
+          AND rating_area_id = %s
+          AND age = %s
+          AND tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
+          AND rate_effective_date = '2026-01-01'
+        LIMIT 1
+        """
+        result = db.execute_query(query, (plan_id, f"Rating Area {rating_area_id}", age_band))
+        if result.empty:
+            return None
+        return float(result.iloc[0]['individual_rate'])
+
+    @staticmethod
+    def get_marketplace_plans_for_employee(
+        db: DatabaseConnection,
+        state: str,
+        rating_area_id: int,
+        age_band: str,
+        metal_levels: list = None,
+        limit: int = 10,
+        on_exchange_only: bool = False
+    ) -> pd.DataFrame:
+        """
+        Get marketplace plans available for an employee's location and age.
+
+        Args:
+            db: Database connection
+            state: 2-letter state code
+            rating_area_id: Integer rating area
+            age_band: Age band string
+            metal_levels: List of metal levels to filter (None = all)
+            limit: Max number of plans to return
+            on_exchange_only: If True, only return on-exchange plans
+
+        Returns:
+            DataFrame with plan_id, plan_name, metal_level, plan_type, monthly_premium, exchange_status
+        """
+        metal_filter = ""
+        params = [state.upper(), f"Rating Area {rating_area_id}", age_band]
+
+        if metal_levels:
+            placeholders = ', '.join(['%s'] * len(metal_levels))
+            metal_filter = f"AND p.level_of_coverage IN ({placeholders})"
+            params.extend(metal_levels)
+
+        csr_filter = "= 'Exchange variant (no CSR)'" if on_exchange_only else "IN ('Exchange variant (no CSR)', 'Non-Exchange variant')"
+
+        query = f"""
+        SELECT DISTINCT
+            p.hios_plan_id as plan_id,
+            p.plan_marketing_name as plan_name,
+            p.level_of_coverage as metal_level,
+            p.plan_type,
+            r.individual_rate as monthly_premium,
+            CASE
+                WHEN v.csr_variation_type = 'Exchange variant (no CSR)' THEN 'On-Exchange'
+                ELSE 'Off-Exchange'
+            END as exchange_status
+        FROM rbis_insurance_plan_20251019202724 p
+        JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+        JOIN rbis_insurance_plan_base_rates_20251019202724 r
+            ON p.hios_plan_id = r.plan_id
+        WHERE p.market_coverage = 'Individual'
+          AND v.csr_variation_type {csr_filter}
+          AND SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
+          AND r.rating_area_id = %s
+          AND r.age = %s
+          AND r.tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
+          AND r.rate_effective_date = '2026-01-01'
+          {metal_filter}
+        ORDER BY r.individual_rate ASC
+        LIMIT %s
+        """
+        params.append(limit)
+
+        return db.execute_query(query, tuple(params))
+
+    @staticmethod
+    def get_lcsp_for_employee(
+        db: DatabaseConnection,
+        state: str,
+        rating_area_id: int,
+        age_band: str
+    ) -> Optional[dict]:
+        """
+        Get Lowest Cost Silver Plan (LCSP) for an employee.
+        LCSP must be on-exchange only per IRS affordability safe harbor rules.
+
+        Args:
+            db: Database connection
+            state: 2-letter state code
+            rating_area_id: Integer rating area
+            age_band: Age band string
+
+        Returns:
+            Dict with plan_id, plan_name, metal_level, plan_type, monthly_premium, or None
+        """
+        query = """
+        SELECT
+            p.hios_plan_id as plan_id,
+            p.plan_marketing_name as plan_name,
+            p.level_of_coverage as metal_level,
+            p.plan_type,
+            r.individual_rate as monthly_premium
+        FROM rbis_insurance_plan_20251019202724 p
+        JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+        JOIN rbis_insurance_plan_base_rates_20251019202724 r
+            ON p.hios_plan_id = r.plan_id
+        WHERE p.level_of_coverage = 'Silver'
+          AND p.market_coverage = 'Individual'
+          AND v.csr_variation_type = 'Exchange variant (no CSR)'
+          AND SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
+          AND r.rating_area_id = %s
+          AND r.age = %s
+          AND r.tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
+          AND r.rate_effective_date = '2026-01-01'
+        ORDER BY r.individual_rate ASC
+        LIMIT 1
+        """
+        result = db.execute_query(query, (state.upper(), f"Rating Area {rating_area_id}", age_band))
+        if result.empty:
+            return None
+
+        row = result.iloc[0]
+        return {
+            'plan_id': row['plan_id'],
+            'plan_name': row['plan_name'],
+            'metal_level': row['metal_level'],
+            'plan_type': row['plan_type'],
+            'monthly_premium': float(row['monthly_premium'])
+        }
+
+    @staticmethod
+    def get_equivalent_plan(
+        db: DatabaseConnection,
+        state: str,
+        rating_area_id: int,
+        age_band: str,
+        target_premium: float
+    ) -> Optional[dict]:
+        """
+        Find the marketplace plan closest in price to a target premium.
+
+        Args:
+            db: Database connection
+            state: 2-letter state code
+            rating_area_id: Integer rating area
+            age_band: Age band string
+            target_premium: Target monthly premium to match
+
+        Returns:
+            Dict with plan details and rate difference, or None
+        """
+        query = """
+        SELECT DISTINCT
+            p.hios_plan_id as plan_id,
+            p.plan_marketing_name as plan_name,
+            p.level_of_coverage as metal_level,
+            p.plan_type,
+            r.individual_rate as monthly_premium,
+            CASE
+                WHEN v.csr_variation_type = 'Exchange variant (no CSR)' THEN 'On-Exchange'
+                ELSE 'Off-Exchange'
+            END as exchange_status,
+            ABS(r.individual_rate::numeric - %s) as rate_diff
+        FROM rbis_insurance_plan_20251019202724 p
+        JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+        JOIN rbis_insurance_plan_base_rates_20251019202724 r
+            ON p.hios_plan_id = r.plan_id
+        WHERE p.market_coverage = 'Individual'
+          AND v.csr_variation_type IN ('Exchange variant (no CSR)', 'Non-Exchange variant')
+          AND SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
+          AND r.rating_area_id = %s
+          AND r.age = %s
+          AND r.tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
+          AND r.rate_effective_date = '2026-01-01'
+        ORDER BY rate_diff ASC
+        LIMIT 1
+        """
+        result = db.execute_query(
+            query,
+            (target_premium, state.upper(), f"Rating Area {rating_area_id}", age_band)
+        )
+        if result.empty:
+            return None
+
+        row = result.iloc[0]
+        return {
+            'plan_id': row['plan_id'],
+            'plan_name': row['plan_name'],
+            'metal_level': row['metal_level'],
+            'plan_type': row['plan_type'],
+            'monthly_premium': float(row['monthly_premium']),
+            'exchange_status': row['exchange_status'],
+            'rate_diff': float(row['rate_diff'])
+        }
+
+    @staticmethod
+    def get_deductible(db: DatabaseConnection, plan_id: str) -> Optional[float]:
+        """
+        Get in-network individual deductible for a plan.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+
+        Returns:
+            Deductible amount as float, or None
+        """
+        query = """
+        SELECT individual_ded_moop_amount
+        FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
+        WHERE plan_id = %s
+          AND variant_component = 'Exchange variant (no CSR)'
+          AND moop_ded_type LIKE '%%Deductible%%'
+          AND individual_ded_moop_amount != 'Not Applicable'
+          AND network_type = 'In Network'
+        LIMIT 1
+        """
+        result = db.execute_query(query, (plan_id,))
+        if result.empty:
+            return None
+        try:
+            return float(result.iloc[0]['individual_ded_moop_amount'])
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def get_oopm(db: DatabaseConnection, plan_id: str) -> Optional[float]:
+        """
+        Get in-network individual out-of-pocket maximum for a plan.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+
+        Returns:
+            OOPM amount as float, or None
+        """
+        query = """
+        SELECT individual_ded_moop_amount
+        FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
+        WHERE plan_id = %s
+          AND variant_component = 'Exchange variant (no CSR)'
+          AND moop_ded_type LIKE '%%Out of Pocket%%'
+          AND individual_ded_moop_amount != 'Not Applicable'
+          AND network_type = 'In Network'
+        LIMIT 1
+        """
+        result = db.execute_query(query, (plan_id,))
+        if result.empty:
+            return None
+        try:
+            return float(result.iloc[0]['individual_ded_moop_amount'])
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def get_deductible_and_oopm(db: DatabaseConnection, plan_id: str) -> dict:
+        """
+        Get both deductible and OOPM for a plan in one call.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+
+        Returns:
+            Dict with 'deductible' and 'oopm' keys (values may be None)
+        """
+        return {
+            'deductible': MarketplaceQueries.get_deductible(db, plan_id),
+            'oopm': MarketplaceQueries.get_oopm(db, plan_id)
+        }
+
+
+# =============================================================================
+# ENRICHED PLAN QUERIES - Plan data with carrier info
+# =============================================================================
+
+class EnrichedPlanQueries:
+    """
+    Queries that return enriched plan data with carrier/issuer information.
+
+    Joins plan tables with HIOS_issuers_pivoted to get carrier names,
+    and includes actuarial value, HSA eligibility, deductible, and OOP max.
+    """
+
+    @staticmethod
+    def get_plan_with_carrier(db: DatabaseConnection, plan_id: str) -> dict:
+        """
+        Get plan details including carrier name from issuer table.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+
+        Returns:
+            Dict with plan details including carrier_name, or empty dict if not found
+        """
+        query = """
+        SELECT
+            p.hios_plan_id,
+            p.plan_marketing_name,
+            p.level_of_coverage as metal_level,
+            p.plan_type,
+            COALESCE(i.marketingname, i.issr_lgl_name) as carrier_name,
+            v.issuer_actuarial_value as av_percent,
+            v.hsa_eligible,
+            ded.individual_ded_moop_amount as deductible,
+            moop.individual_ded_moop_amount as oop_max
+        FROM rbis_insurance_plan_20251019202724 p
+        LEFT JOIN "HIOS_issuers_pivoted" i
+            ON SUBSTRING(p.hios_plan_id, 1, 5) = i.hios_issuer_id
+        LEFT JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+            AND v.variant_component = 'Exchange variant (no CSR)'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 ded
+            ON p.hios_plan_id = ded.plan_id
+            AND ded.variant_component = 'Exchange variant (no CSR)'
+            AND ded.moop_ded_type LIKE '%%Deductible%%'
+            AND ded.network_type = 'In Network'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 moop
+            ON p.hios_plan_id = moop.plan_id
+            AND moop.variant_component = 'Exchange variant (no CSR)'
+            AND moop.moop_ded_type LIKE '%%Out of Pocket Maximum%%'
+            AND moop.network_type = 'In Network'
+        WHERE p.hios_plan_id = %s
+        LIMIT 1
+        """
+        try:
+            result = db.execute_query(query, (plan_id,))
+            if result is not None and not result.empty:
+                row = result.iloc[0]
+                return {
+                    'plan_id': row.get('hios_plan_id'),
+                    'plan_name': row.get('plan_marketing_name'),
+                    'metal_level': row.get('metal_level'),
+                    'plan_type': row.get('plan_type'),
+                    'carrier_name': row.get('carrier_name'),
+                    'av_percent': float(row.get('av_percent', 0)) if row.get('av_percent') else None,
+                    'hsa_eligible': row.get('hsa_eligible') == 'Yes',
+                    'deductible': float(row.get('deductible', 0)) if row.get('deductible') else None,
+                    'oop_max': float(row.get('oop_max', 0)) if row.get('oop_max') else None,
+                }
+            return {}
+        except Exception as e:
+            print(f"Error getting enriched plan data for {plan_id}: {e}")
+            return {}
+
+    @staticmethod
+    def get_plans_with_carrier_batch(db: DatabaseConnection, plan_ids: list) -> dict:
+        """
+        Get enriched plan details for multiple plans at once.
+
+        Args:
+            db: Database connection
+            plan_ids: List of HIOS plan IDs
+
+        Returns:
+            Dict mapping plan_id to enriched plan data
+        """
+        if not plan_ids:
+            return {}
+
+        query = """
+        SELECT
+            p.hios_plan_id,
+            p.plan_marketing_name,
+            p.level_of_coverage as metal_level,
+            p.plan_type,
+            COALESCE(i.marketingname, i.issr_lgl_name) as carrier_name,
+            v.issuer_actuarial_value as av_percent,
+            v.hsa_eligible,
+            ded.individual_ded_moop_amount as deductible,
+            moop.individual_ded_moop_amount as oop_max
+        FROM rbis_insurance_plan_20251019202724 p
+        LEFT JOIN "HIOS_issuers_pivoted" i
+            ON SUBSTRING(p.hios_plan_id, 1, 5) = i.hios_issuer_id
+        LEFT JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+            AND v.variant_component = 'Exchange variant (no CSR)'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 ded
+            ON p.hios_plan_id = ded.plan_id
+            AND ded.variant_component = 'Exchange variant (no CSR)'
+            AND ded.moop_ded_type LIKE '%%Deductible%%'
+            AND ded.network_type = 'In Network'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 moop
+            ON p.hios_plan_id = moop.plan_id
+            AND moop.variant_component = 'Exchange variant (no CSR)'
+            AND moop.moop_ded_type LIKE '%%Out of Pocket Maximum%%'
+            AND moop.network_type = 'In Network'
+        WHERE p.hios_plan_id IN %s
+        """
+        try:
+            result = db.execute_query(query, (tuple(plan_ids),))
+            if result is None or result.empty:
+                return {}
+
+            plans = {}
+            for _, row in result.iterrows():
+                plan_id = row.get('hios_plan_id')
+                plans[plan_id] = {
+                    'plan_id': plan_id,
+                    'plan_name': row.get('plan_marketing_name'),
+                    'metal_level': row.get('metal_level'),
+                    'plan_type': row.get('plan_type'),
+                    'carrier_name': row.get('carrier_name'),
+                    'av_percent': float(row.get('av_percent', 0)) if row.get('av_percent') else None,
+                    'hsa_eligible': row.get('hsa_eligible') == 'Yes',
+                    'deductible': float(row.get('deductible', 0)) if row.get('deductible') else None,
+                    'oop_max': float(row.get('oop_max', 0)) if row.get('oop_max') else None,
+                }
+            return plans
+        except Exception as e:
+            print(f"Error getting enriched plan data batch: {e}")
+            return {}
+
+    @staticmethod
+    def get_lowest_cost_plan_by_metal(db: DatabaseConnection, state: str,
+                                       rating_area: int, metal_level: str) -> dict:
+        """
+        Get the lowest cost plan for a metal level with enriched data.
+
+        Args:
+            db: Database connection
+            state: 2-letter state code
+            rating_area: Rating area number (integer)
+            metal_level: Metal level (Bronze, Silver, Gold, Platinum)
+
+        Returns:
+            Dict with enriched plan data for the lowest cost plan, or empty dict
+        """
+        query = """
+        SELECT
+            p.hios_plan_id,
+            p.plan_marketing_name,
+            p.level_of_coverage as metal_level,
+            p.plan_type,
+            COALESCE(i.marketingname, i.issr_lgl_name) as carrier_name,
+            v.issuer_actuarial_value as av_percent,
+            v.hsa_eligible,
+            ded.individual_ded_moop_amount as deductible,
+            moop.individual_ded_moop_amount as oop_max,
+            br.individual_rate as base_rate
+        FROM rbis_insurance_plan_20251019202724 p
+        JOIN rbis_insurance_plan_base_rates_20251019202724 br
+            ON p.hios_plan_id = br.plan_id
+        LEFT JOIN "HIOS_issuers_pivoted" i
+            ON SUBSTRING(p.hios_plan_id, 1, 5) = i.hios_issuer_id
+        LEFT JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+            AND v.variant_component = 'Exchange variant (no CSR)'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 ded
+            ON p.hios_plan_id = ded.plan_id
+            AND ded.variant_component = 'Exchange variant (no CSR)'
+            AND ded.moop_ded_type LIKE '%%Deductible%%'
+            AND ded.network_type = 'In Network'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 moop
+            ON p.hios_plan_id = moop.plan_id
+            AND moop.variant_component = 'Exchange variant (no CSR)'
+            AND moop.moop_ded_type LIKE '%%Out of Pocket Maximum%%'
+            AND moop.network_type = 'In Network'
+        WHERE SUBSTRING(p.hios_plan_id, 6, 2) = %s
+          AND br.rating_area_numeric = %s
+          AND br.age = '21'
+          AND p.level_of_coverage = %s
+          AND p.market_coverage = 'Individual'
+          AND br.rate_effective_date = '2026-01-01'
+        ORDER BY br.individual_rate ASC
+        LIMIT 1
+        """
+        try:
+            result = db.execute_query(query, (state, rating_area, metal_level))
+            if result is not None and not result.empty:
+                row = result.iloc[0]
+                return {
+                    'plan_id': row.get('hios_plan_id'),
+                    'plan_name': row.get('plan_marketing_name'),
+                    'metal_level': row.get('metal_level'),
+                    'plan_type': row.get('plan_type'),
+                    'carrier_name': row.get('carrier_name'),
+                    'av_percent': float(row.get('av_percent', 0)) if row.get('av_percent') else None,
+                    'hsa_eligible': row.get('hsa_eligible') == 'Yes',
+                    'deductible': float(row.get('deductible', 0)) if row.get('deductible') else None,
+                    'oop_max': float(row.get('oop_max', 0)) if row.get('oop_max') else None,
+                    'base_rate': float(row.get('base_rate', 0)) if row.get('base_rate') else None,
+                }
+            return {}
+        except Exception as e:
+            print(f"Error getting LCP for {state} RA{rating_area} {metal_level}: {e}")
+            return {}
 
 
 if __name__ == "__main__":

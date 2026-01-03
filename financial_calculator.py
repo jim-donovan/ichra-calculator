@@ -683,13 +683,161 @@ class FinancialSummaryCalculator:
             total += lives
         return total
 
-    # Tier multipliers for estimating family coverage costs
+    # Tier multipliers for estimating family coverage costs (legacy - use calculate_actual_family_premium instead)
     TIER_MULTIPLIERS = {
         'EE': 1.0,
         'ES': 1.5,
         'EC': 1.3,
         'F': 1.8
     }
+
+    @staticmethod
+    def get_rate_for_age(
+        db: DatabaseConnection,
+        plan_id: str,
+        rating_area: int,
+        age: int
+    ) -> float:
+        """
+        Get the individual rate for a specific plan, rating area, and age.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+            rating_area: Rating area number (integer)
+            age: Age (integer, will be converted to age band)
+
+        Returns:
+            Individual rate as float, or 0.0 if not found
+        """
+        # Convert age to age band
+        if age <= 14:
+            age_band = '0-14'
+        elif age >= 64:
+            age_band = '64 and over'
+        else:
+            age_band = str(age)
+
+        query = """
+        SELECT individual_rate
+        FROM rbis_insurance_plan_base_rates_20251019202724
+        WHERE plan_id = %s
+          AND rating_area_numeric = %s
+          AND age = %s
+          AND rate_effective_date = '2026-01-01'
+        LIMIT 1
+        """
+        try:
+            result = db.execute_query(query, (plan_id, rating_area, age_band))
+            if result is not None and not result.empty:
+                return float(result.iloc[0]['individual_rate'])
+            return 0.0
+        except Exception as e:
+            print(f"Error getting rate for {plan_id} RA{rating_area} age {age}: {e}")
+            return 0.0
+
+    @staticmethod
+    def calculate_actual_family_premium(
+        db: DatabaseConnection,
+        plan_id: str,
+        employee_row: pd.Series,
+        rating_area: int = None
+    ) -> float:
+        """
+        Calculate actual family premium by summing individual rates for each family member.
+
+        Unlike the tier multiplier approach, this sums the actual ACA rates for:
+        - Employee
+        - Spouse (if family status is ES or F)
+        - Up to 3 oldest children under 21 (ACA 3-child rule)
+        - Children 21+ are rated individually
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+            employee_row: Row from census DataFrame
+            rating_area: Optional rating area (if not provided, uses rating_area_id from row)
+
+        Returns:
+            Total monthly premium for the family
+        """
+        # Get rating area from row if not provided
+        if rating_area is None:
+            rating_area = employee_row.get('rating_area_id')
+            if rating_area is None:
+                return 0.0
+            try:
+                rating_area = int(rating_area)
+            except (ValueError, TypeError):
+                return 0.0
+
+        # Get rated members (employee, spouse, children with 3-child rule applied)
+        members = FinancialSummaryCalculator._get_rated_members(employee_row)
+
+        if not members:
+            return 0.0
+
+        total_premium = 0.0
+        for member_type, age in members:
+            rate = FinancialSummaryCalculator.get_rate_for_age(db, plan_id, rating_area, age)
+            total_premium += rate
+
+        return total_premium
+
+    @staticmethod
+    def calculate_workforce_actual_premium(
+        db: DatabaseConnection,
+        plan_id: str,
+        census_df: pd.DataFrame
+    ) -> Dict:
+        """
+        Calculate total workforce premium using actual family rates (no tier multipliers).
+
+        This sums the actual individual rates for all family members across all employees.
+
+        Args:
+            db: Database connection
+            plan_id: HIOS plan ID
+            census_df: Employee census with rating_area_id and family data
+
+        Returns:
+            {
+                'total_monthly': float,
+                'total_annual': float,
+                'employee_count': int,
+                'covered_lives': int,
+                'by_employee': List[Dict]  # Optional detailed breakdown
+            }
+        """
+        total_monthly = 0.0
+        covered_lives = 0
+        employee_details = []
+
+        for idx, emp in census_df.iterrows():
+            # Get rated members count
+            members = FinancialSummaryCalculator._get_rated_members(emp)
+            covered_lives += len(members)
+
+            # Calculate actual family premium
+            family_premium = FinancialSummaryCalculator.calculate_actual_family_premium(
+                db, plan_id, emp
+            )
+            total_monthly += family_premium
+
+            employee_details.append({
+                'employee_id': emp.get('employee_id', idx),
+                'family_status': emp.get('family_status', 'EE'),
+                'members_rated': len(members),
+                'monthly_premium': family_premium
+            })
+
+        return {
+            'total_monthly': total_monthly,
+            'total_annual': total_monthly * 12,
+            'employee_count': len(census_df),
+            'covered_lives': covered_lives,
+            'by_employee': employee_details
+        }
 
     @staticmethod
     def calculate_lcsp_scenario(

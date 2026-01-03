@@ -229,6 +229,28 @@ with score_col2:
         with col_score:
             st.text(f"{score}")
 
+    # Expandable section explaining how each category is calculated
+    with st.expander("ℹ️ How are these scores calculated?"):
+        st.markdown("""
+**Cost Advantage (25%)**
+Compares proposed ICHRA cost to current ER spend. Higher scores for greater savings (≥20% savings = 100, 10-20% = 80, 5-10% = 70).
+
+**Market Readiness (20%)**
+Based on marketplace plan availability in employee locations. Scores minimum and average plan counts across all rating areas.
+
+**Workforce Fit (20%)**
+Younger workforces score higher as they benefit more from individual marketplace rates. Considers % under 35, under 45, and over 55.
+
+**Geographic Simplicity (15%)**
+Fewer states = simpler administration. Single state = 100, 2-3 states = 90, 4-5 = 75. Also considers rating area count.
+
+**Employee Experience (10%)**
+Higher EE-only % = easier transition (fewer dependents to enroll). Also factors average age for tech comfort with marketplace.
+
+**Admin Readiness (10%)**
+Measures census data quality: completeness of required fields, presence of current contribution data, and rating area resolution success.
+        """)
+
 # =============================================================================
 # SECTION 3: PROPOSAL DATA PREVIEW (Editable)
 # =============================================================================
