@@ -9,6 +9,7 @@ import logging
 
 from database import get_database_connection
 from constants import FAMILY_STATUS_CODES
+from queries import MarketplaceQueries
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ def get_employer_contribution(employee: dict) -> float:
 
 
 def calculate_family_premium(employee: dict, plan_id: str, db) -> float:
-    """Calculate total family premium for a plan"""
+    """Calculate total family premium for a plan using MarketplaceQueries"""
     family_status = str(employee.get('family_status', 'EE')).upper()
     rating_area_id = employee.get('rating_area_id')
 
@@ -141,35 +142,28 @@ def calculate_family_premium(employee: dict, plan_id: str, db) -> float:
         return None
 
     total_premium = 0.0
+    ra_id = int(rating_area_id)
 
+    # Employee premium
     ee_age = employee.get('age', employee.get('ee_age', 30))
     age_band = get_age_band(int(ee_age))
 
-    rate_query = """
-        SELECT individual_rate
-        FROM rbis_insurance_plan_base_rates_20251019202724
-        WHERE plan_id = %s
-          AND REPLACE(rating_area_id, 'Rating Area ', '')::integer = %s
-          AND age = %s
-          AND tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
-          AND rate_effective_date = '2026-01-01'
-        LIMIT 1
-    """
-
-    result = db.execute_query(rate_query, (plan_id, int(rating_area_id), age_band))
-    if result.empty:
+    ee_rate = MarketplaceQueries.get_rate_by_plan_area_age(db, plan_id, ra_id, age_band)
+    if ee_rate is None:
         return None
 
-    total_premium = float(result.iloc[0]['individual_rate'])
+    total_premium = ee_rate
 
+    # Add spouse if applicable
     if family_status in ['ES', 'F']:
         spouse_age = employee.get('spouse_age')
         if spouse_age:
             spouse_band = get_age_band(int(spouse_age))
-            result = db.execute_query(rate_query, (plan_id, int(rating_area_id), spouse_band))
-            if not result.empty:
-                total_premium += float(result.iloc[0]['individual_rate'])
+            spouse_rate = MarketplaceQueries.get_rate_by_plan_area_age(db, plan_id, ra_id, spouse_band)
+            if spouse_rate:
+                total_premium += spouse_rate
 
+    # Add children if applicable (max 3 oldest under 21 per ACA rules)
     if family_status in ['EC', 'F']:
         child_ages = []
         for i in range(2, 7):
@@ -177,18 +171,19 @@ def calculate_family_premium(employee: dict, plan_id: str, db) -> float:
             if child_age and int(child_age) < 21:
                 child_ages.append(int(child_age))
 
+        # Sort and take oldest 3
         child_ages.sort(reverse=True)
         for age in child_ages[:3]:
             child_band = get_age_band(age)
-            result = db.execute_query(rate_query, (plan_id, int(rating_area_id), child_band))
-            if not result.empty:
-                total_premium += float(result.iloc[0]['individual_rate'])
+            child_rate = MarketplaceQueries.get_rate_by_plan_area_age(db, plan_id, ra_id, child_band)
+            if child_rate:
+                total_premium += child_rate
 
     return total_premium
 
 
 def compare_current_vs_marketplace(employee_id: str, include_family: bool = True) -> dict:
-    """Compare current contribution to marketplace options"""
+    """Compare current contribution to marketplace options using MarketplaceQueries"""
     employee = get_employee_by_id(employee_id)
     if not employee:
         return {"error": f"Employee '{employee_id}' not found in census"}
@@ -224,34 +219,16 @@ def compare_current_vs_marketplace(employee_id: str, include_family: bool = True
     try:
         db = st.session_state.db
 
-        query = """
-            SELECT DISTINCT
-                p.hios_plan_id as plan_id,
-                p.plan_marketing_name as plan_name,
-                p.level_of_coverage as metal_level,
-                p.plan_type,
-                r.individual_rate as monthly_premium,
-                CASE
-                    WHEN v.csr_variation_type = 'Exchange variant (no CSR)' THEN 'On-Exchange'
-                    ELSE 'Off-Exchange'
-                END as exchange_status
-            FROM rbis_insurance_plan_20251019202724 p
-            JOIN rbis_insurance_plan_variant_20251019202724 v
-                ON p.hios_plan_id = v.hios_plan_id
-            JOIN rbis_insurance_plan_base_rates_20251019202724 r
-                ON p.hios_plan_id = r.plan_id
-            WHERE p.market_coverage = 'Individual'
-              AND v.csr_variation_type IN ('Exchange variant (no CSR)', 'Non-Exchange variant')
-              AND SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
-              AND REPLACE(r.rating_area_id, 'Rating Area ', '')::integer = %s
-              AND r.age = %s
-              AND r.tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
-              AND r.rate_effective_date = '2026-01-01'
-            ORDER BY r.individual_rate ASC
-            LIMIT 10
-        """
-
-        df = db.execute_query(query, (state.upper(), int(rating_area_id), age_band))
+        # Use MarketplaceQueries for plan lookup
+        df = MarketplaceQueries.get_marketplace_plans_for_employee(
+            db=db,
+            state=state,
+            rating_area_id=int(rating_area_id),
+            age_band=age_band,
+            metal_levels=None,
+            limit=10,
+            on_exchange_only=False
+        )
 
         if df.empty:
             return {"error": f"No marketplace plans found for this location"}
@@ -314,7 +291,7 @@ def compare_current_vs_marketplace(employee_id: str, include_family: bool = True
 
 
 def get_lcsp(employee_id: str, coverage_type: str = None) -> dict:
-    """Get Lowest Cost Silver Plan for affordability analysis"""
+    """Get Lowest Cost Silver Plan for affordability analysis using MarketplaceQueries"""
     employee = get_employee_by_id(employee_id)
     if not employee:
         return {"error": f"Employee '{employee_id}' not found in census"}
@@ -334,37 +311,18 @@ def get_lcsp(employee_id: str, coverage_type: str = None) -> dict:
     try:
         db = st.session_state.db
 
-        query = """
-            SELECT
-                p.hios_plan_id as plan_id,
-                p.plan_marketing_name as plan_name,
-                p.level_of_coverage as metal_level,
-                p.plan_type,
-                r.individual_rate as monthly_premium
-            FROM rbis_insurance_plan_20251019202724 p
-            JOIN rbis_insurance_plan_variant_20251019202724 v
-                ON p.hios_plan_id = v.hios_plan_id
-            JOIN rbis_insurance_plan_base_rates_20251019202724 r
-                ON p.hios_plan_id = r.plan_id
-            WHERE p.level_of_coverage = 'Silver'
-              AND p.market_coverage = 'Individual'
-              AND v.csr_variation_type = 'Exchange variant (no CSR)'
-              AND SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
-              AND REPLACE(r.rating_area_id, 'Rating Area ', '')::integer = %s
-              AND r.age = %s
-              AND r.tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
-              AND r.rate_effective_date = '2026-01-01'
-            ORDER BY r.individual_rate ASC
-            LIMIT 1
-        """
+        # Use MarketplaceQueries for LCSP lookup (on-exchange only for IRS safe harbor)
+        lcsp = MarketplaceQueries.get_lcsp_for_employee(
+            db=db,
+            state=state,
+            rating_area_id=int(rating_area_id),
+            age_band=age_band
+        )
 
-        df = db.execute_query(query, (state.upper(), int(rating_area_id), age_band))
-
-        if df.empty:
+        if lcsp is None:
             return {"error": f"No Silver plans found for rating area {rating_area_id}"}
 
-        lcsp = df.iloc[0]
-        lcsp_premium = float(lcsp['monthly_premium'])
+        lcsp_premium = lcsp['monthly_premium']
         plan_id = lcsp['plan_id']
 
         if coverage_type == 'family' and family_status in ['ES', 'EC', 'F']:
@@ -372,29 +330,8 @@ def get_lcsp(employee_id: str, coverage_type: str = None) -> dict:
             if family_premium:
                 lcsp_premium = family_premium
 
-        deductible_query = """
-            SELECT individual_ded_moop_amount
-            FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
-            WHERE plan_id = %s
-              AND moop_ded_type LIKE '%%Deductible%%'
-              AND individual_ded_moop_amount != 'Not Applicable'
-              AND network_type = 'In Network'
-            LIMIT 1
-        """
-        ded_result = db.execute_query(deductible_query, (plan_id,))
-        deductible = ded_result.iloc[0]['individual_ded_moop_amount'] if not ded_result.empty else None
-
-        moop_query = """
-            SELECT individual_ded_moop_amount
-            FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
-            WHERE plan_id = %s
-              AND moop_ded_type LIKE '%%Out of Pocket%%'
-              AND individual_ded_moop_amount != 'Not Applicable'
-              AND network_type = 'In Network'
-            LIMIT 1
-        """
-        moop_result = db.execute_query(moop_query, (plan_id,))
-        oopm = moop_result.iloc[0]['individual_ded_moop_amount'] if not moop_result.empty else None
+        # Get deductible and OOPM using MarketplaceQueries
+        cost_share = MarketplaceQueries.get_deductible_and_oopm(db, plan_id)
 
         return {
             "employee_id": employee_id,
@@ -405,8 +342,8 @@ def get_lcsp(employee_id: str, coverage_type: str = None) -> dict:
                 "metal_level": lcsp['metal_level'],
                 "plan_type": lcsp['plan_type'],
                 "monthly_premium": f"${lcsp_premium:,.2f}",
-                "deductible": deductible,
-                "oopm": oopm
+                "deductible": cost_share['deductible'],
+                "oopm": cost_share['oopm']
             }
         }
 
@@ -416,7 +353,7 @@ def get_lcsp(employee_id: str, coverage_type: str = None) -> dict:
 
 
 def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
-    """Get marketplace plan closest to current contribution"""
+    """Get marketplace plan closest to current contribution using MarketplaceQueries"""
     employee = get_employee_by_id(employee_id)
     if not employee:
         return {"error": f"Employee '{employee_id}' not found in census"}
@@ -455,76 +392,34 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
     try:
         db = st.session_state.db
 
-        query = """
-            SELECT DISTINCT
-                p.hios_plan_id as plan_id,
-                p.plan_marketing_name as plan_name,
-                p.level_of_coverage as metal_level,
-                p.plan_type,
-                r.individual_rate as monthly_premium,
-                CASE
-                    WHEN v.csr_variation_type = 'Exchange variant (no CSR)' THEN 'On-Exchange'
-                    ELSE 'Off-Exchange'
-                END as exchange_status,
-                ABS(r.individual_rate::numeric - %s) as rate_diff
-            FROM rbis_insurance_plan_20251019202724 p
-            JOIN rbis_insurance_plan_variant_20251019202724 v
-                ON p.hios_plan_id = v.hios_plan_id
-            JOIN rbis_insurance_plan_base_rates_20251019202724 r
-                ON p.hios_plan_id = r.plan_id
-            WHERE p.market_coverage = 'Individual'
-              AND v.csr_variation_type IN ('Exchange variant (no CSR)', 'Non-Exchange variant')
-              AND SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
-              AND REPLACE(r.rating_area_id, 'Rating Area ', '')::integer = %s
-              AND r.age = %s
-              AND r.tobacco IN ('No Preference', 'Tobacco User/Non-Tobacco User')
-              AND r.rate_effective_date = '2026-01-01'
-            ORDER BY rate_diff ASC
-            LIMIT 1
-        """
+        # Use MarketplaceQueries for equivalent plan lookup
+        plan = MarketplaceQueries.get_equivalent_plan(
+            db=db,
+            state=state,
+            rating_area_id=int(rating_area_id),
+            age_band=age_band,
+            target_premium=target_premium
+        )
 
-        df = db.execute_query(query, (target_premium, state.upper(), int(rating_area_id), age_band))
-
-        if df.empty:
+        if plan is None:
             return {"error": "No matching plans found"}
 
-        plan = df.iloc[0]
-        ee_premium = float(plan['monthly_premium'])
+        ee_premium = plan['monthly_premium']
+        plan_id = plan['plan_id']
 
         if family_status in ['ES', 'EC', 'F']:
-            family_premium = calculate_family_premium(employee, plan['plan_id'], db)
+            family_premium = calculate_family_premium(employee, plan_id, db)
             premium = family_premium if family_premium else ee_premium
         else:
             premium = ee_premium
 
         difference = premium - target_premium
 
-        deductible_query = """
-            SELECT individual_ded_moop_amount
-            FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
-            WHERE plan_id = %s
-              AND moop_ded_type LIKE '%%Deductible%%'
-              AND individual_ded_moop_amount != 'Not Applicable'
-              AND network_type = 'In Network'
-            LIMIT 1
-        """
-        ded_result = db.execute_query(deductible_query, (plan['plan_id'],))
-        deductible = ded_result.iloc[0]['individual_ded_moop_amount'] if not ded_result.empty else 'N/A'
-
-        moop_query = """
-            SELECT individual_ded_moop_amount
-            FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
-            WHERE plan_id = %s
-              AND moop_ded_type LIKE '%%Out of Pocket%%'
-              AND individual_ded_moop_amount != 'Not Applicable'
-              AND network_type = 'In Network'
-            LIMIT 1
-        """
-        moop_result = db.execute_query(moop_query, (plan['plan_id'],))
-        oopm = moop_result.iloc[0]['individual_ded_moop_amount'] if not moop_result.empty else 'N/A'
+        # Get deductible and OOPM using MarketplaceQueries
+        cost_share = MarketplaceQueries.get_deductible_and_oopm(db, plan_id)
 
         return {
-            "plan_id": plan['plan_id'],
+            "plan_id": plan_id,
             "plan_name": plan['plan_name'],
             "metal_level": plan['metal_level'],
             "plan_type": plan['plan_type'],
@@ -532,8 +427,8 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
             "monthly_premium": f"${premium:,.2f}",
             "target_premium": f"${target_premium:,.2f}",
             "difference": f"${difference:+,.2f}",
-            "deductible": deductible,
-            "oopm": oopm
+            "deductible": cost_share['deductible'] if cost_share['deductible'] else 'N/A',
+            "oopm": cost_share['oopm'] if cost_share['oopm'] else 'N/A'
         }
 
     except Exception as e:

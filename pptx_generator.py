@@ -642,8 +642,6 @@ class ProposalGenerator:
         Key update: Now shows savings vs Projected Renewal ER (not vs current ER)
         This is the PRIMARY sales comparison - avoiding the renewal hit.
         """
-        # Use savings_vs_renewal_er as the main savings metric
-        # This shows: projected_er_annual_2026 - proposed_er_annual
         savings_display = abs(data.savings_vs_renewal_er) if data.savings_vs_renewal_er != 0 else abs(data.annual_savings)
 
         replacements = [
@@ -655,7 +653,7 @@ class ProposalGenerator:
             # Current EE costs
             ('$657,949.44', f'${data.current_ee_annual:,.2f}'),
             ('$54,829.12', f'${data.current_ee_monthly:,.2f}'),
-            # Proposed ICHRA
+            # Total ER Cost
             ('$1,391,216.22', f'${data.proposed_er_annual:,.2f}'),
             ('$115,934.68', f'${data.proposed_er_monthly:,.2f}'),
         ]
