@@ -3,7 +3,7 @@ SQL queries for ICHRA Calculator
 All queries against pricing-proposal PostgreSQL database
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 import pandas as pd
 from database import DatabaseConnection
 
@@ -26,6 +26,47 @@ class PlanQueries:
         ORDER BY state_code
         """
         return db.execute_query(query)
+
+    @staticmethod
+    def get_plan_counts_by_metal(db: DatabaseConnection) -> Dict[str, int]:
+        """
+        Get count of available marketplace plans by metal level.
+
+        Returns:
+            Dict mapping metal level to plan count, e.g.:
+            {'Bronze': 45, 'Silver': 38, 'Gold': 22}
+            Note: Bronze count includes both standard Bronze and Expanded Bronze
+        """
+        query = """
+        SELECT
+            level_of_coverage as metal_level,
+            COUNT(DISTINCT hios_plan_id) as plan_count
+        FROM rbis_insurance_plan_20251019202724
+        WHERE market_coverage = 'Individual'
+          AND plan_effective_date = '2026-01-01'
+          AND level_of_coverage IN ('Bronze', 'Expanded Bronze', 'Silver', 'Gold')
+        GROUP BY level_of_coverage
+        ORDER BY
+            CASE level_of_coverage
+                WHEN 'Bronze' THEN 1
+                WHEN 'Expanded Bronze' THEN 2
+                WHEN 'Silver' THEN 3
+                WHEN 'Gold' THEN 4
+            END
+        """
+        df = db.execute_query(query)
+
+        # Combine Bronze and Expanded Bronze counts
+        result = {'Bronze': 0, 'Silver': 0, 'Gold': 0}
+        for _, row in df.iterrows():
+            metal = row['metal_level']
+            count = int(row['plan_count'])
+            if metal in ('Bronze', 'Expanded Bronze'):
+                result['Bronze'] += count
+            elif metal in result:
+                result[metal] = count
+
+        return result
 
     @staticmethod
     def get_plans_by_filters(db: DatabaseConnection, state_code: Optional[str] = None,
@@ -2335,6 +2376,228 @@ class EnrichedPlanQueries:
         except Exception as e:
             print(f"Error getting LCP for {state} RA{rating_area} {metal_level}: {e}")
             return {}
+
+
+class PlanComparisonQueries:
+    """SQL queries for the Plan Comparison feature (Page 9)"""
+
+    @staticmethod
+    def get_plans_with_full_details(db: DatabaseConnection, state_code: str,
+                                     rating_area_id: int,
+                                     metal_levels: List[str] = None,
+                                     plan_types: List[str] = None,
+                                     max_deductible: float = None,
+                                     max_oopm: float = None,
+                                     hsa_only: bool = False) -> pd.DataFrame:
+        """
+        Get marketplace plans with deductibles, OOPM, and HSA eligibility
+        for the comparison filter panel.
+
+        Args:
+            db: Database connection
+            state_code: 2-letter state code
+            rating_area_id: Rating area number
+            metal_levels: List of metal levels to filter (Bronze, Silver, Gold, Platinum)
+            plan_types: List of plan types to filter (HMO, PPO, EPO, POS)
+            max_deductible: Maximum individual deductible filter
+            max_oopm: Maximum individual OOPM filter
+            hsa_only: If True, only return HSA-eligible plans
+
+        Returns:
+            DataFrame with plan details for selection
+        """
+        query = """
+        SELECT DISTINCT
+            p.hios_plan_id,
+            p.plan_marketing_name,
+            p.plan_type,
+            p.level_of_coverage as metal_level,
+            SUBSTRING(p.hios_plan_id FROM 1 FOR 5) as issuer_id,
+            COALESCE(i.marketingname, i.issr_lgl_name) as issuer_name,
+            v.hsa_eligible,
+            COALESCE(v.issuer_actuarial_value, v.av_calculator_output_number) as av_percent,
+            COALESCE(dm_ded.individual_ded_moop_amount::numeric, 0) as individual_deductible,
+            COALESCE(dm_moop.individual_ded_moop_amount::numeric, 0) as individual_oopm
+        FROM rbis_insurance_plan_20251019202724 p
+        JOIN rbis_insurance_plan_variant_20251019202724 v
+            ON p.hios_plan_id = v.hios_plan_id
+            AND v.csr_variation_type = 'Exchange variant (no CSR)'
+        LEFT JOIN "HIOS_issuers_pivoted" i
+            ON SUBSTRING(p.hios_plan_id, 1, 5) = i.hios_issuer_id
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 dm_ded
+            ON p.hios_plan_id = dm_ded.plan_id
+            AND dm_ded.variant_component = 'Exchange variant (no CSR)'
+            AND dm_ded.network_type = 'In Network'
+            AND LOWER(dm_ded.moop_ded_type) LIKE '%%deductible%%'
+        LEFT JOIN rbis_insurance_plan_variant_ddctbl_moop_20251019202724 dm_moop
+            ON p.hios_plan_id = dm_moop.plan_id
+            AND dm_moop.variant_component = 'Exchange variant (no CSR)'
+            AND dm_moop.network_type = 'In Network'
+            AND LOWER(dm_moop.moop_ded_type) LIKE '%%maximum out of pocket%%'
+        JOIN rbis_insurance_plan_base_rates_20251019202724 br
+            ON p.hios_plan_id = br.plan_id
+            AND br.rating_area_numeric = %s
+            AND br.age = '21'
+            AND br.rate_effective_date = '2026-01-01'
+        WHERE SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s
+            AND p.market_coverage = 'Individual'
+            AND p.plan_effective_date = '2026-01-01'
+        """
+        params = [rating_area_id, state_code]
+
+        if metal_levels:
+            placeholders = ', '.join(['%s'] * len(metal_levels))
+            query += f" AND p.level_of_coverage IN ({placeholders})"
+            params.extend(metal_levels)
+
+        if plan_types:
+            placeholders = ', '.join(['%s'] * len(plan_types))
+            query += f" AND p.plan_type IN ({placeholders})"
+            params.extend(plan_types)
+
+        if hsa_only:
+            query += " AND v.hsa_eligible = 'Yes'"
+
+        if max_deductible is not None:
+            query += " AND COALESCE(dm_ded.individual_ded_moop_amount::numeric, 0) <= %s"
+            params.append(max_deductible)
+
+        if max_oopm is not None:
+            query += " AND COALESCE(dm_moop.individual_ded_moop_amount::numeric, 0) <= %s"
+            params.append(max_oopm)
+
+        query += " ORDER BY p.plan_marketing_name"
+
+        return db.execute_query(query, tuple(params))
+
+    @staticmethod
+    def get_plan_copays_for_comparison(db: DatabaseConnection, plan_ids: List[str]) -> pd.DataFrame:
+        """
+        Get copay data for key services needed in comparison table.
+
+        Returns copays for: PCP, Specialist, ER, Urgent Care, Generic Rx, Preferred Rx
+
+        Args:
+            db: Database connection
+            plan_ids: List of HIOS Plan IDs
+
+        Returns:
+            DataFrame with columns: hios_plan_id, benefit, copay, coinsurance
+        """
+        if not plan_ids:
+            return pd.DataFrame()
+
+        placeholders = ', '.join(['%s'] * len(plan_ids))
+
+        query = f"""
+        SELECT
+            hios_plan_id,
+            benefit,
+            co_payment as copay,
+            co_insurance as coinsurance,
+            network_type
+        FROM rbis_insurance_plan_benefit_cost_share_20251019202724
+        WHERE hios_plan_id IN ({placeholders})
+            AND csr_variation_type = 'Exchange variant (no CSR)'
+            AND network_type = 'In Network'
+            AND benefit IN (
+                'Primary Care Visit to Treat an Injury or Illness',
+                'Specialist Visit',
+                'Generic Drugs',
+                'Preferred Brand Drugs',
+                'Specialty Drugs',
+                'Emergency Room Services',
+                'Urgent Care Centers or Facilities'
+            )
+        ORDER BY hios_plan_id, benefit
+        """
+        return db.execute_query(query, tuple(plan_ids))
+
+    @staticmethod
+    def get_plan_family_deductibles_oopm(db: DatabaseConnection, plan_ids: List[str]) -> pd.DataFrame:
+        """
+        Get both individual and family deductibles and OOPM for comparison.
+
+        Args:
+            db: Database connection
+            plan_ids: List of HIOS Plan IDs
+
+        Returns:
+            DataFrame with columns: plan_id, moop_ded_type, individual_amount, family_amount
+        """
+        if not plan_ids:
+            return pd.DataFrame()
+
+        placeholders = ', '.join(['%s'] * len(plan_ids))
+
+        query = f"""
+        SELECT
+            plan_id,
+            moop_ded_type,
+            individual_ded_moop_amount as individual_amount,
+            family_ded_moop_per_person as family_per_member_amount,
+            family_ded_moop_per_group as family_amount
+        FROM rbis_insurance_plan_variant_ddctbl_moop_20251019202724
+        WHERE plan_id IN ({placeholders})
+            AND variant_component = 'Exchange variant (no CSR)'
+            AND network_type = 'In Network'
+            AND (
+                LOWER(moop_ded_type) LIKE '%%deductible%%'
+                OR LOWER(moop_ded_type) LIKE '%%maximum out of pocket%%'
+            )
+        ORDER BY plan_id, moop_ded_type
+        """
+        return db.execute_query(query, tuple(plan_ids))
+
+    @staticmethod
+    def get_plan_hsa_eligibility(db: DatabaseConnection, plan_ids: List[str]) -> pd.DataFrame:
+        """Get HSA eligibility from plan variant table."""
+        if not plan_ids:
+            return pd.DataFrame()
+
+        placeholders = ', '.join(['%s'] * len(plan_ids))
+
+        query = f"""
+        SELECT
+            hios_plan_id,
+            hsa_eligible,
+            issuer_actuarial_value as av_percent
+        FROM rbis_insurance_plan_variant_20251019202724
+        WHERE hios_plan_id IN ({placeholders})
+            AND csr_variation_type = 'Exchange variant (no CSR)'
+        """
+        return db.execute_query(query, tuple(plan_ids))
+
+    @staticmethod
+    def get_plan_coinsurance(db: DatabaseConnection, plan_ids: List[str]) -> pd.DataFrame:
+        """
+        Get overall coinsurance percentage from plan benefits.
+        Uses inpatient hospital as proxy for plan coinsurance level.
+
+        Args:
+            db: Database connection
+            plan_ids: List of HIOS Plan IDs
+
+        Returns:
+            DataFrame with plan_id and coinsurance_pct
+        """
+        if not plan_ids:
+            return pd.DataFrame()
+
+        placeholders = ', '.join(['%s'] * len(plan_ids))
+
+        query = f"""
+        SELECT
+            hios_plan_id as plan_id,
+            co_insurance as coinsurance
+        FROM rbis_insurance_plan_benefit_cost_share_20251019202724
+        WHERE hios_plan_id IN ({placeholders})
+            AND csr_variation_type = 'Exchange variant (no CSR)'
+            AND network_type = 'In Network'
+            AND LOWER(benefit) LIKE '%%inpatient hospital%%'
+        LIMIT 1
+        """
+        return db.execute_query(query, tuple(plan_ids))
 
 
 if __name__ == "__main__":

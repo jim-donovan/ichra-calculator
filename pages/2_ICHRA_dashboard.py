@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import sys
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database import get_database_connection, DatabaseConnection
 from utils import ContributionComparison, PremiumCalculator
 from financial_calculator import FinancialSummaryCalculator
+from pptx_cooperative_health import CooperativeHealthData, generate_cooperative_health_slide
 from queries import get_plan_deductible_and_moop_batch, HealthCheckQueries
 from constants import (
     FAMILY_STATUS_CODES,
@@ -344,6 +346,10 @@ class DashboardData:
     # Contribution percentage from Page 2
     contribution_pct: float = 0.65
 
+    # EE/ER contribution split (calculated from census)
+    ee_contribution_pct: float = 0.0  # Employee share (e.g., 0.35 = 35%)
+    er_contribution_pct: float = 0.0  # Employer share (e.g., 0.65 = 65%)
+
     # Actuarial values for each metal level (from database)
     metal_av: Dict[str, float] = field(default_factory=lambda: {
         'Bronze': 60.0,  # Default fallback
@@ -456,6 +462,20 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
     if current_total_monthly > 0:
         data.has_current_costs = True
         data.current_premium = current_total_monthly
+
+    # ==========================================================================
+    # CONTRIBUTION PATTERN DETECTION (percentage vs flat-rate per tier)
+    # ==========================================================================
+    contribution_pattern = None
+    if ContributionComparison.has_individual_contributions(census_df):
+        contribution_pattern = ContributionComparison.detect_contribution_pattern(census_df)
+        # Store in session state for use by PPTX generator and other pages
+        st.session_state['detected_contribution_pattern'] = contribution_pattern
+
+    # Calculate overall EE/ER contribution split from census
+    if current_total_monthly > 0:
+        data.er_contribution_pct = current_er_monthly / current_total_monthly
+        data.ee_contribution_pct = current_ee_monthly / current_total_monthly
 
     # ==========================================================================
     # RENEWAL DATA (from financial summary or census)
@@ -1077,8 +1097,10 @@ def calculate_age_bracket_costs(census_df: pd.DataFrame, multi_metal_results: Di
             continue
 
         # Current costs (total premium for reference)
-        current_er = row.get('current_er_monthly', 0) or 0
-        current_ee = row.get('current_ee_monthly', 0) or 0
+        current_er = row.get('current_er_monthly', 0)
+        current_er = 0 if pd.isna(current_er) else (current_er or 0)
+        current_ee = row.get('current_ee_monthly', 0)
+        current_ee = 0 if pd.isna(current_ee) else (current_ee or 0)
         current_total = current_er + current_ee
         if current_total > 0:
             bracket_data[bracket_name]['current'].append(current_total)
@@ -1150,6 +1172,141 @@ def calculate_age_bracket_costs(census_df: pd.DataFrame, multi_metal_results: Di
                 bracket_costs[bracket_name]['Cooperative_sum'] = sum(data['coop'])
 
     return bracket_costs
+
+
+def calculate_tier_marketplace_costs(
+    census_df: pd.DataFrame,
+    multi_metal_results: Dict = None,
+    db: 'DatabaseConnection' = None
+) -> Dict:
+    """
+    Calculate marketplace costs grouped by family status tier.
+
+    Shows rate ranges (youngest to oldest age band) and totals for each tier.
+
+    Args:
+        census_df: Employee census DataFrame
+        multi_metal_results: Results from calculate_multi_metal_scenario()
+        db: Database connection for plan counts
+
+    Returns:
+        Dict with structure:
+        {
+            'plan_counts': {'Bronze': 45, 'Silver': 38, 'Gold': 22},
+            'tiers': {
+                'Employee Only': {
+                    'code': 'EE',
+                    'count': 23,
+                    'Bronze': {'min': 303, 'max': 565, 'total': 6969},
+                    'Silver': {...},
+                    'Gold': {...},
+                },
+                ...
+            },
+            'totals': {
+                'Bronze': {'monthly': X, 'annual': X*12},
+                'Silver': {...},
+                'Gold': {...},
+            }
+        }
+    """
+    # Initialize result structure
+    tier_info = {
+        'Employee Only': 'EE',
+        'Employee + Spouse': 'ES',
+        'Employee + Children': 'EC',
+        'Family': 'F',
+    }
+
+    result = {
+        'plan_counts': {'Bronze': 0, 'Silver': 0, 'Gold': 0},
+        'tiers': {},
+        'totals': {
+            'Bronze': {'monthly': 0, 'annual': 0},
+            'Silver': {'monthly': 0, 'annual': 0},
+            'Gold': {'monthly': 0, 'annual': 0},
+        }
+    }
+
+    # Get plan counts from database
+    if db:
+        try:
+            from queries import PlanQueries
+            result['plan_counts'] = PlanQueries.get_plan_counts_by_metal(db)
+        except Exception:
+            pass  # Keep default zeros
+
+    if census_df is None or census_df.empty or not multi_metal_results:
+        return result
+
+    # Build employee lookup from multi_metal_results
+    # emp_id -> {Bronze: rate, Silver: rate, Gold: rate, age: int}
+    emp_metal_rates = {}
+    for metal in ['Bronze', 'Silver', 'Gold']:
+        metal_data = multi_metal_results.get(metal, {})
+        for emp_detail in metal_data.get('employee_details', []):
+            emp_id = emp_detail.get('employee_id')
+            if emp_id not in emp_metal_rates:
+                emp_metal_rates[emp_id] = {'Bronze': 0, 'Silver': 0, 'Gold': 0}
+            emp_metal_rates[emp_id][metal] = emp_detail.get('lcp_ee_rate', 0) or 0
+
+    # Process each tier
+    for tier_name, tier_code in tier_info.items():
+        tier_employees = census_df[census_df['family_status'] == tier_code]
+        count = len(tier_employees)
+
+        if count == 0:
+            continue
+
+        # Calculate average age for this tier
+        avg_age = 0
+        if 'age' in tier_employees.columns and count > 0:
+            avg_age = round(tier_employees['age'].mean())
+
+        tier_data = {
+            'code': tier_code,
+            'count': count,
+            'avg_age': avg_age,
+            'Bronze': {'min': 0, 'max': 0, 'total': 0, 'rates': []},
+            'Silver': {'min': 0, 'max': 0, 'total': 0, 'rates': []},
+            'Gold': {'min': 0, 'max': 0, 'total': 0, 'rates': []},
+        }
+
+        # Collect rates for each employee in this tier
+        for _, row in tier_employees.iterrows():
+            emp_id = row.get('employee_id', '')
+            age = int(row.get('age', 0))
+
+            if emp_id in emp_metal_rates:
+                rates = emp_metal_rates[emp_id]
+                for metal in ['Bronze', 'Silver', 'Gold']:
+                    rate = rates.get(metal, 0)
+                    if rate > 0:
+                        tier_data[metal]['rates'].append({'rate': rate, 'age': age})
+
+        # Calculate min, max, total for each metal
+        for metal in ['Bronze', 'Silver', 'Gold']:
+            rates_list = tier_data[metal]['rates']
+            if rates_list:
+                # Sort by age to get youngest and oldest rates
+                sorted_rates = sorted(rates_list, key=lambda x: x['age'])
+                tier_data[metal]['min'] = sorted_rates[0]['rate']  # Youngest employee's rate
+                tier_data[metal]['max'] = sorted_rates[-1]['rate']  # Oldest employee's rate
+                tier_data[metal]['total'] = sum(r['rate'] for r in rates_list)
+
+                # Add to overall totals
+                result['totals'][metal]['monthly'] += tier_data[metal]['total']
+
+            # Clean up - don't need rates list in output
+            del tier_data[metal]['rates']
+
+        result['tiers'][tier_name] = tier_data
+
+    # Calculate annual totals
+    for metal in ['Bronze', 'Silver', 'Gold']:
+        result['totals'][metal]['annual'] = result['totals'][metal]['monthly'] * 12
+
+    return result
 
 
 def calculate_company_totals(census_df: pd.DataFrame, contribution_analysis: Dict = None,
@@ -1350,9 +1507,11 @@ def build_employee_example(employee_row: pd.Series, label: str,
     # Location string
     location = f"{county}, {state} {zip_code}" if county else f"{state} {zip_code}"
 
-    # Get current costs
-    current_er = employee_row.get('current_er_monthly', 0) or 0
-    current_ee = employee_row.get('current_ee_monthly', 0) or 0
+    # Get current costs (handle NaN values - 'or 0' doesn't work for NaN)
+    current_er = employee_row.get('current_er_monthly', 0)
+    current_er = 0 if pd.isna(current_er) else (current_er or 0)
+    current_ee = employee_row.get('current_ee_monthly', 0)
+    current_ee = 0 if pd.isna(current_ee) else (current_ee or 0)
 
     # ICHRA costs and plan details - prefer multi_metal_results (actual LCSP from DB)
     ichra_premium = 0
@@ -1594,7 +1753,8 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
 
     Includes:
     - Employee metadata (name, age, zip, state, family status)
-    - Current/Renewal premiums
+    - Current/Renewal premiums (including gap insurance if present)
+    - Gap insurance monthly amount
     - HAP $1k and $2.5k rates
 
     Args:
@@ -1626,9 +1786,12 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
         rating_area = emp.get('rating_area_id', '')
 
         # Current/Renewal premiums
-        current_ee = emp.get('current_ee_monthly', 0) or 0
-        current_er = emp.get('current_er_monthly', 0) or 0
-        current_total = current_ee + current_er
+        current_ee = emp.get('current_ee_monthly', 0)
+        current_ee = 0 if pd.isna(current_ee) else (current_ee or 0)
+        current_er = emp.get('current_er_monthly', 0)
+        current_er = 0 if pd.isna(current_er) else (current_er or 0)
+        gap_insurance = emp.get('gap_insurance_monthly', 0) or 0
+        current_total = current_ee + current_er + gap_insurance
         renewal = emp.get('projected_2026_premium', 0) or 0
 
         # HAP rates
@@ -1647,10 +1810,94 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
             'rating_area': rating_area,
             'current_ee_monthly': current_ee,
             'current_er_monthly': current_er,
+            'gap_insurance_monthly': gap_insurance,
             'current_total_monthly': current_total,
             'renewal_premium': renewal,
             'hap_1k_rate': hap_1k_rate,
             'hap_2_5k_rate': hap_2_5k_rate,
+        }
+        all_rows.append(row)
+
+    if not all_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_rows)
+
+    # Sort by last name, first name
+    df = df.sort_values(['last_name', 'first_name'])
+
+    return df
+
+
+def generate_marketplace_rates_csv(census_df: pd.DataFrame,
+                                   multi_metal_results: Dict) -> pd.DataFrame:
+    """
+    Generate CSV data with employee details and marketplace plan rates.
+
+    Includes:
+    - Employee metadata (name, age, zip, state, family status)
+    - For each metal level (Bronze, Silver, Gold): plan name and rate
+
+    Args:
+        census_df: Employee census DataFrame
+        multi_metal_results: Results from calculate_multi_metal_scenario()
+
+    Returns:
+        DataFrame ready for CSV export
+    """
+    if census_df is None or census_df.empty:
+        return pd.DataFrame()
+
+    if not multi_metal_results:
+        return pd.DataFrame()
+
+    # Build lookup from multi_metal_results: emp_id -> {Bronze: {rate, plan}, Silver: {...}, Gold: {...}}
+    emp_metal_data = {}
+    for metal in ['Bronze', 'Silver', 'Gold']:
+        metal_data = multi_metal_results.get(metal, {})
+        for emp_detail in metal_data.get('employee_details', []):
+            emp_id = emp_detail.get('employee_id')
+            if emp_id not in emp_metal_data:
+                emp_metal_data[emp_id] = {}
+            emp_metal_data[emp_id][metal] = {
+                'rate': emp_detail.get('lcp_ee_rate', 0) or 0,
+                'plan_name': emp_detail.get('lcp_plan_name', 'N/A'),
+                'plan_id': emp_detail.get('lcp_plan_id', ''),
+            }
+
+    all_rows = []
+
+    for _, emp in census_df.iterrows():
+        # Get employee data
+        emp_id = emp.get('employee_id', emp.get('Employee Number', ''))
+        first_name = emp.get('first_name', emp.get('First Name', ''))
+        last_name = emp.get('last_name', emp.get('Last Name', ''))
+        age = int(emp.get('age', 0)) if pd.notna(emp.get('age')) else 0
+        family_status = emp.get('family_status', emp.get('Family Status', 'EE'))
+        state = emp.get('state', emp.get('Home State', ''))
+        zip_code = emp.get('zip_code', emp.get('Home Zip', ''))
+        county = emp.get('county', '')
+        rating_area = emp.get('rating_area_id', '')
+
+        # Get metal plan data for this employee
+        metal_info = emp_metal_data.get(emp_id, {})
+
+        row = {
+            'employee_id': emp_id,
+            'first_name': first_name,
+            'last_name': last_name,
+            'age': age,
+            'family_status': family_status,
+            'state': state,
+            'zip': zip_code,
+            'county': county,
+            'rating_area': rating_area,
+            'bronze_rate': metal_info.get('Bronze', {}).get('rate', 0),
+            'bronze_plan_name': metal_info.get('Bronze', {}).get('plan_name', 'N/A'),
+            'silver_rate': metal_info.get('Silver', {}).get('rate', 0),
+            'silver_plan_name': metal_info.get('Silver', {}).get('plan_name', 'N/A'),
+            'gold_rate': metal_info.get('Gold', {}).get('rate', 0),
+            'gold_plan_name': metal_info.get('Gold', {}).get('plan_name', 'N/A'),
         }
         all_rows.append(row)
 
@@ -1769,16 +2016,21 @@ def render_workforce_composition(data: DashboardData):
 def render_plan_problems(data: DashboardData):
     st.markdown('<p class="card-title">Current plan problems</p>', unsafe_allow_html=True)
 
-    # Calculate employee cost share percentage
-    ee_pct = 35  # Default
-    if data.has_current_costs and data.current_premium > 0:
-        # This would need actual employee share data from census
-        ee_pct = 35  # Placeholder - could be calculated from census
+    # Get employee cost share percentage from actual census data
+    ee_pct = round(data.ee_contribution_pct * 100) if data.ee_contribution_pct > 0 else 35
 
-    # Use display placeholders from constants
+    # Use display placeholders from constants (could be made dynamic in future)
     deductible = DISPLAY_PLACEHOLDERS['typical_deductible']
-    cost_min = DISPLAY_PLACEHOLDERS['employee_annual_cost_min']
-    cost_max = DISPLAY_PLACEHOLDERS['employee_annual_cost_max']
+
+    # Calculate actual employee annual cost from census data
+    # Employee pays: (EE monthly contribution * 12) + deductible
+    if data.ee_contribution_pct > 0 and data.current_premium > 0:
+        ee_monthly = data.current_premium * data.ee_contribution_pct
+        cost_min = int(ee_monthly * 12)  # Just premiums
+        cost_max = int(ee_monthly * 12 + deductible)  # Premiums + deductible
+    else:
+        cost_min = DISPLAY_PLACEHOLDERS['employee_annual_cost_min']
+        cost_max = DISPLAY_PLACEHOLDERS['employee_annual_cost_max']
 
     # Problem 1
     st.markdown(f"""
@@ -1842,8 +2094,8 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 
     # Title row (no scenario selector)
     st.markdown("""
-    <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">Monthly premium by scenario</p>
-    <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Employer cost comparison across coverage options</p>
+    <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">Cooperative Health Plan Comparison</p>
+    <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Monthly employer costs: traditional group plan vs. Health Access Plan alternatives</p>
     """, unsafe_allow_html=True)
 
     # Helper to format currency or show N/A
@@ -1864,10 +2116,11 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     renewal_key = f"Renewal {RENEWAL_PLAN_YEAR}"
 
     # Map tier names to family status codes
+    # Order: EE, EC, ES, F (Employee Only, Employee + Children, Employee + Spouse, Family)
     tier_info = {
         "Employee Only": {"code": "EE"},
-        "Employee + Spouse": {"code": "ES"},
         "Employee + Children": {"code": "EC"},
+        "Employee + Spouse": {"code": "ES"},
         "Family": {"code": "F"},
     }
     tiers = list(tier_info.keys())
@@ -1878,40 +2131,145 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 
     # Count employees per tier and calculate current/renewal totals per tier
     tier_counts = {}
+    tier_avg_age = {}  # Average age per tier
     tier_current = {}
     tier_renewal = {}
+    tier_current_rate_per_ee = {}  # Typical per-employee rate from census (not averaged)
+    tier_renewal_rate_per_ee = {}  # Typical per-employee renewal rate from census
     if census_df is not None and not census_df.empty and 'family_status' in census_df.columns:
         for tier_name, info in tier_info.items():
             tier_employees = census_df[census_df['family_status'] == info['code']]
             tier_counts[tier_name] = len(tier_employees)
+
+            # Calculate average age for this tier
+            if 'age' in tier_employees.columns and len(tier_employees) > 0:
+                tier_avg_age[tier_name] = round(tier_employees['age'].mean())
+            else:
+                tier_avg_age[tier_name] = 0
 
             # Sum current premiums for this tier
             if 'current_er_monthly' in census_df.columns and 'current_ee_monthly' in census_df.columns:
                 current_er = tier_employees['current_er_monthly'].fillna(0).sum()
                 current_ee = tier_employees['current_ee_monthly'].fillna(0).sum()
                 tier_current[tier_name] = current_er + current_ee
+                # Get the typical per-employee rate (most common value, or first non-zero)
+                ee_vals = tier_employees['current_ee_monthly'].fillna(0)
+                er_vals = tier_employees['current_er_monthly'].fillna(0)
+                per_ee_rates = ee_vals + er_vals
+                non_zero_rates = per_ee_rates[per_ee_rates > 0]
+                if len(non_zero_rates) > 0:
+                    # Use mode (most common rate) or first non-zero if mode fails
+                    try:
+                        tier_current_rate_per_ee[tier_name] = float(non_zero_rates.mode().iloc[0])
+                    except (IndexError, ValueError):
+                        tier_current_rate_per_ee[tier_name] = float(non_zero_rates.iloc[0])
+                else:
+                    tier_current_rate_per_ee[tier_name] = 0
             else:
                 tier_current[tier_name] = 0
+                tier_current_rate_per_ee[tier_name] = 0
 
             # Sum renewal premiums for this tier
             if 'projected_2026_premium' in census_df.columns:
                 tier_renewal[tier_name] = tier_employees['projected_2026_premium'].fillna(0).sum()
+                # Get typical per-employee renewal rate
+                renewal_vals = tier_employees['projected_2026_premium'].fillna(0)
+                non_zero_renewal = renewal_vals[renewal_vals > 0]
+                if len(non_zero_renewal) > 0:
+                    try:
+                        tier_renewal_rate_per_ee[tier_name] = float(non_zero_renewal.mode().iloc[0])
+                    except (IndexError, ValueError):
+                        tier_renewal_rate_per_ee[tier_name] = float(non_zero_renewal.iloc[0])
+                else:
+                    tier_renewal_rate_per_ee[tier_name] = 0
             else:
                 tier_renewal[tier_name] = 0
+                tier_renewal_rate_per_ee[tier_name] = 0
     else:
         tier_counts = {tier: 0 for tier in tiers}
+        tier_avg_age = {tier: 0 for tier in tiers}
         tier_current = {tier: 0 for tier in tiers}
         tier_renewal = {tier: 0 for tier in tiers}
+        tier_current_rate_per_ee = {tier: 0 for tier in tiers}
+        tier_renewal_rate_per_ee = {tier: 0 for tier in tiers}
+
+    # Calculate gap insurance per tier (for display breakdown)
+    # Current: only count gap for employees with current coverage
+    # Renewal: count gap for employees with 2026 coverage
+    tier_gap_current = {}
+    tier_gap_renewal = {}
+    gap_rates_by_tier = {}
+    total_gap = 0
+    has_gap_data = False
+
+    if census_df is not None and not census_df.empty and 'gap_insurance_monthly' in census_df.columns:
+        gap_series = census_df['gap_insurance_monthly'].fillna(0)
+        if gap_series.sum() > 0:
+            has_gap_data = True
+            for tier_name, info in tier_info.items():
+                tier_employees = census_df[census_df['family_status'] == info['code']]
+
+                # Current: gap for employees with current coverage (current_er + current_ee > 0)
+                if 'current_er_monthly' in tier_employees.columns and 'current_ee_monthly' in tier_employees.columns:
+                    current_total = tier_employees['current_er_monthly'].fillna(0) + tier_employees['current_ee_monthly'].fillna(0)
+                    employees_with_current = tier_employees[current_total > 0]
+                    tier_gap_current[tier_name] = employees_with_current['gap_insurance_monthly'].fillna(0).sum()
+                else:
+                    tier_gap_current[tier_name] = 0
+
+                # Renewal: gap for employees with 2026 coverage (projected_2026_premium > 0)
+                if 'projected_2026_premium' in tier_employees.columns:
+                    renewal_total = tier_employees['projected_2026_premium'].fillna(0)
+                    employees_with_renewal = tier_employees[renewal_total > 0]
+                    tier_gap_renewal[tier_name] = employees_with_renewal['gap_insurance_monthly'].fillna(0).sum()
+                else:
+                    tier_gap_renewal[tier_name] = tier_gap_current.get(tier_name, 0)
+
+            total_gap = sum(tier_gap_renewal.values())
+
+            # Get per-tier fixed gap rates (for footnote)
+            for code in ['EE', 'ES', 'EC', 'F']:
+                tier_employees = census_df[census_df['family_status'] == code]
+                gap_vals = tier_employees['gap_insurance_monthly'].dropna()
+                gap_vals = gap_vals[gap_vals > 0]
+                gap_rates_by_tier[code] = float(gap_vals.iloc[0]) if len(gap_vals) > 0 else 0
 
     # Build tier rows HTML with HAP rate ranges
     tier_rows = ""
     for tier in tiers:
         code = tier_info[tier]['code']
         count = tier_counts.get(tier, 0)
+        avg_age = tier_avg_age.get(tier, 0)
 
-        # Current and Renewal totals
-        current_val = tier_current.get(tier, 0)
-        renewal_val = tier_renewal.get(tier, 0)
+        # Current and Renewal base premiums (without gap)
+        current_base = tier_current.get(tier, 0)
+        renewal_base = tier_renewal.get(tier, 0)
+
+        # Gap amounts for this tier (different for current vs renewal)
+        gap_current = tier_gap_current.get(tier, 0)
+        gap_renewal = tier_gap_renewal.get(tier, 0)
+
+        # Total includes gap insurance if present
+        current_val = current_base + gap_current
+        renewal_val = renewal_base + gap_renewal
+
+        # Get per-employee rates directly from census (not calculated averages)
+        gap_rate_per_ee = gap_rates_by_tier.get(code, 0)
+        current_base_per_ee = tier_current_rate_per_ee.get(tier, 0)
+        renewal_base_per_ee = tier_renewal_rate_per_ee.get(tier, 0)
+
+        # Format breakdown text with PER-EMPLOYEE rates
+        if has_gap_data and gap_rate_per_ee > 0:
+            # With gap: show base rate + gap rate
+            current_breakdown = f'<br><span class="gap-breakdown">${current_base_per_ee:,.0f} + ${gap_rate_per_ee:,.0f} gap</span>'
+            renewal_breakdown = f'<br><span class="gap-breakdown">${renewal_base_per_ee:,.0f} + ${gap_rate_per_ee:,.0f} gap</span>'
+        elif current_base_per_ee > 0:
+            # Without gap: show per-employee rate
+            current_breakdown = f'<br><span class="gap-breakdown">${current_base_per_ee:,.0f}</span>'
+            renewal_breakdown = f'<br><span class="gap-breakdown">${renewal_base_per_ee:,.0f}</span>'
+        else:
+            current_breakdown = ""
+            renewal_breakdown = ""
 
         # HAP totals and rate ranges
         hap_1k_total = hap_totals['hap_1k']['by_tier'].get(code, {}).get('total', 0)
@@ -1923,22 +2281,25 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
         range_1k = f"${hap_1k_range['min']:,.0f}-${hap_1k_range['max']:,.0f}" if hap_1k_range['min'] > 0 else ""
         range_2_5k = f"${hap_2_5k_range['min']:,.0f}-${hap_2_5k_range['max']:,.0f}" if hap_2_5k_range['min'] > 0 else ""
 
+        # Format employee count with average age
+        age_suffix = f" · avg age {avg_age}" if avg_age > 0 else ""
         tier_rows += f'''<tr>
-            <td>{tier}<br><span class="tier-subtitle">{count} employees</span></td>
-            <td>{fmt(current_val)}</td>
-            <td>{fmt(renewal_val)}</td>
-            <td>{fmt(hap_1k_total)}<br><span class="rate-range">{range_1k}</span></td>
-            <td>{fmt(hap_2_5k_total)}<br><span class="rate-range">{range_2_5k}</span></td>
+            <td>{tier}<br><span class="tier-subtitle">{count} employees{age_suffix}</span></td>
+            <td><span style="font-weight: 600;">{fmt(current_val)}</span>{current_breakdown}</td>
+            <td><span style="font-weight: 600;">{fmt(renewal_val)}</span>{renewal_breakdown}</td>
+            <td><span style="font-weight: 600;">{fmt(hap_1k_total)}</span><br><span class="rate-range">{range_1k}</span></td>
+            <td><span style="font-weight: 600;">{fmt(hap_2_5k_total)}</span><br><span class="rate-range">{range_2_5k}</span></td>
         </tr>'''
 
-    # Calculate total premiums
+    # Calculate total premiums by summing tier totals (which already include gap)
     total_premium = {}
-    if census_df is not None and not census_df.empty:
-        current_er = census_df['current_er_monthly'].fillna(0).sum() if 'current_er_monthly' in census_df.columns else 0
-        current_ee = census_df['current_ee_monthly'].fillna(0).sum() if 'current_ee_monthly' in census_df.columns else 0
-        total_premium[current_key] = current_er + current_ee
-        total_premium[renewal_key] = data.renewal_premium if data.renewal_premium else 0
 
+    # Sum tier totals for Current and Renewal (using appropriate gap for each)
+    total_current = sum(tier_current.get(t, 0) + tier_gap_current.get(t, 0) for t in tiers)
+    total_renewal = sum(tier_renewal.get(t, 0) + tier_gap_renewal.get(t, 0) for t in tiers)
+
+    total_premium[current_key] = total_current
+    total_premium[renewal_key] = total_renewal
     total_premium['HAP $1k'] = hap_totals['hap_1k']['total']
     total_premium['HAP $2.5k'] = hap_totals['hap_2_5k']['total']
 
@@ -1956,6 +2317,9 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             hap_savings[hap_key] = {'amount': savings_amount, 'pct': savings_pct}
         else:
             hap_savings[hap_key] = {'amount': 0, 'pct': 0}
+
+    # Asterisk for Total Monthly row (only if gap data exists)
+    total_monthly_asterisk = "*" if has_gap_data else ""
 
     # Custom HTML table
     st.markdown(f"""
@@ -1997,6 +2361,8 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
         .header-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
         .tier-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
         .rate-range {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+        .gap-breakdown {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+        .footnote-text {{ font-size: 12px; color: #6a7282; margin-top: 8px; }}
     </style>
 
     <table class="scenario-table">
@@ -2018,9 +2384,9 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
         <tbody>
             {tier_rows}
             <tr class="total-row">
-                <td style="font-weight: 700;">Total Monthly</td>
-                <td style="font-weight: 700;">{fmt(total_premium.get(current_key, 0))}</td>
-                <td style="font-weight: 700;">{fmt(total_premium.get(renewal_key, 0))}</td>
+                <td style="font-weight: 700;">Total Monthly{total_monthly_asterisk}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get(current_key, 0))}{total_monthly_asterisk}</td>
+                <td style="font-weight: 700;">{fmt(total_premium.get(renewal_key, 0))}{total_monthly_asterisk}</td>
                 <td style="font-weight: 700;">{fmt(total_premium.get('HAP $1k', 0))}</td>
                 <td style="font-weight: 700;">{fmt(total_premium.get('HAP $2.5k', 0))}</td>
             </tr>
@@ -2048,10 +2414,21 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     </table>
     """, unsafe_allow_html=True)
 
-    # Footer row with CSV download
-    footer_col1, footer_col2 = st.columns([3, 1])
+    # Footer row with download buttons
+    footer_col1, footer_col2, footer_col3 = st.columns([2.5, 1, 1])
 
     with footer_col1:
+        # Build footnote with gap breakdown if gap data exists
+        if has_gap_data and total_gap > 0:
+            gap_footnote = f"* Includes ${total_gap:,.0f}/mo gap coverage "
+            gap_footnote += f"(EE: ${gap_rates_by_tier.get('EE', 0):,.0f} | "
+            gap_footnote += f"ES: ${gap_rates_by_tier.get('ES', 0):,.0f} | "
+            gap_footnote += f"EC: ${gap_rates_by_tier.get('EC', 0):,.0f} | "
+            gap_footnote += f"F: ${gap_rates_by_tier.get('F', 0):,.0f})"
+            st.markdown(f"""
+            <p class="footnote-text">{gap_footnote}</p>
+            """, unsafe_allow_html=True)
+
         st.markdown("""
         <p style="font-size: 13px; color: #6b7280;">
             Totals calculated from census data. HAP rates based on employee age and family status.
@@ -2064,13 +2441,121 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             csv_df = generate_scenario_rates_csv(census_df, coop_rates_df)
             if csv_df is not None and not csv_df.empty:
                 csv_data = csv_df.to_csv(index=False)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 st.download_button(
-                    label="📥 Download rate details",
+                    label="📥 Rate details CSV",
                     data=csv_data,
-                    file_name="hap_rate_details.csv",
+                    file_name=f"hap_rate_details_{timestamp}.csv",
                     mime="text/csv",
                     help="Download employee census with current, renewal, and HAP rates"
                 )
+
+    with footer_col3:
+        # PowerPoint download button for comparison table slide
+        if census_df is not None and not census_df.empty:
+            # Build CooperativeHealthData from current table data
+            from pptx_cooperative_health import TierData
+
+            pptx_tiers = []
+            for tier_name, info in tier_info.items():
+                tier_code = info['code']
+                # Access HAP data using correct structure: by_tier[code] and rate_ranges[code]
+                hap_1k_by_tier = hap_totals.get('hap_1k', {}).get('by_tier', {}).get(tier_code, {})
+                hap_1k_ranges = hap_totals.get('hap_1k', {}).get('rate_ranges', {}).get(tier_code, {})
+                hap_25k_by_tier = hap_totals.get('hap_2_5k', {}).get('by_tier', {}).get(tier_code, {})
+                hap_25k_ranges = hap_totals.get('hap_2_5k', {}).get('rate_ranges', {}).get(tier_code, {})
+
+                # Base premiums (without gap)
+                current_base = tier_current.get(tier_name, 0) or 0
+                renewal_base = tier_renewal.get(tier_name, 0) or 0
+                gap_current = tier_gap_current.get(tier_name, 0) or 0
+                gap_renewal = tier_gap_renewal.get(tier_name, 0) or 0
+                count = tier_counts.get(tier_name, 0) or 0
+                avg_age = tier_avg_age.get(tier_name, 0) or 0
+
+                # Totals include gap insurance (different gap for current vs renewal)
+                current_total = current_base + gap_current
+                renewal_total = renewal_base + gap_renewal
+
+                # Get per-employee rates directly from census (not calculated averages)
+                current_rate_per_ee = tier_current_rate_per_ee.get(tier_name, 0)
+                renewal_rate_per_ee = tier_renewal_rate_per_ee.get(tier_name, 0)
+                gap_rate_per_ee = gap_rates_by_tier.get(tier_code, 0)
+
+                pptx_tiers.append(TierData(
+                    name=tier_name,
+                    code=tier_code,
+                    current_total=current_total,
+                    current_base=current_base,
+                    current_gap=gap_current,
+                    renewal_total=renewal_total,
+                    renewal_base=renewal_base,
+                    renewal_gap=gap_renewal,
+                    hap_1k_total=hap_1k_by_tier.get('total', 0) or 0,
+                    hap_1k_min=hap_1k_ranges.get('min', 0) or 0,
+                    hap_1k_max=hap_1k_ranges.get('max', 0) or 0,
+                    hap_25k_total=hap_25k_by_tier.get('total', 0) or 0,
+                    hap_25k_min=hap_25k_ranges.get('min', 0) or 0,
+                    hap_25k_max=hap_25k_ranges.get('max', 0) or 0,
+                    employee_count=count,
+                    avg_age=avg_age,
+                    current_rate_per_ee=current_rate_per_ee,
+                    renewal_rate_per_ee=renewal_rate_per_ee,
+                    gap_rate_per_ee=gap_rate_per_ee,
+                ))
+
+            # Use the SAME values as UI (total_premium, annual_totals, hap_savings)
+            # to ensure PPTX matches the displayed table exactly
+            monthly_current = total_premium.get(current_key, 0)
+            monthly_renewal = total_premium.get(renewal_key, 0)
+            monthly_hap_1k = total_premium.get('HAP $1k', 0)
+            monthly_hap_25k = total_premium.get('HAP $2.5k', 0)
+
+            annual_current = annual_totals.get(current_key, 0)
+            annual_renewal = annual_totals.get(renewal_key, 0)
+            annual_hap_1k = annual_totals.get('HAP $1k', 0)
+            annual_hap_25k = annual_totals.get('HAP $2.5k', 0)
+
+            savings_hap_1k = hap_savings.get('HAP $1k', {}).get('amount', 0)
+            savings_hap_1k_pct = hap_savings.get('HAP $1k', {}).get('pct', 0)
+            savings_hap_25k = hap_savings.get('HAP $2.5k', {}).get('amount', 0)
+            savings_hap_25k_pct = hap_savings.get('HAP $2.5k', {}).get('pct', 0)
+
+            pptx_data = CooperativeHealthData(
+                tiers=pptx_tiers,
+                total_current=monthly_current,
+                total_renewal=monthly_renewal,
+                total_hap_1k=monthly_hap_1k,
+                total_hap_25k=monthly_hap_25k,
+                annual_current=annual_current,
+                annual_renewal=annual_renewal,
+                annual_hap_1k=annual_hap_1k,
+                annual_hap_25k=annual_hap_25k,
+                savings_hap_1k=savings_hap_1k,
+                savings_hap_1k_pct=savings_hap_1k_pct,
+                savings_hap_25k=savings_hap_25k,
+                savings_hap_25k_pct=savings_hap_25k_pct,
+                has_gap=has_gap_data,
+                total_gap_monthly=total_gap,
+                gap_rate_ee=gap_rates_by_tier.get('EE', 0),
+                gap_rate_es=gap_rates_by_tier.get('ES', 0),
+                gap_rate_ec=gap_rates_by_tier.get('EC', 0),
+                gap_rate_f=gap_rates_by_tier.get('F', 0),
+                client_name=st.session_state.get('client_name', ''),
+            )
+
+            pptx_buffer = generate_cooperative_health_slide(pptx_data)
+            client_name = st.session_state.get('client_name', 'comparison')
+            safe_name = "".join(c for c in client_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            filename = f"{safe_name}_cooperative_health.pptx" if safe_name else "cooperative_health.pptx"
+
+            st.download_button(
+                label="📊 Download slide",
+                data=pptx_buffer,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                help="Download PowerPoint slide with comparison table"
+            )
 
 
 # =============================================================================
@@ -2274,6 +2759,251 @@ def render_age_bracket_table(data: DashboardData, db: DatabaseConnection = None,
         Averages are calculated from these individual rates by age group.
     </p>
     """, unsafe_allow_html=True)
+
+
+# =============================================================================
+# MARKETPLACE RATES TABLE (by Coverage Type)
+# =============================================================================
+
+def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection = None, census_df: pd.DataFrame = None):
+    """
+    Render the Marketplace Rates by Coverage Type table.
+
+    Shows Bronze, Silver, Gold columns with rate ranges and totals by family status tier.
+    Replaces the age-bracket table with a simpler tier-focused view.
+    """
+    st.markdown("""
+    <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">Marketplace rates by coverage type</p>
+    <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Lowest cost plans by metal level</p>
+    """, unsafe_allow_html=True)
+
+    # Calculate tier marketplace costs
+    tier_costs = calculate_tier_marketplace_costs(
+        census_df,
+        multi_metal_results=data.multi_metal_results,
+        db=db
+    )
+
+    # Get plan counts and renewal for comparison
+    plan_counts = tier_costs.get('plan_counts', {'Bronze': 0, 'Silver': 0, 'Gold': 0})
+    totals = tier_costs.get('totals', {})
+    tiers_data = tier_costs.get('tiers', {})
+
+    # Get renewal total for savings calculation
+    renewal_monthly = data.renewal_premium or 0
+
+    # Helper to format currency or show N/A
+    def fmt(val):
+        return f"${val:,.0f}" if val and val > 0 else "N/A"
+
+    def fmt_range(min_val, max_val):
+        if min_val > 0 and max_val > 0:
+            if min_val == max_val:
+                return f"${min_val:,.0f}"
+            return f"${min_val:,.0f}–${max_val:,.0f}"
+        return "N/A"
+
+    # Calculate vs Renewal and savings percentage
+    def fmt_vs_renewal(metal_monthly):
+        if renewal_monthly <= 0 or metal_monthly <= 0:
+            return ("—", "#6b7280")
+        diff = renewal_monthly - metal_monthly
+        if diff > 0:
+            return (f"-${diff:,.0f}", "#00a63e")  # Savings (green)
+        elif diff < 0:
+            return (f"+${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
+        else:
+            return ("—", "#6b7280")
+
+    def fmt_savings_pct(metal_monthly):
+        if renewal_monthly <= 0 or metal_monthly <= 0:
+            return ("", "#6b7280")
+        diff = renewal_monthly - metal_monthly
+        pct = (diff / renewal_monthly) * 100
+        if pct > 0:
+            return (f"{pct:.0f}%", "#00a63e")
+        else:
+            return ("—", "#6b7280")
+
+    # Build tier rows
+    tier_order = ['Employee Only', 'Employee + Spouse', 'Employee + Children', 'Family']
+    tier_rows = ""
+
+    for tier_name in tier_order:
+        tier_data = tiers_data.get(tier_name)
+        if not tier_data:
+            continue
+
+        count = tier_data.get('count', 0)
+        avg_age = tier_data.get('avg_age', 0)
+        if count == 0:
+            continue
+
+        # Find lowest cost metal for highlighting
+        metal_totals = [tier_data.get(m, {}).get('total', 0) for m in ['Bronze', 'Silver', 'Gold']]
+        min_cost = min([v for v in metal_totals if v > 0]) if any(v > 0 for v in metal_totals) else 0
+
+        # Format employee count with average age
+        age_suffix = f" · avg age {avg_age}" if avg_age > 0 else ""
+        tier_rows += f'''<tr>
+            <td style="text-align: left; font-weight: 500; color: #101828;">
+                {tier_name}<br>
+                <span style="font-size: 12px; color: #6a7282; font-weight: 400;">{count} employee{'s' if count != 1 else ''}{age_suffix}</span>
+            </td>'''
+
+        for metal in ['Bronze', 'Silver', 'Gold']:
+            metal_data = tier_data.get(metal, {})
+            min_rate = metal_data.get('min', 0)
+            max_rate = metal_data.get('max', 0)
+            total = metal_data.get('total', 0)
+            is_lowest = total > 0 and total == min_cost
+            highlight_style = 'background: #dcfce7;' if is_lowest else ''
+
+            tier_rows += f'''<td style="{highlight_style}">
+                <span style="font-size: 16px; font-weight: 600;">{fmt(total)}</span><br>
+                <span style="font-size: 12px; color: #6a7282;">{fmt_range(min_rate, max_rate)}</span>
+            </td>'''
+
+        tier_rows += "</tr>"
+
+    # Get totals for footer rows
+    bronze_monthly = totals.get('Bronze', {}).get('monthly', 0)
+    silver_monthly = totals.get('Silver', {}).get('monthly', 0)
+    gold_monthly = totals.get('Gold', {}).get('monthly', 0)
+
+    bronze_annual = totals.get('Bronze', {}).get('annual', 0)
+    silver_annual = totals.get('Silver', {}).get('annual', 0)
+    gold_annual = totals.get('Gold', {}).get('annual', 0)
+
+    # Build the HTML table
+    st.markdown(f"""
+    <style>
+        .marketplace-rates-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Poppins', sans-serif;
+            margin-bottom: 16px;
+        }}
+        .marketplace-rates-table th {{
+            padding: 12px 16px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+            border-bottom: 2px solid #e5e7eb;
+        }}
+        .marketplace-rates-table td {{
+            padding: 12px 16px;
+            text-align: center;
+            font-family: 'Inter', sans-serif;
+            font-size: 16px;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        .marketplace-rates-table td:first-child {{
+            text-align: left;
+            font-family: 'Poppins', sans-serif;
+        }}
+        .marketplace-rates-table .total-row td {{
+            font-weight: 700;
+            border-top: 2px solid #101828;
+            padding-top: 16px;
+        }}
+        .marketplace-rates-table .annual-row td {{
+            font-weight: 600;
+            color: #374151;
+        }}
+        .col-header-metal {{
+            background: #f0fdf4;
+            color: #0d542b;
+        }}
+        .plans-available-row {{
+            background: #f9fafb;
+        }}
+        .plans-available-row td {{
+            font-size: 14px;
+            color: #6a7282;
+            padding: 8px 16px;
+        }}
+    </style>
+
+    <table class="marketplace-rates-table">
+        <thead>
+            <tr>
+                <th style="text-align: left; background: white;">Coverage Type</th>
+                <th class="col-header-metal">
+                    Bronze<br>
+                    <span style="font-size: 12px; font-weight: 400; color: #166534;">{data.metal_av.get('Bronze', 60):.0f}% AV</span>
+                </th>
+                <th class="col-header-metal">
+                    Silver<br>
+                    <span style="font-size: 12px; font-weight: 400; color: #166534;">{data.metal_av.get('Silver', 70):.0f}% AV</span>
+                </th>
+                <th class="col-header-metal">
+                    Gold<br>
+                    <span style="font-size: 12px; font-weight: 400; color: #166534;">{data.metal_av.get('Gold', 80):.0f}% AV</span>
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr class="plans-available-row">
+                <td style="text-align: left; font-style: italic;">Plans available</td>
+                <td>{plan_counts.get('Bronze', 0):,}</td>
+                <td>{plan_counts.get('Silver', 0):,}</td>
+                <td>{plan_counts.get('Gold', 0):,}</td>
+            </tr>
+            {tier_rows}
+            <tr class="total-row">
+                <td style="font-weight: 700;">Total Monthly</td>
+                <td style="font-weight: 700;">{fmt(bronze_monthly)}</td>
+                <td style="font-weight: 700;">{fmt(silver_monthly)}</td>
+                <td style="font-weight: 700;">{fmt(gold_monthly)}</td>
+            </tr>
+            <tr class="annual-row">
+                <td>Annual Total</td>
+                <td>{fmt(bronze_annual)}</td>
+                <td>{fmt(silver_annual)}</td>
+                <td>{fmt(gold_annual)}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: 600;">Savings vs Renewal</td>
+                <td style="color: {fmt_vs_renewal(bronze_monthly)[1]}; font-weight: 600;">{fmt_vs_renewal(bronze_monthly)[0]}</td>
+                <td style="color: {fmt_vs_renewal(silver_monthly)[1]}; font-weight: 600;">{fmt_vs_renewal(silver_monthly)[0]}</td>
+                <td style="color: {fmt_vs_renewal(gold_monthly)[1]}; font-weight: 600;">{fmt_vs_renewal(gold_monthly)[0]}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: 600;">Premium savings %</td>
+                <td style="color: {fmt_savings_pct(bronze_monthly)[1]}; font-weight: 600;">{fmt_savings_pct(bronze_monthly)[0]}</td>
+                <td style="color: {fmt_savings_pct(silver_monthly)[1]}; font-weight: 600;">{fmt_savings_pct(silver_monthly)[0]}</td>
+                <td style="color: {fmt_savings_pct(gold_monthly)[1]}; font-weight: 600;">{fmt_savings_pct(gold_monthly)[0]}</td>
+            </tr>
+        </tbody>
+    </table>
+    """, unsafe_allow_html=True)
+
+    # Footer with note and download button
+    footer_col1, footer_col2 = st.columns([3, 1])
+
+    with footer_col1:
+        st.markdown("""
+        <p style="font-size: 13px; color: #6b7280; margin-top: 8px;">
+            Rate ranges show lowest cost plan rates from youngest to oldest age band within each coverage tier.
+            Totals represent cost if all employees selected the lowest-cost plan in each metal level.
+        </p>
+        """, unsafe_allow_html=True)
+
+    with footer_col2:
+        # CSV download button for marketplace rate details
+        if census_df is not None and not census_df.empty and data.multi_metal_results:
+            csv_df = generate_marketplace_rates_csv(census_df, data.multi_metal_results)
+            if csv_df is not None and not csv_df.empty:
+                csv_data = csv_df.to_csv(index=False)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                st.download_button(
+                    label="📥 Rate details CSV",
+                    data=csv_data,
+                    file_name=f"marketplace_rate_details_{timestamp}.csv",
+                    mime="text/csv",
+                    help="Download employee census with Bronze, Silver, Gold plan names and rates"
+                )
 
 
 # =============================================================================
@@ -2778,6 +3508,56 @@ with st.sidebar:
         )
         st.session_state.dashboard_config['cooperative_ratio'] = coop_ratio_pct / 100
 
+    # Contribution Pattern Review (if detected and needs review)
+    contribution_pattern = st.session_state.get('detected_contribution_pattern')
+    if contribution_pattern and contribution_pattern.needs_any_review():
+        with st.expander("⚠️ Contribution Pattern Review", expanded=True):
+            st.markdown("**Detected EE/ER contribution patterns by tier:**")
+            st.caption("Some tiers have high variance and need review")
+
+            from contribution_pattern_detector import get_pattern_summary, TIER_LABELS
+            summary = get_pattern_summary(contribution_pattern)
+
+            # Show pattern table
+            pattern_data = []
+            for tier in summary['tiers']:
+                pattern_data.append({
+                    'Tier': tier['label'],
+                    'Pattern': tier['pattern_type'].replace('_', ' ').title(),
+                    'ER%': tier['er_percentage_display'] if tier['pattern_type'] == 'percentage' else '-',
+                    'Flat $': tier['flat_amount_display'] if tier['pattern_type'] == 'flat_rate' else '-',
+                    'Count': tier['sample_size'],
+                    'Status': '⚠️ Review' if tier['needs_review'] else '✓'
+                })
+
+            import pandas as pd
+            st.dataframe(pd.DataFrame(pattern_data), use_container_width=True, hide_index=True)
+
+            # Show warnings
+            if summary['warnings']:
+                for warning in summary['warnings']:
+                    st.warning(warning)
+    elif contribution_pattern:
+        # Pattern detected but no review needed - show summary
+        with st.expander("📊 Contribution Pattern", expanded=False):
+            from contribution_pattern_detector import get_pattern_summary
+            summary = get_pattern_summary(contribution_pattern)
+
+            pattern_type = summary['overall_type'].replace('_', ' ').title()
+            st.markdown(f"**Overall pattern:** {pattern_type}")
+
+            pattern_data = []
+            for tier in summary['tiers']:
+                pattern_data.append({
+                    'Tier': tier['label'],
+                    'Pattern': tier['pattern_type'].replace('_', ' ').title(),
+                    'ER%': tier['er_percentage_display'],
+                    'Count': tier['sample_size']
+                })
+
+            import pandas as pd
+            st.dataframe(pd.DataFrame(pattern_data), use_container_width=True, hide_index=True)
+
 # Load all dashboard data from session state
 data = load_dashboard_data(
     census_df=census_df,
@@ -2856,9 +3636,9 @@ with st.container(border=True):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Row 3: Age Bracket Table
+# Row 3: Marketplace Rates by Coverage Type
 with st.container(border=True):
-    render_age_bracket_table(data, db=db, census_df=census_df)
+    render_marketplace_rates_table(data, db=db, census_df=census_df)
 
 st.markdown("<br>", unsafe_allow_html=True)
 

@@ -935,6 +935,11 @@ class CensusProcessor:
                 if '2026 Premium' in row.index:
                     projected_2026_premium = parse_currency(row.get('2026 Premium'))
 
+                # Extract gap insurance (optional - employer gap coverage cost)
+                gap_insurance_monthly = None
+                if 'Gap Insurance' in row.index:
+                    gap_insurance_monthly = parse_currency(row.get('Gap Insurance'))
+
                 # Create employee record
                 employee = {
                     'employee_id': employee_number,
@@ -952,6 +957,7 @@ class CensusProcessor:
                     'current_ee_monthly': current_ee_monthly,
                     'current_er_monthly': current_er_monthly,
                     'projected_2026_premium': projected_2026_premium,
+                    'gap_insurance_monthly': gap_insurance_monthly,
                 }
                 employees.append(employee)
 
@@ -1127,6 +1133,7 @@ class CensusProcessor:
                 'Current EE Monthly': '$425',      # Family tier - higher contribution
                 'Current ER Monthly': '$1,705',    # ~80% of family premium
                 '2026 Premium': '$2,911.16',       # Projected 2026 renewal (from rate table)
+                'Gap Insurance': '$112',           # Employer gap insurance monthly cost
             },
             {
                 'Employee Number': 'EMP002',
@@ -1146,6 +1153,7 @@ class CensusProcessor:
                 'Current EE Monthly': '$350',
                 'Current ER Monthly': '$1,400',
                 '2026 Premium': '$1,967.67',       # Projected 2026 renewal
+                'Gap Insurance': '$85',            # Employer gap insurance
             },
             {
                 'Employee Number': 'EMP003',
@@ -1165,6 +1173,7 @@ class CensusProcessor:
                 'Current EE Monthly': '275',       # Without $ sign - also valid
                 'Current ER Monthly': '1100',
                 '2026 Premium': '1747.71',         # Without $ sign - also valid
+                'Gap Insurance': '',               # Optional - can be empty
             },
             {
                 'Employee Number': 'EMP004',
@@ -1184,6 +1193,7 @@ class CensusProcessor:
                 'Current EE Monthly': '',          # Optional - can be empty
                 'Current ER Monthly': '',
                 '2026 Premium': '',                # Optional - can be empty
+                'Gap Insurance': '',               # Optional - can be empty
             }
         ]
 
@@ -1971,6 +1981,8 @@ class ContributionComparison:
                 - total_current_er_monthly: Sum of all ER contributions
                 - total_current_ee_annual: Annual EE total
                 - total_current_er_annual: Annual ER total
+                - total_gap_insurance_monthly: Sum of all gap insurance costs
+                - total_gap_insurance_annual: Annual gap insurance total
         """
         if census_df is None or census_df.empty:
             return {
@@ -1979,17 +1991,23 @@ class ContributionComparison:
                 'total_current_er_monthly': 0.0,
                 'total_current_ee_annual': 0.0,
                 'total_current_er_annual': 0.0,
+                'total_gap_insurance_monthly': 0.0,
+                'total_gap_insurance_annual': 0.0,
             }
 
         # Get totals, treating NaN as 0
         total_ee = 0.0
         total_er = 0.0
+        total_gap = 0.0
 
         if 'current_ee_monthly' in census_df.columns:
             total_ee = pd.to_numeric(census_df['current_ee_monthly'], errors='coerce').fillna(0).sum()
 
         if 'current_er_monthly' in census_df.columns:
             total_er = pd.to_numeric(census_df['current_er_monthly'], errors='coerce').fillna(0).sum()
+
+        if 'gap_insurance_monthly' in census_df.columns:
+            total_gap = pd.to_numeric(census_df['gap_insurance_monthly'], errors='coerce').fillna(0).sum()
 
         # Count employees with any contribution data
         employees_with_data = 0
@@ -2004,6 +2022,8 @@ class ContributionComparison:
             'total_current_er_monthly': float(total_er),
             'total_current_ee_annual': float(total_ee * 12),
             'total_current_er_annual': float(total_er * 12),
+            'total_gap_insurance_monthly': float(total_gap),
+            'total_gap_insurance_annual': float(total_gap * 12),
         }
 
     @staticmethod
@@ -2045,6 +2065,42 @@ class ContributionComparison:
             result['er_change_annual'] = result['er_change_monthly'] * 12
 
         return result
+
+    @staticmethod
+    def detect_contribution_pattern(census_df: pd.DataFrame):
+        """
+        Detect whether employer uses percentage-based or flat-rate contributions per tier.
+
+        Analyzes Current EE Monthly and Current ER Monthly columns grouped by Family Status
+        to determine the contribution pattern for each tier (EE, ES, EC, F).
+
+        Args:
+            census_df: Employee census DataFrame with current_ee_monthly, current_er_monthly,
+                      and family_status columns
+
+        Returns:
+            ContributionPatternResult from contribution_pattern_detector module
+        """
+        from contribution_pattern_detector import detect_contribution_pattern
+        return detect_contribution_pattern(census_df)
+
+    @staticmethod
+    def apply_contribution_pattern(census_df: pd.DataFrame, pattern_result):
+        """
+        Apply detected contribution pattern to calculate 2026 renewal ER/EE projections.
+
+        For each employee, applies their tier's detected pattern to calculate
+        projected_2026_er and projected_2026_ee columns.
+
+        Args:
+            census_df: Census DataFrame with projected_2026_premium and family_status
+            pattern_result: ContributionPatternResult from detect_contribution_pattern()
+
+        Returns:
+            Census DataFrame with projected_2026_er and projected_2026_ee columns added
+        """
+        from contribution_pattern_detector import apply_pattern_to_renewal
+        return apply_pattern_to_renewal(census_df, pattern_result)
 
 
 class WorkforceFitAnalyzer:
