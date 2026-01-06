@@ -215,7 +215,7 @@ class ProposalData:
                 data.proposed_er_monthly = results.get('total_monthly', 0)
                 data.proposed_er_annual = results.get('total_annual', 0)
 
-        # Calculate ER/EE contribution split percentages
+        # Calculate ER/EE contribution split percentages (aggregate - kept for backwards compatibility)
         if data.current_total_monthly > 0:
             data.er_contribution_pct = data.current_er_monthly / data.current_total_monthly
             data.ee_contribution_pct = data.current_ee_monthly / data.current_total_monthly
@@ -223,6 +223,13 @@ class ProposalData:
             # Default to typical 60/40 ER/EE split if no current data
             data.er_contribution_pct = 0.60
             data.ee_contribution_pct = 0.40
+
+        # Detect per-tier contribution pattern (percentage vs flat-rate)
+        contribution_pattern = None
+        if census_df is not None and not census_df.empty:
+            from utils import ContributionComparison
+            if ContributionComparison.has_individual_contributions(census_df):
+                contribution_pattern = ContributionComparison.detect_contribution_pattern(census_df)
 
         # Calculate savings vs current ER (legacy field for backwards compatibility)
         if data.proposed_er_annual > 0 and data.current_er_annual > 0:
@@ -256,12 +263,21 @@ class ProposalData:
         if renewal_monthly > 0:
             data.total_renewal_cost = renewal_monthly * 12  # Annual
 
-            # PROJECT the 2026 ER contribution using same split ratio as current
-            # This is the KEY calculation - what would the employer pay at renewal
-            # if they kept the same ER/EE cost split
-            data.projected_er_monthly_2026 = renewal_monthly * data.er_contribution_pct
+            # PROJECT the 2026 ER/EE contribution using detected tier-level pattern
+            # This applies the detected contribution pattern (% or flat-rate) per tier
+            if contribution_pattern is not None and census_df is not None:
+                # Apply pattern to each employee and sum
+                census_with_projections = ContributionComparison.apply_contribution_pattern(
+                    census_df, contribution_pattern
+                )
+                data.projected_er_monthly_2026 = census_with_projections['projected_2026_er'].sum()
+                data.projected_ee_monthly_2026 = census_with_projections['projected_2026_ee'].sum()
+            else:
+                # Fallback: use aggregate ER/EE split ratio
+                data.projected_er_monthly_2026 = renewal_monthly * data.er_contribution_pct
+                data.projected_ee_monthly_2026 = renewal_monthly * data.ee_contribution_pct
+
             data.projected_er_annual_2026 = data.projected_er_monthly_2026 * 12
-            data.projected_ee_monthly_2026 = renewal_monthly * data.ee_contribution_pct
             data.projected_ee_annual_2026 = data.projected_ee_monthly_2026 * 12
 
             # PRIMARY SALES COMPARISON: ICHRA vs Projected Renewal ER

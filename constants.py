@@ -238,6 +238,59 @@ DEDUCTIBLE_TYPES = {
     'drug_moop': 'Drug EHB Out of Pocket Maximum'
 }
 
+# ==============================================================================
+# PLAN COMPARISON (Page 9)
+# ==============================================================================
+# Configuration for comparing current employer plan vs marketplace alternatives
+
+# Benefit comparison rows for side-by-side table
+# Format: (attribute_name, display_label, lower_is_better)
+# lower_is_better=True means lower values are better (costs, deductibles)
+# lower_is_better=False means it's a categorical/boolean comparison
+COMPARISON_BENEFIT_ROWS = [
+    # Plan Overview (categorical - no color coding)
+    ('plan_type', 'Plan Type', False),
+    ('hsa_eligible', 'HSA Eligible', False),
+    # Deductibles (lower is better)
+    ('individual_deductible', 'Individual Deductible', True),
+    ('family_deductible', 'Family Deductible', True),
+    # Out-of-Pocket Maximum (lower is better)
+    ('individual_oop_max', 'Individual OOP Max', True),
+    ('family_oop_max', 'Family OOP Max', True),
+    # Coinsurance (lower is better - employee pays less)
+    ('coinsurance_pct', 'Coinsurance %', True),
+    # Copays (lower is better)
+    ('pcp_copay', 'PCP Visit Copay', True),
+    ('specialist_copay', 'Specialist Copay', True),
+    ('er_copay', 'ER Visit Copay', True),
+    ('urgent_care_copay', 'Urgent Care Copay', True),
+    ('generic_rx_copay', 'Generic Rx Copay', True),
+    ('preferred_rx_copay', 'Preferred Brand Rx Copay', True),
+    ('specialty_rx_copay', 'Specialty Rx Copay', True),
+]
+
+# Match score algorithm weights (must sum to 100)
+COMPARISON_MATCH_WEIGHTS = {
+    'deductible': 25,      # Individual deductible similarity
+    'oopm': 25,            # Out-of-pocket max similarity
+    'plan_type': 15,       # Plan type match (HMO, PPO, etc.)
+    'hsa': 10,             # HSA eligibility match
+    'copays': 25,          # PCP/Specialist/Rx copay similarity
+}
+
+# Comparison result indicators
+COMPARISON_INDICATORS = {
+    'better': '🟢',    # Marketplace plan is better
+    'similar': '🟡',   # Within 10% - essentially equivalent
+    'worse': '🔴',     # Marketplace plan is less generous
+}
+
+# Similarity threshold (percentage difference considered "similar")
+COMPARISON_SIMILARITY_THRESHOLD = 10  # Within 10% = similar
+
+# Maximum plans to compare side-by-side
+MAX_COMPARISON_PLANS = 5
+
 # Network types
 NETWORK_TYPES = [
     'In Network',
@@ -274,6 +327,7 @@ NEW_CENSUS_OPTIONAL_COLUMNS = [
     'Current EE Monthly',  # Optional: Employee's current monthly group plan contribution (e.g., $250 or 250)
     'Current ER Monthly',  # Optional: Employer's current monthly contribution for this employee
     '2026 Premium',    # Optional: Projected 2026 renewal premium for this employee (from rate table)
+    'Gap Insurance',   # Optional: Current employer gap insurance monthly cost (added to ER costs)
 ]
 
 # Family Status codes
@@ -319,7 +373,7 @@ APP_CONFIG = {
     'initial_sidebar_state': 'expanded'
 }
 
-# Page names for navigation (8-page structure)
+# Page names for navigation (9-page structure)
 PAGE_NAMES = {
     'census': '1️⃣ Employee census',
     'dashboard': '2️⃣ ICHRA dashboard',
@@ -328,7 +382,8 @@ PAGE_NAMES = {
     'employer_summary': '5️⃣ Employer summary',
     'individual_analysis': '6️⃣ Individual analysis',
     'export': '7️⃣ Export results',
-    'proposal': '8️⃣ Proposal generator'
+    'proposal': '8️⃣ Proposal generator',
+    'plan_comparison': '9️⃣ Plan comparison'
 }
 
 # Help text
@@ -498,6 +553,23 @@ TIER_LABELS = {
     'EC': 'EE + Children',
     'F': 'Family',
 }
+
+# ==============================================================================
+# CONTRIBUTION PATTERN DETECTION
+# ==============================================================================
+# Configuration for detecting employer contribution patterns (percentage vs flat-rate)
+# from census data (Current EE Monthly / Current ER Monthly columns)
+
+# Maximum coefficient of variation (CV) to consider a pattern "consistent"
+# CV = std_dev / mean; 0.10 = 10% variance allowed
+PATTERN_VARIANCE_THRESHOLD = 0.10
+
+# Minimum number of employees in a tier for reliable pattern detection
+# Tiers with fewer employees will be flagged for manual review
+PATTERN_MIN_SAMPLE_SIZE = 3
+
+# Default ER contribution percentage when pattern cannot be detected
+PATTERN_DEFAULT_ER_PCT = 0.60  # 60% employer / 40% employee
 
 if __name__ == "__main__":
     # Display constants for verification

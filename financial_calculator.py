@@ -556,10 +556,12 @@ class FinancialSummaryCalculator:
             {
                 'total_ee_monthly': float,
                 'total_er_monthly': float,
-                'total_premium_monthly': float,
+                'total_gap_monthly': float,
+                'total_premium_monthly': float (includes gap),
                 'total_ee_annual': float,
                 'total_er_annual': float,
-                'total_premium_annual': float,
+                'total_gap_annual': float,
+                'total_premium_annual': float (includes gap),
                 'employees_with_data': int
             }
         """
@@ -575,18 +577,23 @@ class FinancialSummaryCalculator:
         # Find contribution columns
         ee_col = None
         er_col = None
+        gap_col = None
         for col in census_df.columns:
             if 'current' in col.lower() and 'ee' in col.lower():
                 ee_col = col
             elif 'current' in col.lower() and 'er' in col.lower():
                 er_col = col
+            elif col == 'gap_insurance_monthly' or col == 'Gap Insurance':
+                gap_col = col
 
         result = {
             'total_ee_monthly': 0.0,
             'total_er_monthly': 0.0,
+            'total_gap_monthly': 0.0,
             'total_premium_monthly': 0.0,
             'total_ee_annual': 0.0,
             'total_er_annual': 0.0,
+            'total_gap_annual': 0.0,
             'total_premium_annual': 0.0,
             'employees_with_data': 0
         }
@@ -594,12 +601,16 @@ class FinancialSummaryCalculator:
         if ee_col and er_col:
             ee_values = census_df[ee_col].apply(parse_currency)
             er_values = census_df[er_col].apply(parse_currency)
+            gap_values = census_df[gap_col].apply(parse_currency) if gap_col else pd.Series([0.0] * len(census_df))
 
             result['total_ee_monthly'] = ee_values.sum()
             result['total_er_monthly'] = er_values.sum()
-            result['total_premium_monthly'] = result['total_ee_monthly'] + result['total_er_monthly']
+            result['total_gap_monthly'] = gap_values.sum()
+            # Gap insurance is ER-paid, include in total premium
+            result['total_premium_monthly'] = result['total_ee_monthly'] + result['total_er_monthly'] + result['total_gap_monthly']
             result['total_ee_annual'] = result['total_ee_monthly'] * 12
             result['total_er_annual'] = result['total_er_monthly'] * 12
+            result['total_gap_annual'] = result['total_gap_monthly'] * 12
             result['total_premium_annual'] = result['total_premium_monthly'] * 12
             result['employees_with_data'] = ((ee_values > 0) | (er_values > 0)).sum()
 
@@ -614,8 +625,10 @@ class FinancialSummaryCalculator:
 
         Returns:
             {
-                'total_monthly': float,
-                'total_annual': float,
+                'total_monthly': float (includes gap insurance),
+                'total_annual': float (includes gap insurance),
+                'total_gap_monthly': float,
+                'total_gap_annual': float,
                 'employees_with_data': int,
                 'has_data': bool  # True if 2026 Premium column exists with values
             }
@@ -634,6 +647,8 @@ class FinancialSummaryCalculator:
         result = {
             'total_monthly': 0.0,
             'total_annual': 0.0,
+            'total_gap_monthly': 0.0,
+            'total_gap_annual': 0.0,
             'employees_with_data': 0,
             'has_data': False
         }
@@ -645,9 +660,21 @@ class FinancialSummaryCalculator:
                 premium_col = col
                 break
 
+        # Check for gap insurance column
+        gap_col = None
+        for col in ['gap_insurance_monthly', 'Gap Insurance']:
+            if col in census_df.columns:
+                gap_col = col
+                break
+
         if premium_col:
             values = census_df[premium_col].apply(parse_currency)
-            result['total_monthly'] = values.sum()
+            gap_values = census_df[gap_col].apply(parse_currency) if gap_col else pd.Series([0.0] * len(census_df))
+
+            result['total_gap_monthly'] = gap_values.sum()
+            result['total_gap_annual'] = result['total_gap_monthly'] * 12
+            # Include gap insurance in renewal totals (gap continues to renewal)
+            result['total_monthly'] = values.sum() + result['total_gap_monthly']
             result['total_annual'] = result['total_monthly'] * 12
             result['employees_with_data'] = (values > 0).sum()
             result['has_data'] = result['employees_with_data'] > 0
@@ -920,6 +947,8 @@ class FinancialSummaryCalculator:
             current_ee = 0.0 if pd.isna(current_ee_val) else float(current_ee_val or 0)
             current_er_val = emp_row.get('current_er_monthly', 0)
             current_er = 0.0 if pd.isna(current_er_val) else float(current_er_val or 0)
+            gap_insurance_val = emp_row.get('gap_insurance_monthly', 0)
+            gap_insurance = 0.0 if pd.isna(gap_insurance_val) else float(gap_insurance_val or 0)
             current_total = current_ee + current_er
 
             # Get projected 2026 renewal premium (if available)
@@ -963,6 +992,7 @@ class FinancialSummaryCalculator:
                 'age_band': age_band,
                 'current_ee': current_ee,
                 'current_er': current_er,
+                'gap_insurance': gap_insurance,
                 'current_total': current_total,
                 'projected_2026': projected_2026,
                 'location_key': location_key
@@ -1058,6 +1088,7 @@ class FinancialSummaryCalculator:
                 'estimated_tier_premium': estimated_tier_premium,
                 'current_ee_monthly': emp['current_ee'],
                 'current_er_monthly': emp['current_er'],
+                'gap_insurance_monthly': emp['gap_insurance'],
                 'current_total_monthly': emp['current_total'],
                 'projected_2026_premium': emp['projected_2026']
             })
@@ -1178,11 +1209,16 @@ class FinancialSummaryCalculator:
             current_ee = 0.0 if pd.isna(current_ee_val) else float(current_ee_val or 0)
             current_er_val = emp_row.get('current_er_monthly', 0)
             current_er = 0.0 if pd.isna(current_er_val) else float(current_er_val or 0)
-            current_total = current_ee + current_er
+            gap_insurance_val = emp_row.get('gap_insurance_monthly', 0)
+            gap_insurance = 0.0 if pd.isna(gap_insurance_val) else float(gap_insurance_val or 0)
+            # Include gap insurance in current total (ER-paid coverage)
+            current_total = current_ee + current_er + gap_insurance
 
             # Get projected 2026 renewal premium (if available)
+            # Include gap insurance in renewal (assumes gap continues to renewal)
             projected_2026_val = emp_row.get('projected_2026_premium', 0)
-            projected_2026 = 0.0 if pd.isna(projected_2026_val) else float(projected_2026_val or 0)
+            projected_2026_base = 0.0 if pd.isna(projected_2026_val) else float(projected_2026_val or 0)
+            projected_2026 = projected_2026_base + gap_insurance
 
             # Get rating area
             rating_area = emp_row.get('rating_area_id', 1)
@@ -1220,6 +1256,7 @@ class FinancialSummaryCalculator:
                 'age_band': age_band,
                 'current_ee': current_ee,
                 'current_er': current_er,
+                'gap_insurance': gap_insurance,
                 'current_total': current_total,
                 'projected_2026': projected_2026,
                 'location_key': location_key
@@ -1356,6 +1393,7 @@ class FinancialSummaryCalculator:
                     'actuarial_value': actuarial_value,
                     'current_ee_monthly': emp['current_ee'],
                     'current_er_monthly': emp['current_er'],
+                    'gap_insurance_monthly': emp['gap_insurance'],
                     'current_total_monthly': emp['current_total'],
                     'projected_2026_premium': emp['projected_2026']
                 })
