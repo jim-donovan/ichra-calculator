@@ -167,13 +167,92 @@ st.markdown("""
 # SESSION STATE INITIALIZATION
 # ==============================================================================
 
+def get_ee_premiums_from_census() -> tuple:
+    """
+    Extract EE-only current and renewal premiums from census data.
+    Returns (current_premium, renewal_premium) or (None, None) if not available.
+    """
+    census_df = st.session_state.get('census_df')
+    if census_df is None or census_df.empty:
+        return None, None
+
+    # Normalize column names for lookup
+    cols = {c.lower().replace(' ', '_'): c for c in census_df.columns}
+
+    # Get family status column
+    family_col = cols.get('family_status') or cols.get('family status')
+    if not family_col:
+        return None, None
+
+    # Filter for EE-only employees
+    ee_employees = census_df[census_df[family_col].str.upper() == 'EE']
+    if ee_employees.empty:
+        return None, None
+
+    current_premium = None
+    renewal_premium = None
+
+    # Try to get 2025_Premium (current total) - find the column
+    premium_2025_col = cols.get('2025_premium') or cols.get('current_total_premium')
+    if premium_2025_col and premium_2025_col in ee_employees.columns:
+        vals = ee_employees[premium_2025_col].dropna()
+        if len(vals) > 0:
+            try:
+                current_premium = float(vals.mode().iloc[0])
+            except (IndexError, ValueError):
+                current_premium = float(vals.iloc[0])
+
+    # Fallback: sum of Current EE Monthly + Current ER Monthly
+    if current_premium is None:
+        ee_col = cols.get('current_ee_monthly') or cols.get('current ee monthly')
+        er_col = cols.get('current_er_monthly') or cols.get('current er monthly')
+        if ee_col and er_col and ee_col in ee_employees.columns and er_col in ee_employees.columns:
+            ee_vals = ee_employees[ee_col].fillna(0).infer_objects(copy=False)
+            er_vals = ee_employees[er_col].fillna(0).infer_objects(copy=False)
+            total_vals = ee_vals + er_vals
+            non_zero = total_vals[total_vals > 0]
+            if len(non_zero) > 0:
+                try:
+                    current_premium = float(non_zero.mode().iloc[0])
+                except (IndexError, ValueError):
+                    current_premium = float(non_zero.iloc[0])
+
+    # Try to get 2026_Premium (renewal total)
+    premium_2026_col = cols.get('2026_premium') or cols.get('renewal_premium') or cols.get('projected_2026_premium')
+    if premium_2026_col and premium_2026_col in ee_employees.columns:
+        vals = ee_employees[premium_2026_col].dropna()
+        if len(vals) > 0:
+            try:
+                renewal_premium = float(vals.mode().iloc[0])
+            except (IndexError, ValueError):
+                renewal_premium = float(vals.iloc[0])
+
+    return current_premium, renewal_premium
+
+
 def init_session_state():
     """Initialize session state for plan comparison."""
     if 'current_employer_plan' not in st.session_state:
-        st.session_state.current_employer_plan = CurrentEmployerPlan()
+        # Pre-populate EE-only premiums from census if available
+        current_premium, renewal_premium = get_ee_premiums_from_census()
+        st.session_state.current_employer_plan = CurrentEmployerPlan(
+            current_premium=current_premium,
+            renewal_premium=renewal_premium,
+        )
 
     if 'comparison_location' not in st.session_state:
-        st.session_state.comparison_location = ComparisonLocation()
+        # Try to prefill with most common ZIP from census
+        default_location = ComparisonLocation()
+        census_df = st.session_state.get('census_df')
+        if census_df is not None and not census_df.empty:
+            # Find the most populated ZIP code
+            zip_col = 'Home Zip' if 'Home Zip' in census_df.columns else 'zip' if 'zip' in census_df.columns else None
+            if zip_col and zip_col in census_df.columns:
+                zip_counts = census_df[zip_col].value_counts()
+                if not zip_counts.empty:
+                    most_common_zip = str(zip_counts.index[0]).zfill(5)[:5]  # Ensure 5 digits
+                    default_location = ComparisonLocation(zip_code=most_common_zip)
+        st.session_state.comparison_location = default_location
 
     if 'comparison_filters' not in st.session_state:
         st.session_state.comparison_filters = ComparisonFilters()
@@ -230,6 +309,8 @@ def render_stage_1_current_plan():
 
                     if st.button("Apply to Form", type="primary"):
                         # Store parsed data and create updated plan
+                        # PRESERVE existing premium values (from census or user input)
+                        existing_plan = st.session_state.current_employer_plan
                         st.session_state.parsed_sbc_data = parsed
                         st.session_state.current_employer_plan = CurrentEmployerPlan(
                             plan_name=parsed.get("plan_name", ""),
@@ -237,6 +318,9 @@ def render_stage_1_current_plan():
                             plan_type=parsed.get("plan_type", "HMO"),
                             metal_tier=parsed.get("metal_tier"),
                             hsa_eligible=parsed.get("hsa_eligible", False),
+                            # Preserve premium values from existing plan
+                            current_premium=existing_plan.current_premium,
+                            renewal_premium=existing_plan.renewal_premium,
                             individual_deductible=parsed.get("individual_deductible", 0) or 0,
                             family_deductible=parsed.get("family_deductible"),
                             individual_oop_max=parsed.get("individual_oop_max", 0) or 0,
@@ -245,13 +329,12 @@ def render_stage_1_current_plan():
                             pcp_copay=parsed.get("pcp_copay"),
                             specialist_copay=parsed.get("specialist_copay"),
                             er_copay=parsed.get("er_copay"),
-                            urgent_care_copay=parsed.get("urgent_care_copay"),
                             generic_rx_copay=parsed.get("generic_rx_copay"),
                             preferred_rx_copay=parsed.get("preferred_rx_copay"),
                             specialty_rx_copay=parsed.get("specialty_rx_copay"),
                         )
                         # Clear copay widget keys so they reflect new values
-                        for key in ['pcp_type', 'specialist_type', 'er_type', 'urgent_type',
+                        for key in ['pcp_type', 'specialist_type', 'er_type',
                                     'generic_type', 'preferred_type', 'specialty_type']:
                             if key in st.session_state:
                                 del st.session_state[key]
@@ -399,7 +482,7 @@ def render_stage_1_current_plan():
     coinsurance_pct = st.slider(
         "Coinsurance % (Employee pays after deductible)",
         min_value=0,
-        max_value=60,
+        max_value=80,
         value=plan.coinsurance_pct,
         step=5,
         help="After meeting deductible, employee pays this % of costs (e.g., 20% = 80/20 plan)"
@@ -458,7 +541,7 @@ def render_stage_1_current_plan():
             st.info(f"Ded + {coinsurance_pct}%")
 
     with col2:
-        st.markdown("**Urgent/Emergency Care**")
+        st.markdown("**Emergency Care**")
 
         # ER Copay
         er_type = st.selectbox(
@@ -478,26 +561,6 @@ def render_stage_1_current_plan():
             )
         else:
             er_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
-
-        # Urgent Care Copay
-        urgent_type = st.selectbox(
-            "Urgent Care",
-            options=COPAY_TYPES,
-            index=0 if plan.urgent_care_copay is not None else 1,
-            key="urgent_type"
-        )
-        if urgent_type == "Flat Copay":
-            urgent_care_copay = st.number_input(
-                "Urgent Care Copay Amount",
-                min_value=0,
-                max_value=200,
-                value=int(plan.urgent_care_copay or 50),
-                step=5,
-                key="urgent_copay_input"
-            )
-        else:
-            urgent_care_copay = None
             st.info(f"Ded + {coinsurance_pct}%")
 
     with col3:
@@ -581,7 +644,6 @@ def render_stage_1_current_plan():
         pcp_copay=float(pcp_copay) if pcp_copay is not None else None,
         specialist_copay=float(specialist_copay) if specialist_copay is not None else None,
         er_copay=float(er_copay) if er_copay is not None else None,
-        urgent_care_copay=float(urgent_care_copay) if urgent_care_copay is not None else None,
         generic_rx_copay=float(generic_rx_copay) if generic_rx_copay is not None else None,
         preferred_rx_copay=float(preferred_rx_copay) if preferred_rx_copay is not None else None,
         specialty_rx_copay=float(specialty_rx_copay) if specialty_rx_copay is not None else None,
@@ -707,8 +769,6 @@ def pivot_copay_data(copay_df: pd.DataFrame) -> Dict[str, Dict]:
         ('primary care visit', 'pcp_copay'),
         ('specialist visit', 'specialist_copay'),
         ('emergency room services', 'er_copay'),
-        ('urgent care centers', 'urgent_care_copay'),
-        ('urgent care facilities', 'urgent_care_copay'),
         ('generic drugs', 'generic_rx_copay'),
         ('preferred brand drugs', 'preferred_rx_copay'),
         ('specialty drugs', 'specialty_rx_copay'),
@@ -869,7 +929,6 @@ def search_marketplace_plans(db: DatabaseConnection, state: str, rating_area_id:
                 pcp_copay=plan_copays.get('pcp_copay'),
                 specialist_copay=plan_copays.get('specialist_copay'),
                 er_copay=plan_copays.get('er_copay'),
-                urgent_care_copay=plan_copays.get('urgent_care_copay'),
                 generic_rx_copay=plan_copays.get('generic_rx_copay'),
                 preferred_rx_copay=plan_copays.get('preferred_rx_copay'),
                 specialty_rx_copay=plan_copays.get('specialty_rx_copay'),
@@ -933,15 +992,32 @@ def render_stage_2_marketplace_selection():
 
     location = st.session_state.comparison_location
 
+    # Prefill ZIP from census if not set and census is available
+    prefilled_zip = location.zip_code
+    census_zip_hint = None
+    census_df = st.session_state.get('census_df')
+    if census_df is not None and not census_df.empty:
+        zip_col = 'Home Zip' if 'Home Zip' in census_df.columns else 'zip' if 'zip' in census_df.columns else None
+        if zip_col and zip_col in census_df.columns:
+            zip_counts = census_df[zip_col].value_counts()
+            if not zip_counts.empty:
+                most_common_zip = str(zip_counts.index[0]).zfill(5)[:5]
+                employee_count = zip_counts.iloc[0]
+                total_employees = len(census_df)
+                census_zip_hint = f"Most common ZIP in census: {most_common_zip} ({employee_count}/{total_employees} employees)"
+                # Auto-fill if location ZIP is empty
+                if not prefilled_zip:
+                    prefilled_zip = most_common_zip
+
     col1, col2, col3 = st.columns(3)
 
     with col1:
         zip_code = st.text_input(
             "ZIP Code *",
-            value=location.zip_code,
+            value=prefilled_zip,
             max_chars=5,
             placeholder="e.g., 63101",
-            help="5-digit ZIP code for marketplace plan lookup"
+            help=census_zip_hint if census_zip_hint else "5-digit ZIP code for marketplace plan lookup"
         )
 
     # Auto-detect state from ZIP code
@@ -1004,7 +1080,7 @@ def render_stage_2_marketplace_selection():
     with col1:
         metal_levels = st.multiselect(
             "Metal Levels",
-            options=["Bronze", "Silver", "Gold", "Platinum"],
+            options=["Bronze", "Expanded Bronze", "Silver", "Gold", "Platinum", "Catastrophic"],
             default=filters.metal_levels,
             help="Filter by ACA metal tier"
         )
@@ -1034,7 +1110,7 @@ def render_stage_2_marketplace_selection():
 
     # Update filters in session state
     st.session_state.comparison_filters = ComparisonFilters(
-        metal_levels=metal_levels if metal_levels else ["Bronze", "Silver", "Gold"],
+        metal_levels=metal_levels if metal_levels else ["Bronze", "Expanded Bronze", "Silver", "Gold", "Platinum", "Catastrophic"],
         plan_types=plan_types if plan_types else PLAN_TYPES,
         hsa_only=hsa_only,
         max_deductible=float(max_deductible) if max_deductible > 0 else None,
@@ -1074,7 +1150,28 @@ def render_stage_2_marketplace_selection():
     # Display search results
     if st.session_state.search_results:
         st.markdown('<p class="section-header">Available Plans</p>', unsafe_allow_html=True)
-        st.caption(f"Select up to {MAX_COMPARISON_PLANS} plans to compare.")
+
+        # Plan name search filter
+        plan_search = st.text_input(
+            "🔍 Search by plan name",
+            value="",
+            placeholder="Type to filter plans by name...",
+            key="plan_name_search"
+        )
+
+        # Filter results by search term
+        all_results = st.session_state.search_results
+        if plan_search.strip():
+            search_lower = plan_search.strip().lower()
+            filtered_results = [
+                r for r in all_results
+                if search_lower in r['plan'].plan_name.lower()
+                or search_lower in (r.get('issuer', '') or '').lower()
+            ]
+        else:
+            filtered_results = all_results
+
+        st.caption(f"Showing {len(filtered_results)} of {len(all_results)} plans. Select up to {MAX_COMPARISON_PLANS} to compare.")
 
         with st.expander("How are plans ranked?"):
             st.markdown("""
@@ -1095,8 +1192,14 @@ def render_stage_2_marketplace_selection():
         # Get currently selected plans
         selected = set(st.session_state.selected_comparison_plans)
 
+        # Handle no results after filtering
+        if not filtered_results:
+            if plan_search.strip():
+                st.info(f"No plans match '{plan_search}'. Try a different search term.")
+            # Don't show anything else if no filtered results
+
         # Display plans with checkboxes
-        for i, result in enumerate(st.session_state.search_results[:20]):  # Limit to 20 results
+        for i, result in enumerate(filtered_results):
             mp = result['plan']
             score = result['match_score']
 
@@ -1982,7 +2085,6 @@ def render_stage_3_comparison_table():
             ('pcp_copay', 'PCP Visit', True),
             ('specialist_copay', 'Specialist Visit', True),
             ('er_copay', 'ER Visit', True),
-            ('urgent_care_copay', 'Urgent Care', True),
             ('generic_rx_copay', 'Generic Rx', True),
             ('preferred_rx_copay', 'Preferred Brand Rx', True),
             ('specialty_rx_copay', 'Specialty Rx', True),
@@ -2147,10 +2249,20 @@ def render_stage_3_comparison_table():
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        # Build filename with client name
+        client_name = st.session_state.get('client_name', '').strip()
+        if client_name:
+            safe_name = client_name.replace(' ', '_').replace('/', '-')
+            csv_filename = f"plan_comparison_{safe_name}_{timestamp}.csv"
+            pptx_filename = f"plan_comparison_{safe_name}_{timestamp}.pptx"
+        else:
+            csv_filename = f"plan_comparison_{timestamp}.csv"
+            pptx_filename = f"plan_comparison_{timestamp}.pptx"
+
         st.download_button(
             label="Export Comparison (CSV)",
             data=csv_content,
-            file_name=f"plan_comparison_{timestamp}.csv",
+            file_name=csv_filename,
             mime="text/csv"
         )
 
@@ -2162,7 +2274,7 @@ def render_stage_3_comparison_table():
             st.download_button(
                 label="Download Slide (PPTX)",
                 data=pptx_buffer,
-                file_name=f"plan_comparison_{timestamp}.pptx",
+                file_name=pptx_filename,
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
             )
         except Exception as e:

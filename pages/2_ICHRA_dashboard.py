@@ -812,7 +812,7 @@ def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = 
 
 
 def load_cooperative_rate_table(db: DatabaseConnection = None) -> pd.DataFrame:
-    """Load the HAP cooperative rate table from database."""
+    """Load the HAS (Health Access Solutions) cooperative rate table from database."""
     if db is None:
         return pd.DataFrame()
 
@@ -920,7 +920,7 @@ def get_cooperative_rate_fast(age: int, family_status: str, lookup: Dict) -> flo
 
 def calculate_hap_totals(census_df: pd.DataFrame, coop_rates_df: pd.DataFrame) -> Dict:
     """
-    Calculate HAP totals for $1k and $2.5k deductible plans.
+    Calculate HAS totals for $1k and $2.5k deductible plans.
 
     Args:
         census_df: Employee census DataFrame with age and family_status columns
@@ -1010,6 +1010,196 @@ def calculate_hap_totals(census_df: pd.DataFrame, coop_rates_df: pd.DataFrame) -
             result['hap_2_5k']['by_tier'][family_status]['count'] += 1
 
     return result
+
+
+# =============================================================================
+# SEDERA RATE FUNCTIONS
+# =============================================================================
+
+# Plan Configurator Constants
+SEDERA_IUA_OPTIONS = ['500', '1000', '1500', '2500', '5000']
+HAS_IUA_OPTIONS = ['1k', '2.5k']
+PREVENTIVE_CARE_RATE_WITH_DPC = 124.0
+PREVENTIVE_CARE_RATE_WITHOUT_DPC = 107.0
+
+
+def load_sedera_rate_table(db: DatabaseConnection = None) -> pd.DataFrame:
+    """Load Sedera rates from sedera_rates_with_dpc table."""
+    if db is None:
+        return pd.DataFrame()
+
+    query = """
+    SELECT "Plan", "IUA", age_band, family_status, family_status_sedera, sedera_monthly_rate
+    FROM sedera_rates_with_dpc
+    ORDER BY "IUA", age_band, family_status
+    """
+    try:
+        return pd.read_sql(query, db.engine)
+    except Exception as e:
+        print(f"Error loading Sedera rates: {e}")
+        return pd.DataFrame()
+
+
+def _get_sedera_age_band(age: int) -> str:
+    """Convert age to Sedera rate age band."""
+    if age < 30:
+        return "18-29"
+    elif age < 40:
+        return "30-39"
+    elif age < 50:
+        return "40-49"
+    elif age < 60:
+        return "50-59"
+    else:
+        return "60+"
+
+
+def build_sedera_rate_lookup(sedera_rates_df: pd.DataFrame, iua: str) -> Dict:
+    """
+    Build a lookup dictionary from Sedera rates DataFrame for O(1) access.
+
+    Args:
+        sedera_rates_df: DataFrame from load_sedera_rate_table()
+        iua: IUA level as string ('500', '1000', '1500', '2500', '5000')
+
+    Returns:
+        Dict mapping (age_band, family_status) -> rate
+    """
+    if sedera_rates_df is None or sedera_rates_df.empty:
+        return {}
+
+    # Filter by IUA
+    iua_df = sedera_rates_df[sedera_rates_df['IUA'] == iua]
+    if iua_df.empty:
+        return {}
+
+    lookup = {}
+    for _, row in iua_df.iterrows():
+        key = (row['age_band'], row['family_status'])
+        lookup[key] = float(row['sedera_monthly_rate']) if pd.notna(row['sedera_monthly_rate']) else 0
+    return lookup
+
+
+def get_sedera_rate_fast(age: int, family_status: str, lookup: Dict) -> float:
+    """
+    Fast O(1) lookup for Sedera rate using pre-built dictionary.
+
+    Args:
+        age: Employee age
+        family_status: EE, ES, EC, or F
+        lookup: Dictionary from build_sedera_rate_lookup()
+
+    Returns:
+        Monthly Sedera rate
+    """
+    if not lookup:
+        return 0
+
+    status_map = {"EE": "EE", "ES": "ES", "EC": "EC", "F": "F"}
+    fs = status_map.get(family_status, "EE")
+    age_band = _get_sedera_age_band(age)
+
+    return lookup.get((age_band, fs), 0)
+
+
+def calculate_sedera_totals(census_df: pd.DataFrame, sedera_rates_df: pd.DataFrame,
+                            selected_iuas: set) -> Dict:
+    """
+    Calculate Sedera totals for selected IUA levels.
+
+    Args:
+        census_df: Employee census DataFrame with age and family_status columns
+        sedera_rates_df: DataFrame from load_sedera_rate_table()
+        selected_iuas: Set of selected IUA levels (e.g., {'500', '1000'})
+
+    Returns:
+        Dict with structure per IUA:
+        {
+            'sedera_500': {
+                'total': float,
+                'by_tier': {
+                    'EE': {'total': float, 'count': int},
+                    ...
+                },
+                'rate_ranges': {
+                    'EE': {'min': float, 'max': float},
+                    ...
+                }
+            },
+            ...
+        }
+    """
+    result = {}
+
+    if census_df is None or census_df.empty:
+        return result
+
+    if sedera_rates_df is None or sedera_rates_df.empty:
+        return result
+
+    # Sedera age bands for rate ranges
+    youngest_band = "18-29"
+    oldest_band = "60+"
+
+    # Determine column names
+    family_col = 'family_status' if 'family_status' in census_df.columns else None
+    if not family_col and 'Family Status' in census_df.columns:
+        family_col = 'Family Status'
+    age_col = 'age' if 'age' in census_df.columns else None
+
+    if not family_col or not age_col:
+        return result
+
+    for iua in selected_iuas:
+        key = f'sedera_{iua}'
+        result[key] = {
+            'total': 0,
+            'by_tier': {code: {'total': 0, 'count': 0} for code in ['EE', 'ES', 'EC', 'F']},
+            'rate_ranges': {code: {'min': 0, 'max': 0} for code in ['EE', 'ES', 'EC', 'F']}
+        }
+
+        # Build lookup for this IUA
+        lookup = build_sedera_rate_lookup(sedera_rates_df, iua)
+        if not lookup:
+            continue
+
+        # Calculate rate ranges
+        for family_status in ['EE', 'ES', 'EC', 'F']:
+            min_rate = lookup.get((youngest_band, family_status), 0)
+            max_rate = lookup.get((oldest_band, family_status), 0)
+            result[key]['rate_ranges'][family_status] = {'min': min_rate, 'max': max_rate}
+
+        # Loop through each employee and accumulate totals
+        for _, emp in census_df.iterrows():
+            age = int(emp.get(age_col, 0)) if pd.notna(emp.get(age_col)) else 0
+            family_status = emp.get(family_col, 'EE')
+
+            # Look up rate for this employee
+            rate = get_sedera_rate_fast(age, family_status, lookup)
+
+            # Accumulate totals
+            result[key]['total'] += rate
+
+            # Accumulate by tier
+            if family_status in result[key]['by_tier']:
+                result[key]['by_tier'][family_status]['total'] += rate
+                result[key]['by_tier'][family_status]['count'] += 1
+
+    return result
+
+
+def calculate_admin_fee_total(admin_fee_pepm: float, employee_count: int) -> float:
+    """Calculate total admin fee: PEPM × employee count."""
+    return admin_fee_pepm * employee_count
+
+
+def calculate_preventive_care_total(include_dpc: bool, employee_count: int) -> float:
+    """
+    Calculate preventive care add-on: rate × employee count.
+    Rate: $124/mo with DPC, $107/mo without DPC.
+    """
+    rate = PREVENTIVE_CARE_RATE_WITH_DPC if include_dpc else PREVENTIVE_CARE_RATE_WITHOUT_DPC
+    return rate * employee_count
 
 
 def calculate_age_bracket_costs(census_df: pd.DataFrame, multi_metal_results: Dict = None,
@@ -1228,11 +1418,24 @@ def calculate_tier_marketplace_costs(
         }
     }
 
-    # Get plan counts from database
-    if db:
+    # Get plan counts from database - filtered to census rating areas
+    if db and census_df is not None and not census_df.empty:
         try:
             from queries import PlanQueries
-            result['plan_counts'] = PlanQueries.get_plan_counts_by_metal(db)
+            # Extract unique (state_code, rating_area_id) tuples from census
+            state_col = 'Home State' if 'Home State' in census_df.columns else 'state'
+            ra_col = 'rating_area_id' if 'rating_area_id' in census_df.columns else None
+
+            if ra_col and state_col in census_df.columns:
+                # Get unique state/rating area combinations
+                state_ra_pairs = census_df[[state_col, ra_col]].dropna().drop_duplicates()
+                state_rating_areas = [
+                    (row[state_col], int(row[ra_col]))
+                    for _, row in state_ra_pairs.iterrows()
+                    if row[ra_col] is not None
+                ]
+                if state_rating_areas:
+                    result['plan_counts'] = PlanQueries.get_plan_counts_by_metal_for_census(db, state_rating_areas)
         except Exception:
             pass  # Keep default zeros
 
@@ -1747,19 +1950,24 @@ def build_employee_example(employee_row: pd.Series, label: str,
 # =============================================================================
 
 def generate_scenario_rates_csv(census_df: pd.DataFrame,
-                                 coop_rates_df: pd.DataFrame) -> pd.DataFrame:
+                                 coop_rates_df: pd.DataFrame,
+                                 sedera_rates_df: pd.DataFrame = None,
+                                 config: dict = None) -> pd.DataFrame:
     """
-    Generate CSV data with employee details and HAP rates.
+    Generate CSV data with employee details and plan rates.
 
     Includes:
     - Employee metadata (name, age, zip, state, family status)
     - Current/Renewal premiums (including gap insurance if present)
     - Gap insurance monthly amount
-    - HAP $1k and $2.5k rates
+    - HAS rates (based on config)
+    - Sedera rates (based on config)
 
     Args:
         census_df: Employee census DataFrame
-        coop_rates_df: HAP cooperative rates DataFrame
+        coop_rates_df: HAS cooperative rates DataFrame
+        sedera_rates_df: Sedera rates DataFrame (optional)
+        config: Plan configurator config dict (optional)
 
     Returns:
         DataFrame ready for CSV export
@@ -1767,9 +1975,26 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
     if census_df is None or census_df.empty:
         return pd.DataFrame()
 
-    # Build lookup dicts for HAP rates
-    lookup_1k = build_cooperative_rate_lookup(coop_rates_df, "1k") if coop_rates_df is not None else {}
-    lookup_2_5k = build_cooperative_rate_lookup(coop_rates_df, "2.5k") if coop_rates_df is not None else {}
+    # Get config or use defaults
+    if config is None:
+        config = {
+            'hap_enabled': True,
+            'hap_iuas': {'1k', '2.5k'},
+            'sedera_enabled': False,
+            'sedera_iuas': set(),
+        }
+
+    # Build lookup dicts for HAS rates
+    hap_lookups = {}
+    if config['hap_enabled'] and config['hap_iuas']:
+        for iua in config['hap_iuas']:
+            hap_lookups[iua] = build_cooperative_rate_lookup(coop_rates_df, iua) if coop_rates_df is not None else {}
+
+    # Build lookup dicts for Sedera rates
+    sedera_lookups = {}
+    if config['sedera_enabled'] and config['sedera_iuas'] and sedera_rates_df is not None:
+        for iua in config['sedera_iuas']:
+            sedera_lookups[iua] = build_sedera_rate_lookup(sedera_rates_df, iua)
 
     all_rows = []
 
@@ -1794,10 +2019,6 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
         current_total = current_ee + current_er + gap_insurance
         renewal = emp.get('projected_2026_premium', 0) or 0
 
-        # HAP rates
-        hap_1k_rate = get_cooperative_rate_fast(age, family_status, lookup_1k)
-        hap_2_5k_rate = get_cooperative_rate_fast(age, family_status, lookup_2_5k)
-
         row = {
             'employee_id': emp_id,
             'first_name': first_name,
@@ -1813,9 +2034,20 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
             'gap_insurance_monthly': gap_insurance,
             'current_total_monthly': current_total,
             'renewal_premium': renewal,
-            'hap_1k_rate': hap_1k_rate,
-            'hap_2_5k_rate': hap_2_5k_rate,
         }
+
+        # Add HAS rates based on config
+        for iua in sorted(hap_lookups.keys(), key=lambda x: float(x.replace('k', ''))):
+            rate = get_cooperative_rate_fast(age, family_status, hap_lookups[iua])
+            row[f'hap_{iua}_rate'] = rate
+
+        # Add Sedera rates based on config
+        iua_display_map = {'500': '500', '1000': '1k', '1500': '1_5k', '2500': '2_5k', '5000': '5k'}
+        for iua in sorted(sedera_lookups.keys(), key=lambda x: int(x)):
+            rate = get_sedera_rate_fast(age, family_status, sedera_lookups[iua])
+            col_name = f'sedera_{iua_display_map.get(iua, iua)}_rate'
+            row[col_name] = rate
+
         all_rows.append(row)
 
     if not all_rows:
@@ -2085,12 +2317,167 @@ def render_plan_problems(data: DashboardData):
 
 
 # =============================================================================
+# PLAN CONFIGURATOR
+# =============================================================================
+
+def init_plan_configurator(total_employees: int = 0):
+    """Initialize plan configurator session state with defaults."""
+    if 'plan_configurator' not in st.session_state:
+        st.session_state.plan_configurator = {
+            'hap_enabled': True,
+            'hap_iuas': {'1k', '2.5k'},  # Set of selected IUAs
+            'hap_admin_fee': 0.0,
+            'sedera_enabled': False,
+            'sedera_iuas': set(),  # Empty = none selected
+            'sedera_admin_fee': 0.0,
+            'preventive_enabled': False,
+            'preventive_include_dpc': True,
+            'preventive_employee_count': total_employees,
+        }
+    # Update max employee count if census changes
+    if total_employees > 0:
+        config = st.session_state.plan_configurator
+        # Cap preventive employee count to new total if it exceeds
+        if config['preventive_employee_count'] > total_employees:
+            config['preventive_employee_count'] = total_employees
+
+
+def render_plan_configurator(total_employees: int = 0):
+    """
+    Render the Plan Configurator UI for selecting plan options.
+
+    Returns the current configuration dict from session state.
+    """
+    init_plan_configurator(total_employees)
+    config = st.session_state.plan_configurator
+
+    with st.expander("Plan Configurator", expanded=False):
+        col1, col2, col3 = st.columns(3)
+
+        # HAS Plans Section
+        with col1:
+            st.markdown("**HAS Plans**")
+            hap_enabled = st.toggle("Enable HAS", value=config['hap_enabled'], key="hap_enabled_toggle")
+            config['hap_enabled'] = hap_enabled
+
+            if hap_enabled:
+                # Deductible selection with chips-style multiselect
+                hap_options = ['$1k', '$2.5k']
+                hap_defaults = [f"${iua}" for iua in config['hap_iuas']]
+                selected_hap = st.multiselect(
+                    "Deductible",
+                    options=hap_options,
+                    default=hap_defaults,
+                    key="hap_iua_select"
+                )
+                # Convert back to internal format
+                config['hap_iuas'] = {opt.replace('$', '') for opt in selected_hap}
+
+                # Admin fee
+                hap_admin = st.number_input(
+                    "Admin Fee (PEPM)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(config['hap_admin_fee']),
+                    step=1.0,
+                    format="%.2f",
+                    key="hap_admin_input"
+                )
+                config['hap_admin_fee'] = hap_admin
+
+        # Sedera Plans Section
+        with col2:
+            st.markdown("**Sedera Plans**")
+            sedera_enabled = st.toggle("Enable Sedera", value=config['sedera_enabled'], key="sedera_enabled_toggle")
+            config['sedera_enabled'] = sedera_enabled
+
+            if sedera_enabled:
+                # IUA selection
+                sedera_options = ['$500', '$1k', '$1.5k', '$2.5k', '$5k']
+                sedera_defaults = []
+                for iua in config['sedera_iuas']:
+                    # Map internal format to display format
+                    if iua == '500':
+                        sedera_defaults.append('$500')
+                    elif iua == '1000':
+                        sedera_defaults.append('$1k')
+                    elif iua == '1500':
+                        sedera_defaults.append('$1.5k')
+                    elif iua == '2500':
+                        sedera_defaults.append('$2.5k')
+                    elif iua == '5000':
+                        sedera_defaults.append('$5k')
+
+                selected_sedera = st.multiselect(
+                    "IUA Levels",
+                    options=sedera_options,
+                    default=sedera_defaults,
+                    key="sedera_iua_select"
+                )
+                # Convert back to internal format (database uses '500', '1000', etc.)
+                iua_map = {'$500': '500', '$1k': '1000', '$1.5k': '1500', '$2.5k': '2500', '$5k': '5000'}
+                config['sedera_iuas'] = {iua_map[opt] for opt in selected_sedera}
+
+                # Admin fee
+                sedera_admin = st.number_input(
+                    "Admin Fee (PEPM)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(config['sedera_admin_fee']),
+                    step=1.0,
+                    format="%.2f",
+                    key="sedera_admin_input"
+                )
+                config['sedera_admin_fee'] = sedera_admin
+
+        # Preventive Care Section
+        with col3:
+            st.markdown("**Preventive Care**")
+            preventive_enabled = st.toggle("Include Preventive", value=config['preventive_enabled'], key="preventive_enabled_toggle")
+            config['preventive_enabled'] = preventive_enabled
+
+            if preventive_enabled:
+                # DPC toggle
+                include_dpc = st.toggle(
+                    "Include DPC ($124/mo)",
+                    value=config['preventive_include_dpc'],
+                    key="preventive_dpc_toggle",
+                    help="With DPC: $124/mo, Without: $107/mo"
+                )
+                config['preventive_include_dpc'] = include_dpc
+
+                # Employee count
+                max_employees = total_employees if total_employees > 0 else 100
+                emp_count = st.number_input(
+                    f"Employees (max: {max_employees})",
+                    min_value=0,
+                    max_value=max_employees,
+                    value=min(config['preventive_employee_count'], max_employees),
+                    step=1,
+                    key="preventive_emp_count"
+                )
+                config['preventive_employee_count'] = emp_count
+
+                # Show monthly cost preview
+                rate = PREVENTIVE_CARE_RATE_WITH_DPC if include_dpc else PREVENTIVE_CARE_RATE_WITHOUT_DPC
+                monthly_cost = rate * emp_count
+                st.caption(f"Monthly: ${monthly_cost:,.0f}")
+
+    return config
+
+
+# =============================================================================
 # COMPARISON TABLE
 # =============================================================================
 
 def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFrame = None,
                              dependents_df: pd.DataFrame = None):
-    """Render the Monthly Premium by Scenario comparison table with HAP options."""
+    """Render the Monthly Premium by Scenario comparison table with HAS options."""
+    # Get employee count for configurator
+    total_employees = len(census_df) if census_df is not None and not census_df.empty else 0
+
+    # Render Plan Configurator above table
+    config = render_plan_configurator(total_employees)
 
     # Title row (no scenario selector)
     st.markdown("""
@@ -2098,14 +2485,14 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Monthly employer costs: traditional group plan vs. Health Access Plan alternatives</p>
     """, unsafe_allow_html=True)
 
-    # Helper to format currency or show N/A
+    # Helper to format currency or show --
     def fmt(val):
-        return f"${val:,.0f}" if val and val > 0 else "N/A"
+        return f"${val:,.0f}" if val and val > 0 else "--"
 
     # Helper to format savings (handles positive and negative)
     def fmt_savings(amount, pct):
         if amount is None or amount == 0:
-            return ("N/A", "#6b7280")  # Gray for no data
+            return ("--", "#6b7280")  # Gray for no data
         elif amount > 0:
             return (f"${amount:,.0f}", "#00a63e")  # Green for savings
         else:
@@ -2125,9 +2512,60 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     }
     tiers = list(tier_info.keys())
 
-    # Load HAP rates and calculate totals
+    # Load HAS rates and calculate totals
     coop_rates_df = load_cooperative_rate_table(db)
     hap_totals = calculate_hap_totals(census_df, coop_rates_df)
+
+    # Load Sedera rates if enabled
+    sedera_rates_df = None
+    sedera_totals = {}
+    if config['sedera_enabled'] and config['sedera_iuas']:
+        sedera_rates_df = load_sedera_rate_table(db)
+        sedera_totals = calculate_sedera_totals(census_df, sedera_rates_df, config['sedera_iuas'])
+
+    # Build list of plan columns based on configuration
+    # Each column: {'key': str, 'label': str, 'subtitle': str, 'style_class': str, 'totals_key': str}
+    plan_columns = []
+
+    # HAS columns (if enabled)
+    if config['hap_enabled'] and config['hap_iuas']:
+        for iua in sorted(config['hap_iuas'], key=lambda x: float(x.replace('k', ''))):
+            col_key = f'HAS ${iua}'
+            totals_key = f'hap_{iua.replace(".", "_")}' if '.' not in iua else f'hap_{iua.replace(".", "_")}'
+            # Map to hap_totals keys: 'hap_1k' or 'hap_2_5k'
+            if iua == '1k':
+                totals_key = 'hap_1k'
+            elif iua == '2.5k':
+                totals_key = 'hap_2_5k'
+            plan_columns.append({
+                'key': col_key,
+                'label': f'HAS ${iua}',
+                'subtitle': 'Health Access Solutions',
+                'style_class': 'col-header-has',
+                'totals_key': totals_key,
+                'type': 'has',
+                'iua': iua,
+                'admin_fee': config['hap_admin_fee'],
+            })
+
+    # Sedera columns (if enabled)
+    if config['sedera_enabled'] and config['sedera_iuas']:
+        # Map database IUA values to display labels
+        iua_display_map = {'500': '$500', '1000': '$1k', '1500': '$1.5k', '2500': '$2.5k', '5000': '$5k'}
+        for iua in sorted(config['sedera_iuas'], key=lambda x: int(x)):
+            display_iua = iua_display_map.get(iua, f'${iua}')
+            col_key = f'Sedera {display_iua}'
+            totals_key = f'sedera_{iua}'
+            plan_columns.append({
+                'key': col_key,
+                'label': f'Sedera {display_iua}',
+                'subtitle': 'Prime+ with DPC',
+                'style_class': 'col-header-sedera',
+                'totals_key': totals_key,
+                'type': 'sedera',
+                'iua': iua,
+                'admin_fee': config['sedera_admin_fee'],
+            })
 
     # Count employees per tier and calculate current/renewal totals per tier
     tier_counts = {}
@@ -2153,8 +2591,8 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
                 current_ee = tier_employees['current_ee_monthly'].fillna(0).sum()
                 tier_current[tier_name] = current_er + current_ee
                 # Get the typical per-employee rate (most common value, or first non-zero)
-                ee_vals = tier_employees['current_ee_monthly'].fillna(0)
-                er_vals = tier_employees['current_er_monthly'].fillna(0)
+                ee_vals = tier_employees['current_ee_monthly'].fillna(0).infer_objects(copy=False)
+                er_vals = tier_employees['current_er_monthly'].fillna(0).infer_objects(copy=False)
                 per_ee_rates = ee_vals + er_vals
                 non_zero_rates = per_ee_rates[per_ee_rates > 0]
                 if len(non_zero_rates) > 0:
@@ -2173,7 +2611,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             if 'projected_2026_premium' in census_df.columns:
                 tier_renewal[tier_name] = tier_employees['projected_2026_premium'].fillna(0).sum()
                 # Get typical per-employee renewal rate
-                renewal_vals = tier_employees['projected_2026_premium'].fillna(0)
+                renewal_vals = tier_employees['projected_2026_premium'].fillna(0).infer_objects(copy=False)
                 non_zero_renewal = renewal_vals[renewal_vals > 0]
                 if len(non_zero_renewal) > 0:
                     try:
@@ -2203,7 +2641,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     has_gap_data = False
 
     if census_df is not None and not census_df.empty and 'gap_insurance_monthly' in census_df.columns:
-        gap_series = census_df['gap_insurance_monthly'].fillna(0)
+        gap_series = census_df['gap_insurance_monthly'].fillna(0).infer_objects(copy=False)
         if gap_series.sum() > 0:
             has_gap_data = True
             for tier_name, info in tier_info.items():
@@ -2211,17 +2649,17 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 
                 # Current: gap for employees with current coverage (current_er + current_ee > 0)
                 if 'current_er_monthly' in tier_employees.columns and 'current_ee_monthly' in tier_employees.columns:
-                    current_total = tier_employees['current_er_monthly'].fillna(0) + tier_employees['current_ee_monthly'].fillna(0)
+                    current_total = tier_employees['current_er_monthly'].fillna(0).infer_objects(copy=False) + tier_employees['current_ee_monthly'].fillna(0).infer_objects(copy=False)
                     employees_with_current = tier_employees[current_total > 0]
-                    tier_gap_current[tier_name] = employees_with_current['gap_insurance_monthly'].fillna(0).sum()
+                    tier_gap_current[tier_name] = employees_with_current['gap_insurance_monthly'].fillna(0).infer_objects(copy=False).sum()
                 else:
                     tier_gap_current[tier_name] = 0
 
                 # Renewal: gap for employees with 2026 coverage (projected_2026_premium > 0)
                 if 'projected_2026_premium' in tier_employees.columns:
-                    renewal_total = tier_employees['projected_2026_premium'].fillna(0)
+                    renewal_total = tier_employees['projected_2026_premium'].fillna(0).infer_objects(copy=False)
                     employees_with_renewal = tier_employees[renewal_total > 0]
-                    tier_gap_renewal[tier_name] = employees_with_renewal['gap_insurance_monthly'].fillna(0).sum()
+                    tier_gap_renewal[tier_name] = employees_with_renewal['gap_insurance_monthly'].fillna(0).infer_objects(copy=False).sum()
                 else:
                     tier_gap_renewal[tier_name] = tier_gap_current.get(tier_name, 0)
 
@@ -2234,7 +2672,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
                 gap_vals = gap_vals[gap_vals > 0]
                 gap_rates_by_tier[code] = float(gap_vals.iloc[0]) if len(gap_vals) > 0 else 0
 
-    # Build tier rows HTML with HAP rate ranges
+    # Build tier rows HTML with dynamic plan columns
     tier_rows = ""
     for tier in tiers:
         code = tier_info[tier]['code']
@@ -2271,25 +2709,25 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             current_breakdown = ""
             renewal_breakdown = ""
 
-        # HAP totals and rate ranges
-        hap_1k_total = hap_totals['hap_1k']['by_tier'].get(code, {}).get('total', 0)
-        hap_1k_range = hap_totals['hap_1k']['rate_ranges'].get(code, {'min': 0, 'max': 0})
-        hap_2_5k_total = hap_totals['hap_2_5k']['by_tier'].get(code, {}).get('total', 0)
-        hap_2_5k_range = hap_totals['hap_2_5k']['rate_ranges'].get(code, {'min': 0, 'max': 0})
+        # Build dynamic plan columns for this tier
+        plan_cols_html = ""
+        for col in plan_columns:
+            if col['type'] == 'has':
+                totals_data = hap_totals.get(col['totals_key'], {})
+            else:  # sedera
+                totals_data = sedera_totals.get(col['totals_key'], {})
 
-        # Format rate ranges
-        range_1k = f"${hap_1k_range['min']:,.0f}-${hap_1k_range['max']:,.0f}" if hap_1k_range['min'] > 0 else ""
-        range_2_5k = f"${hap_2_5k_range['min']:,.0f}-${hap_2_5k_range['max']:,.0f}" if hap_2_5k_range['min'] > 0 else ""
+            tier_total = totals_data.get('by_tier', {}).get(code, {}).get('total', 0)
+            rate_range = totals_data.get('rate_ranges', {}).get(code, {'min': 0, 'max': 0})
+
+            # Format rate range
+            range_str = f"${rate_range['min']:,.0f}-${rate_range['max']:,.0f}" if rate_range['min'] > 0 else ""
+
+            plan_cols_html += f'<td><span style="font-weight: 600;">{fmt(tier_total)}</span><br><span class="rate-range">{range_str}</span></td>'
 
         # Format employee count with average age
         age_suffix = f" · avg age {avg_age}" if avg_age > 0 else ""
-        tier_rows += f'''<tr>
-            <td>{tier}<br><span class="tier-subtitle">{count} employees{age_suffix}</span></td>
-            <td><span style="font-weight: 600;">{fmt(current_val)}</span>{current_breakdown}</td>
-            <td><span style="font-weight: 600;">{fmt(renewal_val)}</span>{renewal_breakdown}</td>
-            <td><span style="font-weight: 600;">{fmt(hap_1k_total)}</span><br><span class="rate-range">{range_1k}</span></td>
-            <td><span style="font-weight: 600;">{fmt(hap_2_5k_total)}</span><br><span class="rate-range">{range_2_5k}</span></td>
-        </tr>'''
+        tier_rows += f'<tr><td>{tier}<br><span class="tier-subtitle">{count} employees{age_suffix}</span></td><td><span style="font-weight: 600;">{fmt(current_val)}</span>{current_breakdown}</td><td><span style="font-weight: 600;">{fmt(renewal_val)}</span>{renewal_breakdown}</td>{plan_cols_html}</tr>'
 
     # Calculate total premiums by summing tier totals (which already include gap)
     total_premium = {}
@@ -2300,119 +2738,137 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 
     total_premium[current_key] = total_current
     total_premium[renewal_key] = total_renewal
-    total_premium['HAP $1k'] = hap_totals['hap_1k']['total']
-    total_premium['HAP $2.5k'] = hap_totals['hap_2_5k']['total']
 
-    # Calculate annual totals
-    annual_totals = {k: v * 12 for k, v in total_premium.items()}
+    # Add totals for each plan column
+    for col in plan_columns:
+        if col['type'] == 'has':
+            total_premium[col['key']] = hap_totals.get(col['totals_key'], {}).get('total', 0)
+        else:  # sedera
+            total_premium[col['key']] = sedera_totals.get(col['totals_key'], {}).get('total', 0)
 
-    # Calculate savings vs renewal (annual)
+    # Calculate admin fees and preventive care totals
+    admin_fee_totals = {}
+    for col in plan_columns:
+        admin_fee_totals[col['key']] = calculate_admin_fee_total(col['admin_fee'], total_employees)
+
+    preventive_total = 0
+    if config['preventive_enabled']:
+        preventive_total = calculate_preventive_care_total(
+            config['preventive_include_dpc'],
+            config['preventive_employee_count']
+        )
+
+    # Calculate grand totals (premium + admin fee + preventive)
+    grand_totals = {}
+    for col in plan_columns:
+        grand_totals[col['key']] = total_premium.get(col['key'], 0) + admin_fee_totals.get(col['key'], 0) + preventive_total
+
+    # Calculate annual totals (using grand totals for plan columns)
+    annual_totals = {current_key: total_premium[current_key] * 12, renewal_key: total_premium[renewal_key] * 12}
+    for col in plan_columns:
+        annual_totals[col['key']] = grand_totals[col['key']] * 12
+
+    # Calculate savings vs renewal (annual) for all plan columns
     renewal_annual = annual_totals.get(renewal_key, 0)
-    hap_savings = {}
-    for hap_key in ['HAP $1k', 'HAP $2.5k']:
-        hap_annual = annual_totals.get(hap_key, 0)
-        if renewal_annual > 0 and hap_annual > 0:
-            savings_amount = renewal_annual - hap_annual
+    plan_savings = {}
+    for col in plan_columns:
+        plan_annual = annual_totals.get(col['key'], 0)
+        if renewal_annual > 0 and plan_annual > 0:
+            savings_amount = renewal_annual - plan_annual
             savings_pct = (savings_amount / renewal_annual) * 100
-            hap_savings[hap_key] = {'amount': savings_amount, 'pct': savings_pct}
+            plan_savings[col['key']] = {'amount': savings_amount, 'pct': savings_pct}
         else:
-            hap_savings[hap_key] = {'amount': 0, 'pct': 0}
+            plan_savings[col['key']] = {'amount': 0, 'pct': 0}
 
     # Asterisk for Total Monthly row (only if gap data exists)
     total_monthly_asterisk = "*" if has_gap_data else ""
 
-    # Custom HTML table
-    st.markdown(f"""
-    <style>
-        .scenario-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-family: 'Poppins', sans-serif;
-            margin-bottom: 16px;
-        }}
-        .scenario-table th {{
-            padding: 12px 16px;
-            text-align: center;
-            font-weight: 600;
-            font-size: 14px;
-            border-bottom: 2px solid #e5e7eb;
-        }}
-        .scenario-table td {{
-            padding: 12px 16px;
-            text-align: center;
-            font-family: 'Inter', sans-serif;
-            font-size: 16px;
-            border-bottom: 1px solid #e5e7eb;
-        }}
-        .scenario-table td:first-child {{
-            text-align: left;
-            font-family: 'Poppins', sans-serif;
-            font-weight: 500;
-            color: #101828;
-        }}
-        .scenario-table .total-row td {{
-            font-weight: 700;
-            border-top: 2px solid #101828;
-            padding-top: 16px;
-        }}
-        .col-header-current {{ background: #eff6ff; color: #1c398e; }}
-        .col-header-renewal {{ background: #fef2f2; color: #82181a; border-left: 4px solid #ffa2a2; }}
-        .col-header-hap {{ background: #f0fdf4; color: #0d542b; }}
-        .header-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
-        .tier-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
-        .rate-range {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
-        .gap-breakdown {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
-        .footnote-text {{ font-size: 12px; color: #6a7282; margin-top: 8px; }}
-    </style>
+    # Build dynamic header columns HTML
+    header_cols_html = ""
+    for col in plan_columns:
+        header_cols_html += f'<th class="{col["style_class"]}">{col["label"]}<br><span class="header-subtitle">{col["subtitle"]}</span></th>'
 
-    <table class="scenario-table">
-        <thead>
-            <tr>
-                <th style="text-align: left; background: white;">Coverage type</th>
-                <th class="col-header-current">{current_key}</th>
-                <th class="col-header-renewal">{renewal_key}</th>
-                <th class="col-header-hap">
-                    HAP $1k<br>
-                    <span class="header-subtitle">Health Access Plan</span>
-                </th>
-                <th class="col-header-hap">
-                    HAP $2.5k<br>
-                    <span class="header-subtitle">Health Access Plan</span>
-                </th>
-            </tr>
-        </thead>
-        <tbody>
-            {tier_rows}
-            <tr class="total-row">
-                <td style="font-weight: 700;">Total Monthly{total_monthly_asterisk}</td>
-                <td style="font-weight: 700;">{fmt(total_premium.get(current_key, 0))}{total_monthly_asterisk}</td>
-                <td style="font-weight: 700;">{fmt(total_premium.get(renewal_key, 0))}{total_monthly_asterisk}</td>
-                <td style="font-weight: 700;">{fmt(total_premium.get('HAP $1k', 0))}</td>
-                <td style="font-weight: 700;">{fmt(total_premium.get('HAP $2.5k', 0))}</td>
-            </tr>
-            <tr>
-                <td style="font-weight: 600;">Annual Total</td>
-                <td style="font-weight: 600;">{fmt(annual_totals.get(current_key, 0))}</td>
-                <td style="font-weight: 600;">{fmt(annual_totals.get(renewal_key, 0))}</td>
-                <td style="font-weight: 600;">{fmt(annual_totals.get('HAP $1k', 0))}</td>
-                <td style="font-weight: 600;">{fmt(annual_totals.get('HAP $2.5k', 0))}</td>
-            </tr>
-            <tr>
-                <td style="font-weight: 600;">Savings vs Renewal</td>
-                <td></td>
-                <td style="color: #6b7280;">—</td>
-                <td style="color: {fmt_savings(hap_savings.get('HAP $1k', {}).get('amount'), hap_savings.get('HAP $1k', {}).get('pct'))[1]}; font-weight: 600;">
-                    {fmt_savings(hap_savings.get('HAP $1k', {}).get('amount'), hap_savings.get('HAP $1k', {}).get('pct'))[0]}<br>
-                    <span style="font-size: 12px;">({hap_savings.get('HAP $1k', {}).get('pct', 0):.0f}%)</span>
-                </td>
-                <td style="color: {fmt_savings(hap_savings.get('HAP $2.5k', {}).get('amount'), hap_savings.get('HAP $2.5k', {}).get('pct'))[1]}; font-weight: 600;">
-                    {fmt_savings(hap_savings.get('HAP $2.5k', {}).get('amount'), hap_savings.get('HAP $2.5k', {}).get('pct'))[0]}<br>
-                    <span style="font-size: 12px;">({hap_savings.get('HAP $2.5k', {}).get('pct', 0):.0f}%)</span>
-                </td>
-            </tr>
-        </tbody>
-    </table>
-    """, unsafe_allow_html=True)
+    # Build dynamic total premium row cells
+    total_premium_cells = ""
+    for col in plan_columns:
+        total_premium_cells += f'<td style="font-weight: 700;">{fmt(total_premium.get(col["key"], 0))}</td>'
+
+    # Build admin fee row (only if any admin fee is > 0)
+    has_admin_fees = any(col['admin_fee'] > 0 for col in plan_columns)
+    admin_fee_row = ""
+    if has_admin_fees:
+        admin_fee_cells = ""
+        for col in plan_columns:
+            admin_fee_cells += f'<td>{fmt(admin_fee_totals.get(col["key"], 0))}<br><span class="rate-range">${col["admin_fee"]:.2f} PEPM</span></td>'
+        admin_fee_row = f'<tr><td>Admin Fee</td><td></td><td></td>{admin_fee_cells}</tr>'
+
+    # Build preventive care row (only if enabled)
+    preventive_row = ""
+    if config['preventive_enabled'] and preventive_total > 0:
+        rate_label = f"${PREVENTIVE_CARE_RATE_WITH_DPC:.0f}" if config['preventive_include_dpc'] else f"${PREVENTIVE_CARE_RATE_WITHOUT_DPC:.0f}"
+        dpc_label = "with DPC" if config['preventive_include_dpc'] else "without DPC"
+        preventive_cells = ""
+        for col in plan_columns:
+            preventive_cells += f'<td>{fmt(preventive_total)}<br><span class="rate-range">{rate_label}/mo × {config["preventive_employee_count"]} EEs</span></td>'
+        preventive_row = f'<tr><td>Preventive Care<br><span class="tier-subtitle">{dpc_label}</span></td><td></td><td></td>{preventive_cells}</tr>'
+
+    # Build grand total row (only if there are add-ons)
+    grand_total_row = ""
+    if has_admin_fees or (config['preventive_enabled'] and preventive_total > 0):
+        grand_total_cells = ""
+        for col in plan_columns:
+            grand_total_cells += f'<td style="font-weight: 700;">{fmt(grand_totals.get(col["key"], 0))}</td>'
+        grand_total_row = f'<tr class="total-row"><td style="font-weight: 700;">Grand Total</td><td></td><td></td>{grand_total_cells}</tr>'
+
+    # Build annual total row cells
+    annual_cells = ""
+    for col in plan_columns:
+        annual_cells += f'<td style="font-weight: 600;">{fmt(annual_totals.get(col["key"], 0))}</td>'
+
+    # Build savings row cells
+    savings_cells = ""
+    for col in plan_columns:
+        savings_data = plan_savings.get(col['key'], {'amount': 0, 'pct': 0})
+        color = fmt_savings(savings_data['amount'], savings_data['pct'])[1]
+        text = fmt_savings(savings_data['amount'], savings_data['pct'])[0]
+        pct = savings_data.get('pct', 0)
+        savings_cells += f'<td style="color: {color}; font-weight: 600;">{text}<br><span style="font-size: 12px;">({pct:.0f}%)</span></td>'
+
+    # Build Annual Total row
+    annual_row = f'<tr><td style="font-weight: 600;">Annual Total</td><td style="font-weight: 600;">{fmt(annual_totals.get(current_key, 0))}</td><td style="font-weight: 600;">{fmt(annual_totals.get(renewal_key, 0))}</td>{annual_cells}</tr>'
+
+    # Build Savings row
+    savings_row = f'<tr><td style="font-weight: 600;">Savings vs Renewal</td><td></td><td style="color: #6b7280;">—</td>{savings_cells}</tr>'
+
+    # Build Total Monthly row
+    total_monthly_row = f'<tr class="total-row"><td style="font-weight: 700;">Total Monthly{total_monthly_asterisk}</td><td style="font-weight: 700;">{fmt(total_premium.get(current_key, 0))}{total_monthly_asterisk}</td><td style="font-weight: 700;">{fmt(total_premium.get(renewal_key, 0))}{total_monthly_asterisk}</td>{total_premium_cells}</tr>'
+
+    # Build header row
+    header_row = f'<tr><th style="text-align: left; background: white;">Coverage type</th><th class="col-header-current">{current_key}</th><th class="col-header-renewal">{renewal_key}</th>{header_cols_html}</tr>'
+
+    # Custom HTML table with dynamic columns - all rows pre-built as single-line strings
+    table_html = f"""<style>
+.scenario-table {{ width: 100%; border-collapse: collapse; font-family: 'Poppins', sans-serif; margin-bottom: 16px; }}
+.scenario-table th {{ padding: 12px 16px; text-align: center; font-weight: 600; font-size: 14px; border-bottom: 2px solid #e5e7eb; }}
+.scenario-table td {{ padding: 12px 16px; text-align: center; font-family: 'Inter', sans-serif; font-size: 16px; border-bottom: 1px solid #e5e7eb; }}
+.scenario-table td:first-child {{ text-align: left; font-family: 'Poppins', sans-serif; font-weight: 500; color: #101828; }}
+.scenario-table .total-row td {{ font-weight: 700; border-top: 2px solid #101828; padding-top: 16px; }}
+.col-header-current {{ background: #fef3c7; color: #92400e; }}
+.col-header-renewal {{ background: #fef2f2; color: #82181a; border-left: 4px solid #ffa2a2; }}
+.col-header-has {{ background: #f0fdf4; color: #0d542b; }}
+.col-header-sedera {{ background: #eff6ff; color: #1c398e; }}
+.header-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+.tier-subtitle {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+.rate-range {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+.gap-breakdown {{ font-size: 12px; font-weight: 400; color: #6a7282; }}
+.footnote-text {{ font-size: 12px; color: #6a7282; margin-top: 8px; }}
+</style>
+<table class="scenario-table">
+<thead>{header_row}</thead>
+<tbody>{tier_rows}{total_monthly_row}{preventive_row}{admin_fee_row}{grand_total_row}{annual_row}{savings_row}</tbody>
+</table>"""
+
+    st.markdown(table_html, unsafe_allow_html=True)
 
     # Footer row with download buttons
     footer_col1, footer_col2, footer_col3 = st.columns([2.5, 1, 1])
@@ -2431,39 +2887,56 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 
         st.markdown("""
         <p style="font-size: 13px; color: #6b7280;">
-            Totals calculated from census data. HAP rates based on employee age and family status.
+            Totals calculated from census data. HAS rates based on employee age and family status.
         </p>
         """, unsafe_allow_html=True)
 
     with footer_col2:
         # CSV download button for detailed rate data
         if db is not None and census_df is not None and not census_df.empty:
-            csv_df = generate_scenario_rates_csv(census_df, coop_rates_df)
+            csv_df = generate_scenario_rates_csv(census_df, coop_rates_df, sedera_rates_df, config)
             if csv_df is not None and not csv_df.empty:
                 csv_data = csv_df.to_csv(index=False)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                client_name = st.session_state.get('client_name', '').strip()
+                if client_name:
+                    safe_name = client_name.replace(' ', '_').replace('/', '-')
+                    csv_filename = f"plan_rate_details_{safe_name}_{timestamp}.csv"
+                else:
+                    csv_filename = f"plan_rate_details_{timestamp}.csv"
                 st.download_button(
                     label="📥 Rate details CSV",
                     data=csv_data,
-                    file_name=f"hap_rate_details_{timestamp}.csv",
+                    file_name=csv_filename,
                     mime="text/csv",
-                    help="Download employee census with current, renewal, and HAP rates"
+                    help="Download employee census with current, renewal, and cooperative plan rates"
                 )
 
     with footer_col3:
         # PowerPoint download button for comparison table slide
         if census_df is not None and not census_df.empty:
             # Build CooperativeHealthData from current table data
-            from pptx_cooperative_health import TierData
+            from pptx_cooperative_health import TierData, PlanColumnData, PlanColumnTotals
+
+            # Build PPTX plan columns from UI plan_columns (1:1 mapping)
+            pptx_plan_columns = []
+            for col in plan_columns:
+                pptx_plan_columns.append(PlanColumnTotals(
+                    key=col['key'],
+                    label=col['label'],
+                    subtitle=col['subtitle'],
+                    plan_type=col['type'],
+                    monthly_total=total_premium.get(col['key'], 0),
+                    annual_total=annual_totals.get(col['key'], 0),
+                    savings_amount=plan_savings.get(col['key'], {}).get('amount', 0),
+                    savings_pct=plan_savings.get(col['key'], {}).get('pct', 0),
+                    admin_fee_pepm=col.get('admin_fee', 0),
+                    admin_fee_total=admin_fee_totals.get(col['key'], 0),
+                ))
 
             pptx_tiers = []
             for tier_name, info in tier_info.items():
                 tier_code = info['code']
-                # Access HAP data using correct structure: by_tier[code] and rate_ranges[code]
-                hap_1k_by_tier = hap_totals.get('hap_1k', {}).get('by_tier', {}).get(tier_code, {})
-                hap_1k_ranges = hap_totals.get('hap_1k', {}).get('rate_ranges', {}).get(tier_code, {})
-                hap_25k_by_tier = hap_totals.get('hap_2_5k', {}).get('by_tier', {}).get(tier_code, {})
-                hap_25k_ranges = hap_totals.get('hap_2_5k', {}).get('rate_ranges', {}).get(tier_code, {})
 
                 # Base premiums (without gap)
                 current_base = tier_current.get(tier_name, 0) or 0
@@ -2482,6 +2955,27 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
                 renewal_rate_per_ee = tier_renewal_rate_per_ee.get(tier_name, 0)
                 gap_rate_per_ee = gap_rates_by_tier.get(tier_code, 0)
 
+                # Build plan column data for this tier (1:1 mapping from UI)
+                tier_plan_columns = {}
+                for col in plan_columns:
+                    if col['type'] == 'has':
+                        totals_data = hap_totals.get(col['totals_key'], {})
+                    else:  # sedera
+                        totals_data = sedera_totals.get(col['totals_key'], {})
+
+                    tier_total = totals_data.get('by_tier', {}).get(tier_code, {}).get('total', 0)
+                    rate_range = totals_data.get('rate_ranges', {}).get(tier_code, {'min': 0, 'max': 0})
+
+                    tier_plan_columns[col['key']] = PlanColumnData(
+                        key=col['key'],
+                        label=col['label'],
+                        subtitle=col['subtitle'],
+                        plan_type=col['type'],
+                        total=tier_total,
+                        min_rate=rate_range.get('min', 0),
+                        max_rate=rate_range.get('max', 0),
+                    )
+
                 pptx_tiers.append(TierData(
                     name=tier_name,
                     code=tier_code,
@@ -2491,12 +2985,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
                     renewal_total=renewal_total,
                     renewal_base=renewal_base,
                     renewal_gap=gap_renewal,
-                    hap_1k_total=hap_1k_by_tier.get('total', 0) or 0,
-                    hap_1k_min=hap_1k_ranges.get('min', 0) or 0,
-                    hap_1k_max=hap_1k_ranges.get('max', 0) or 0,
-                    hap_25k_total=hap_25k_by_tier.get('total', 0) or 0,
-                    hap_25k_min=hap_25k_ranges.get('min', 0) or 0,
-                    hap_25k_max=hap_25k_ranges.get('max', 0) or 0,
+                    plan_columns=tier_plan_columns,
                     employee_count=count,
                     avg_age=avg_age,
                     current_rate_per_ee=current_rate_per_ee,
@@ -2504,50 +2993,48 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
                     gap_rate_per_ee=gap_rate_per_ee,
                 ))
 
-            # Use the SAME values as UI (total_premium, annual_totals, hap_savings)
+            # Use the SAME values as UI (total_premium, annual_totals, plan_savings)
             # to ensure PPTX matches the displayed table exactly
             monthly_current = total_premium.get(current_key, 0)
             monthly_renewal = total_premium.get(renewal_key, 0)
-            monthly_hap_1k = total_premium.get('HAP $1k', 0)
-            monthly_hap_25k = total_premium.get('HAP $2.5k', 0)
-
             annual_current = annual_totals.get(current_key, 0)
             annual_renewal = annual_totals.get(renewal_key, 0)
-            annual_hap_1k = annual_totals.get('HAP $1k', 0)
-            annual_hap_25k = annual_totals.get('HAP $2.5k', 0)
 
-            savings_hap_1k = hap_savings.get('HAP $1k', {}).get('amount', 0)
-            savings_hap_1k_pct = hap_savings.get('HAP $1k', {}).get('pct', 0)
-            savings_hap_25k = hap_savings.get('HAP $2.5k', {}).get('amount', 0)
-            savings_hap_25k_pct = hap_savings.get('HAP $2.5k', {}).get('pct', 0)
+            # Determine preventive care rate based on DPC setting
+            preventive_rate = PREVENTIVE_CARE_RATE_WITH_DPC if config['preventive_include_dpc'] else PREVENTIVE_CARE_RATE_WITHOUT_DPC
 
             pptx_data = CooperativeHealthData(
                 tiers=pptx_tiers,
+                plan_columns=pptx_plan_columns,
                 total_current=monthly_current,
                 total_renewal=monthly_renewal,
-                total_hap_1k=monthly_hap_1k,
-                total_hap_25k=monthly_hap_25k,
                 annual_current=annual_current,
                 annual_renewal=annual_renewal,
-                annual_hap_1k=annual_hap_1k,
-                annual_hap_25k=annual_hap_25k,
-                savings_hap_1k=savings_hap_1k,
-                savings_hap_1k_pct=savings_hap_1k_pct,
-                savings_hap_25k=savings_hap_25k,
-                savings_hap_25k_pct=savings_hap_25k_pct,
                 has_gap=has_gap_data,
                 total_gap_monthly=total_gap,
                 gap_rate_ee=gap_rates_by_tier.get('EE', 0),
                 gap_rate_es=gap_rates_by_tier.get('ES', 0),
                 gap_rate_ec=gap_rates_by_tier.get('EC', 0),
                 gap_rate_f=gap_rates_by_tier.get('F', 0),
+                # Preventive care
+                has_preventive=config['preventive_enabled'] and preventive_total > 0,
+                preventive_total=preventive_total,
+                preventive_rate=preventive_rate,
+                preventive_employee_count=config['preventive_employee_count'],
+                preventive_include_dpc=config['preventive_include_dpc'],
+                # Admin fees
+                has_admin_fees=has_admin_fees,
                 client_name=st.session_state.get('client_name', ''),
             )
 
             pptx_buffer = generate_cooperative_health_slide(pptx_data)
-            client_name = st.session_state.get('client_name', 'comparison')
-            safe_name = "".join(c for c in client_name if c.isalnum() or c in (' ', '-', '_')).strip()
-            filename = f"{safe_name}_cooperative_health.pptx" if safe_name else "cooperative_health.pptx"
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            client_name = st.session_state.get('client_name', '').strip()
+            if client_name:
+                safe_name = client_name.replace(' ', '_').replace('/', '-')
+                filename = f"cooperative_health_{safe_name}_{timestamp}.pptx"
+            else:
+                filename = f"cooperative_health_{timestamp}.pptx"
 
             st.download_button(
                 label="📊 Download slide",
@@ -2590,9 +3077,9 @@ def render_age_bracket_table(data: DashboardData, db: DatabaseConnection = None,
     renewal_key = f"Renewal {RENEWAL_PLAN_YEAR}"
     scenarios = [current_key, renewal_key, "ICHRA Bronze", "ICHRA Silver", "ICHRA Gold", "Cooperative"]
 
-    # Helper to format currency or show N/A
+    # Helper to format currency or show --
     def fmt(val):
-        return f"${val:,.0f}" if val and val > 0 else "N/A"
+        return f"${val:,.0f}" if val and val > 0 else "--"
 
     # Build age bracket rows - only show brackets with employees
     age_brackets_ordered = ["18-29", "30-39", "40-49", "50-59", "60-64", "65+"]
@@ -2792,16 +3279,16 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
     # Get renewal total for savings calculation
     renewal_monthly = data.renewal_premium or 0
 
-    # Helper to format currency or show N/A
+    # Helper to format currency or show --
     def fmt(val):
-        return f"${val:,.0f}" if val and val > 0 else "N/A"
+        return f"${val:,.0f}" if val and val > 0 else "--"
 
     def fmt_range(min_val, max_val):
         if min_val > 0 and max_val > 0:
             if min_val == max_val:
                 return f"${min_val:,.0f}"
             return f"${min_val:,.0f}–${max_val:,.0f}"
-        return "N/A"
+        return "--"
 
     # Calculate vs Renewal and savings percentage
     def fmt_vs_renewal(metal_monthly):
@@ -2845,11 +3332,7 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
 
         # Format employee count with average age
         age_suffix = f" · avg age {avg_age}" if avg_age > 0 else ""
-        tier_rows += f'''<tr>
-            <td style="text-align: left; font-weight: 500; color: #101828;">
-                {tier_name}<br>
-                <span style="font-size: 12px; color: #6a7282; font-weight: 400;">{count} employee{'s' if count != 1 else ''}{age_suffix}</span>
-            </td>'''
+        tier_rows += f'<tr><td style="text-align: left; font-weight: 500; color: #101828;">{tier_name}<br><span style="font-size: 12px; color: #6a7282; font-weight: 400;">{count} employee{"s" if count != 1 else ""}{age_suffix}</span></td>'
 
         for metal in ['Bronze', 'Silver', 'Gold']:
             metal_data = tier_data.get(metal, {})
@@ -2858,11 +3341,7 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
             total = metal_data.get('total', 0)
             is_lowest = total > 0 and total == min_cost
             highlight_style = 'background: #dcfce7;' if is_lowest else ''
-
-            tier_rows += f'''<td style="{highlight_style}">
-                <span style="font-size: 16px; font-weight: 600;">{fmt(total)}</span><br>
-                <span style="font-size: 12px; color: #6a7282;">{fmt_range(min_rate, max_rate)}</span>
-            </td>'''
+            tier_rows += f'<td style="{highlight_style}"><span style="font-size: 16px; font-weight: 600;">{fmt(total)}</span><br><span style="font-size: 12px; color: #6a7282;">{fmt_range(min_rate, max_rate)}</span></td>'
 
         tier_rows += "</tr>"
 
@@ -2911,9 +3390,17 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
             font-weight: 600;
             color: #374151;
         }}
-        .col-header-metal {{
-            background: #f0fdf4;
-            color: #0d542b;
+        .col-header-bronze {{
+            background: #fef3e2;
+            color: #92400e;
+        }}
+        .col-header-silver {{
+            background: #f3f4f6;
+            color: #374151;
+        }}
+        .col-header-gold {{
+            background: #fef9c3;
+            color: #854d0e;
         }}
         .plans-available-row {{
             background: #f9fafb;
@@ -2929,17 +3416,17 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
         <thead>
             <tr>
                 <th style="text-align: left; background: white;">Coverage Type</th>
-                <th class="col-header-metal">
+                <th class="col-header-bronze">
                     Bronze<br>
-                    <span style="font-size: 12px; font-weight: 400; color: #166534;">{data.metal_av.get('Bronze', 60):.0f}% AV</span>
+                    <span style="font-size: 12px; font-weight: 400; color: #b45309;">{data.metal_av.get('Bronze', 60):.0f}% AV</span>
                 </th>
-                <th class="col-header-metal">
+                <th class="col-header-silver">
                     Silver<br>
-                    <span style="font-size: 12px; font-weight: 400; color: #166534;">{data.metal_av.get('Silver', 70):.0f}% AV</span>
+                    <span style="font-size: 12px; font-weight: 400; color: #6b7280;">{data.metal_av.get('Silver', 70):.0f}% AV</span>
                 </th>
-                <th class="col-header-metal">
+                <th class="col-header-gold">
                     Gold<br>
-                    <span style="font-size: 12px; font-weight: 400; color: #166534;">{data.metal_av.get('Gold', 80):.0f}% AV</span>
+                    <span style="font-size: 12px; font-weight: 400; color: #a16207;">{data.metal_av.get('Gold', 80):.0f}% AV</span>
                 </th>
             </tr>
         </thead>
@@ -2979,8 +3466,8 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
     </table>
     """, unsafe_allow_html=True)
 
-    # Footer with note and download button
-    footer_col1, footer_col2 = st.columns([3, 1])
+    # Footer with note and download buttons
+    footer_col1, footer_col2, footer_col3 = st.columns([3, 1, 1])
 
     with footer_col1:
         st.markdown("""
@@ -2997,13 +3484,56 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
             if csv_df is not None and not csv_df.empty:
                 csv_data = csv_df.to_csv(index=False)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                client_name = st.session_state.get('client_name', '').strip()
+                if client_name:
+                    safe_name = client_name.replace(' ', '_').replace('/', '-')
+                    csv_filename = f"marketplace_rate_details_{safe_name}_{timestamp}.csv"
+                else:
+                    csv_filename = f"marketplace_rate_details_{timestamp}.csv"
                 st.download_button(
                     label="📥 Rate details CSV",
                     data=csv_data,
-                    file_name=f"marketplace_rate_details_{timestamp}.csv",
+                    file_name=csv_filename,
                     mime="text/csv",
                     help="Download employee census with Bronze, Silver, Gold plan names and rates"
                 )
+
+    with footer_col3:
+        # PowerPoint export button
+        if census_df is not None and not census_df.empty and tier_costs:
+            if st.button("📊 Export PPTX", key="marketplace_rates_pptx", help="Download as PowerPoint slide"):
+                try:
+                    from pptx_marketplace_rates import MarketplaceRatesData, generate_marketplace_rates_slide
+
+                    # Build data for slide
+                    pptx_data = MarketplaceRatesData.from_dashboard_data(
+                        tier_costs=tier_costs,
+                        renewal_monthly=renewal_monthly,
+                        metal_av=data.metal_av,
+                        client_name=st.session_state.get('client_name', '')
+                    )
+
+                    # Generate PowerPoint
+                    pptx_buffer = generate_marketplace_rates_slide(pptx_data)
+
+                    # Build filename
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    client_name = st.session_state.get('client_name', '').strip()
+                    if client_name:
+                        safe_name = client_name.replace(' ', '_').replace('/', '-')
+                        filename = f"marketplace_rates_{safe_name}_{timestamp}.pptx"
+                    else:
+                        filename = f"marketplace_rates_{timestamp}.pptx"
+
+                    st.download_button(
+                        label="⬇️ Download PPTX",
+                        data=pptx_buffer,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        key="marketplace_rates_pptx_download"
+                    )
+                except Exception as e:
+                    st.error(f"Error generating PowerPoint: {str(e)}")
 
 
 # =============================================================================
@@ -3144,13 +3674,13 @@ def render_employee_card(employee):
             # Helper function to format currency
             def fmt_currency(val):
                 if val is None:
-                    return "N/A"
+                    return "--"
                 return f"${val:,.0f}"
 
             # Helper to format variance with color
             def fmt_variance(val):
                 if val is None:
-                    return ("N/A", "#6b7280")
+                    return ("--", "#6b7280")
                 elif val > 0:
                     return (f"+${val:,.0f}", "#dc2626")  # Red for higher cost
                 elif val < 0:
@@ -3531,7 +4061,7 @@ with st.sidebar:
                 })
 
             import pandas as pd
-            st.dataframe(pd.DataFrame(pattern_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(pattern_data), width='stretch', hide_index=True)
 
             # Show warnings
             if summary['warnings']:
@@ -3556,7 +4086,7 @@ with st.sidebar:
                 })
 
             import pandas as pd
-            st.dataframe(pd.DataFrame(pattern_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(pattern_data), width='stretch', hide_index=True)
 
 # Load all dashboard data from session state
 data = load_dashboard_data(

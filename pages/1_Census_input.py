@@ -21,6 +21,107 @@ from constants import FAMILY_STATUS_CODES
 # PDF renderer imported lazily when needed (requires playwright)
 
 
+# Cached PDF generation function (must be at module level for st.cache_data)
+@st.cache_data(show_spinner=False)
+def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_name, _db_available, _ra_data_hash):
+    """Generate PDF and cache based on data hash. Returns PDF bytes only (filename generated separately)."""
+    from pdf_census_renderer import generate_census_analysis_pdf
+    from visualization_helpers import (
+        generate_age_distribution_chart,
+        generate_state_distribution_chart,
+        generate_family_composition_chart,
+        generate_dependent_age_distribution_chart
+    )
+
+    # Reconstruct dataframes from session state
+    emp_df = st.session_state.get('census_df', pd.DataFrame())
+    dep_df = st.session_state.get('dependents_df', pd.DataFrame())
+
+    chart_images = {}
+    try:
+        chart_images['age_dist'] = generate_age_distribution_chart(emp_df, return_image=True)
+    except Exception:
+        chart_images['age_dist'] = None
+
+    try:
+        chart_images['state'] = generate_state_distribution_chart(emp_df, return_image=True)
+    except Exception:
+        chart_images['state'] = None
+
+    try:
+        chart_images['family_status'] = generate_family_composition_chart(emp_df, return_image=True)
+    except Exception:
+        chart_images['family_status'] = None
+
+    if dep_df is not None and not dep_df.empty:
+        try:
+            chart_images['dependent_age'] = generate_dependent_age_distribution_chart(dep_df, return_image=True)
+        except Exception:
+            chart_images['dependent_age'] = None
+
+    # Build plan availability data
+    plan_availability_df = pd.DataFrame()
+    db = st.session_state.get('db')
+    if emp_df is not None and not emp_df.empty and 'rating_area_id' in emp_df.columns and db is not None:
+        ra_counts = emp_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
+        ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
+        if not ra_counts.empty:
+            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+            states = ra_counts['state'].unique().tolist()
+            rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+
+            query = """
+            SELECT
+                SUBSTRING(p.hios_plan_id, 6, 2) as state,
+                r.rating_area_id,
+                COUNT(DISTINCT p.hios_plan_id) as plan_count
+            FROM rbis_insurance_plan_20251019202724 p
+            JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
+            WHERE p.market_coverage = 'Individual'
+              AND p.plan_effective_date = '2026-01-01'
+              AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+              AND r.rating_area_id IN %s
+            GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
+            """
+            try:
+                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
+                if not plan_counts_df.empty:
+                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
+                    plan_availability_df = ra_counts.merge(
+                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
+                        left_on=['state', 'rating_area_id'],
+                        right_on=['state', 'rating_area_num'],
+                        how='left'
+                    )
+                    plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
+                    plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
+            except Exception:
+                pass
+
+    display_name = client_name if client_name else 'Client'
+
+    pdf_buffer = generate_census_analysis_pdf(
+        employees_df=emp_df,
+        dependents_df=dep_df,
+        plan_availability_df=plan_availability_df,
+        client_name=display_name,
+        chart_images=chart_images
+    )
+
+    return pdf_buffer.getvalue()
+
+
+def get_census_pdf_filename(client_name: str) -> str:
+    """Generate filename with current timestamp (not cached)."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if client_name:
+        safe_name = client_name.replace(' ', '_').replace('/', '-')
+        return f"census_analysis_{safe_name}_{timestamp}.pdf"
+    else:
+        return f"census_analysis_{timestamp}.pdf"
+
+
 # Page config
 st.set_page_config(page_title="Census Input", page_icon="📊", layout="wide")
 
@@ -175,109 +276,49 @@ if st.session_state.census_df is not None:
         max_age = int(all_ages.max())
         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
 
-    # PDF Export Button
-    export_col1, export_col2 = st.columns([4, 1])
+    # PDF Export Section
+    st.markdown("### 📄 Export Census Analysis")
+    export_col1, export_col2 = st.columns([3, 1])
+    with export_col1:
+        # Initialize client_name in session state if not present
+        if 'client_name' not in st.session_state:
+            st.session_state.client_name = ''
+
+        # Client name input - bound directly to session state via key
+        st.text_input(
+            "Client name (optional)",
+            placeholder="Enter client name for PDF",
+            key="client_name",
+            help="Client name will appear in the PDF header and filename"
+        )
+
     with export_col2:
-        if st.button("📄 Export PDF", type="secondary", width="stretch", key="pdf_export_nav"):
-            with st.spinner("Generating PDF..."):
-                try:
-                    # Lazy import PDF renderer (requires playwright)
-                    from pdf_census_renderer import generate_census_analysis_pdf
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Align with input
 
-                    # Generate chart images
-                    from visualization_helpers import (
-                        generate_age_distribution_chart,
-                        generate_state_distribution_chart,
-                        generate_family_composition_chart,
-                        generate_dependent_age_distribution_chart
-                    )
+        # Create hash keys for caching
+        emp_hash = hash(employees_df.to_json()) if not employees_df.empty else 0
+        dep_hash = hash(dependents_df.to_json()) if not dependents_df.empty else 0
+        client_name = st.session_state.get('client_name', '').strip()
+        db_available = st.session_state.get('db') is not None
+        ra_hash = hash(tuple(employees_df['rating_area_id'].dropna().tolist())) if 'rating_area_id' in employees_df.columns else 0
 
-                    chart_images = {}
-                    try:
-                        chart_images['age_dist'] = generate_age_distribution_chart(employees_df, return_image=True)
-                    except Exception:
-                        chart_images['age_dist'] = None
+        try:
+            with st.spinner("Preparing PDF..."):
+                pdf_data = generate_census_pdf_cached(emp_hash, dep_hash, client_name, db_available, ra_hash)
+            filename = get_census_pdf_filename(client_name)
 
-                    try:
-                        chart_images['state'] = generate_state_distribution_chart(employees_df, return_image=True)
-                    except Exception:
-                        chart_images['state'] = None
-
-                    try:
-                        chart_images['family_status'] = generate_family_composition_chart(employees_df, return_image=True)
-                    except Exception:
-                        chart_images['family_status'] = None
-
-                    if not dependents_df.empty:
-                        try:
-                            chart_images['dependent_age'] = generate_dependent_age_distribution_chart(dependents_df, return_image=True)
-                        except Exception:
-                            chart_images['dependent_age'] = None
-
-                    # Build plan availability data
-                    plan_availability_df = pd.DataFrame()
-                    db = st.session_state.get('db')
-                    if 'rating_area_id' in employees_df.columns and db is not None:
-                        ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
-                        ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
-                        if not ra_counts.empty:
-                            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
-                            # Build optimized query that only looks at relevant states/rating areas
-                            states = ra_counts['state'].unique().tolist()
-                            rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
-
-                            query = """
-                            SELECT
-                                SUBSTRING(p.hios_plan_id, 6, 2) as state,
-                                r.rating_area_id,
-                                COUNT(DISTINCT p.hios_plan_id) as plan_count
-                            FROM rbis_insurance_plan_20251019202724 p
-                            JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
-                            WHERE p.market_coverage = 'Individual'
-                              AND p.plan_effective_date = '2026-01-01'
-                              AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
-                              AND r.rating_area_id IN %s
-                            GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
-                            """
-                            try:
-                                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
-                                if not plan_counts_df.empty:
-                                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
-                                    plan_availability_df = ra_counts.merge(
-                                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
-                                        left_on=['state', 'rating_area_id'],
-                                        right_on=['state', 'rating_area_num'],
-                                        how='left'
-                                    )
-                                    plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
-                                    plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
-                            except Exception:
-                                pass
-
-                    # Get client name
-                    client_name = st.session_state.get('client_name', 'Client')
-
-                    # Generate PDF
-                    pdf_buffer = generate_census_analysis_pdf(
-                        employees_df=employees_df,
-                        dependents_df=dependents_df,
-                        plan_availability_df=plan_availability_df,
-                        client_name=client_name,
-                        chart_images=chart_images
-                    )
-
-                    # Offer download
-                    st.download_button(
-                        label="⬇️ Download Census Analysis PDF",
-                        data=pdf_buffer,
-                        file_name=f"census_analysis_{client_name.replace(' ', '_')}.pdf",
-                        mime="application/pdf",
-                        type="primary",
-                        key="pdf_download_nav"
-                    )
-                except Exception as e:
-                    st.error(f"Error generating PDF: {str(e)}")
-                    logging.exception("PDF generation error")
+            st.download_button(
+                label="📄 Export PDF",
+                data=pdf_data,
+                file_name=filename,
+                mime="application/pdf",
+                type="secondary",
+                use_container_width=True,
+                key="pdf_download_nav"
+            )
+        except Exception as e:
+            st.error(f"Error generating PDF: {str(e)}")
+            logging.exception("PDF generation error")
 
     st.markdown("---")
 
@@ -961,109 +1002,49 @@ else:
                         max_age = int(all_ages.max())
                         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
 
-                    # PDF Export Button
-                    export_col1, export_col2 = st.columns([4, 1])
+                    # PDF Export Section
+                    st.markdown("### 📄 Export Census Analysis")
+                    export_col1, export_col2 = st.columns([3, 1])
+                    with export_col1:
+                        # Initialize client_name in session state if not present
+                        if 'client_name' not in st.session_state:
+                            st.session_state.client_name = ''
+
+                        # Client name input - bound directly to session state via key
+                        st.text_input(
+                            "Client name (optional)",
+                            placeholder="Enter client name for PDF",
+                            key="client_name",
+                            help="Client name will appear in the PDF header and filename"
+                        )
+
                     with export_col2:
-                        if st.button("📄 Export PDF", type="secondary", width="stretch", key="pdf_export_upload"):
-                            with st.spinner("Generating PDF..."):
-                                try:
-                                    # Lazy import PDF renderer (requires playwright)
-                                    from pdf_census_renderer import generate_census_analysis_pdf
+                        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Align with input
 
-                                    # Generate chart images
-                                    from visualization_helpers import (
-                                        generate_age_distribution_chart,
-                                        generate_state_distribution_chart,
-                                        generate_family_composition_chart,
-                                        generate_dependent_age_distribution_chart
-                                    )
+                        # Generate PDF data for download button (reuse cached function from nav section)
+                        emp_hash = hash(employees_df.to_json()) if not employees_df.empty else 0
+                        dep_hash = hash(dependents_df.to_json()) if not dependents_df.empty else 0
+                        client_name = st.session_state.get('client_name', '').strip()
+                        db_available = st.session_state.get('db') is not None
+                        ra_hash = hash(tuple(employees_df['rating_area_id'].dropna().tolist())) if 'rating_area_id' in employees_df.columns else 0
 
-                                    chart_images = {}
-                                    try:
-                                        chart_images['age_dist'] = generate_age_distribution_chart(employees_df, return_image=True)
-                                    except Exception:
-                                        chart_images['age_dist'] = None
+                        try:
+                            with st.spinner("Preparing PDF..."):
+                                pdf_data = generate_census_pdf_cached(emp_hash, dep_hash, client_name, db_available, ra_hash)
+                            filename = get_census_pdf_filename(client_name)
 
-                                    try:
-                                        chart_images['state'] = generate_state_distribution_chart(employees_df, return_image=True)
-                                    except Exception:
-                                        chart_images['state'] = None
-
-                                    try:
-                                        chart_images['family_status'] = generate_family_composition_chart(employees_df, return_image=True)
-                                    except Exception:
-                                        chart_images['family_status'] = None
-
-                                    if not dependents_df.empty:
-                                        try:
-                                            chart_images['dependent_age'] = generate_dependent_age_distribution_chart(dependents_df, return_image=True)
-                                        except Exception:
-                                            chart_images['dependent_age'] = None
-
-                                    # Build plan availability data
-                                    plan_availability_df = pd.DataFrame()
-                                    db = st.session_state.get('db')
-                                    if 'rating_area_id' in employees_df.columns and db is not None:
-                                        ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
-                                        ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
-                                        if not ra_counts.empty:
-                                            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
-                                            # Build optimized query that only looks at relevant states/rating areas
-                                            states = ra_counts['state'].unique().tolist()
-                                            rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
-
-                                            query = """
-                                            SELECT
-                                                SUBSTRING(p.hios_plan_id, 6, 2) as state,
-                                                r.rating_area_id,
-                                                COUNT(DISTINCT p.hios_plan_id) as plan_count
-                                            FROM rbis_insurance_plan_20251019202724 p
-                                            JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
-                                            WHERE p.market_coverage = 'Individual'
-                                              AND p.plan_effective_date = '2026-01-01'
-                                              AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
-                                              AND r.rating_area_id IN %s
-                                            GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
-                                            """
-                                            try:
-                                                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
-                                                if not plan_counts_df.empty:
-                                                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
-                                                    plan_availability_df = ra_counts.merge(
-                                                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
-                                                        left_on=['state', 'rating_area_id'],
-                                                        right_on=['state', 'rating_area_num'],
-                                                        how='left'
-                                                    )
-                                                    plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
-                                                    plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
-                                            except Exception:
-                                                pass
-
-                                    # Get client name
-                                    client_name = st.session_state.get('client_name', 'Client')
-
-                                    # Generate PDF
-                                    pdf_buffer = generate_census_analysis_pdf(
-                                        employees_df=employees_df,
-                                        dependents_df=dependents_df,
-                                        plan_availability_df=plan_availability_df,
-                                        client_name=client_name,
-                                        chart_images=chart_images
-                                    )
-
-                                    # Offer download
-                                    st.download_button(
-                                        label="⬇️ Download Census Analysis PDF",
-                                        data=pdf_buffer,
-                                        file_name=f"census_analysis_{client_name.replace(' ', '_')}.pdf",
-                                        mime="application/pdf",
-                                        type="primary",
-                                        key="pdf_download_upload"
-                                    )
-                                except Exception as e:
-                                    st.error(f"Error generating PDF: {str(e)}")
-                                    logging.exception("PDF generation error")
+                            st.download_button(
+                                label="📄 Export PDF",
+                                data=pdf_data,
+                                file_name=filename,
+                                mime="application/pdf",
+                                type="secondary",
+                                use_container_width=True,
+                                key="pdf_download_upload"
+                            )
+                        except Exception as e:
+                            st.error(f"Error generating PDF: {str(e)}")
+                            logging.exception("PDF generation error")
 
                     # Detailed breakdown
                     st.markdown("---")

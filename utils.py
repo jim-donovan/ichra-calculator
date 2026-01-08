@@ -1945,6 +1945,172 @@ class DataFormatter:
         return result
 
 
+class SavingsFormatter:
+    """
+    Standardized formatting for savings/cost comparisons across the app.
+
+    Convention:
+    - Positive values = savings (good) → "$X saved"
+    - Negative values = costs more (bad) → "$X more"
+    - Zero = "no change"
+
+    Usage:
+        from utils import SavingsFormatter
+
+        # Basic formatting
+        SavingsFormatter.format(1500)      # "$1,500 saved"
+        SavingsFormatter.format(-1500)     # "$1,500 more"
+
+        # With percentage
+        SavingsFormatter.format_with_pct(1500, 15.5)  # "$1,500 saved (15.5%)"
+
+        # For ER-only fine print
+        SavingsFormatter.format_er_only(1500)   # "ER only: $1,500 saved"
+
+        # For Streamlit metrics
+        delta, color = SavingsFormatter.for_metric(1500)
+    """
+
+    @staticmethod
+    def format(amount: float, decimals: int = 0) -> str:
+        """
+        Format a savings/cost amount.
+
+        Args:
+            amount: Positive = savings, Negative = costs more
+            decimals: Number of decimal places (default 0)
+
+        Returns:
+            "$X saved", "$X more", or "no change"
+        """
+        if amount > 0:
+            return f"${amount:,.{decimals}f} saved"
+        elif amount < 0:
+            return f"${abs(amount):,.{decimals}f} more"
+        else:
+            return "no change"
+
+    @staticmethod
+    def format_with_pct(amount: float, pct: float, decimals: int = 0) -> str:
+        """
+        Format amount with percentage.
+
+        Args:
+            amount: Positive = savings, Negative = costs more
+            pct: Percentage (will show absolute value)
+            decimals: Number of decimal places for amount
+
+        Returns:
+            "$X saved (Y%)", "$X more (Y%)", or "no change"
+        """
+        if amount > 0:
+            return f"${amount:,.{decimals}f} saved ({abs(pct):.1f}%)"
+        elif amount < 0:
+            return f"${abs(amount):,.{decimals}f} more ({abs(pct):.1f}%)"
+        else:
+            return "no change"
+
+    @staticmethod
+    def format_er_only(amount: float, decimals: int = 0) -> str:
+        """
+        Format for ER-only fine print display.
+
+        Args:
+            amount: Positive = savings, Negative = costs more
+            decimals: Number of decimal places
+
+        Returns:
+            "ER only: $X saved", "ER only: $X more", or "ER only: no change"
+        """
+        if amount > 0:
+            return f"ER only: ${amount:,.{decimals}f} saved"
+        elif amount < 0:
+            return f"ER only: ${abs(amount):,.{decimals}f} more"
+        else:
+            return "ER only: no change"
+
+    @staticmethod
+    def format_short(amount: float, decimals: int = 0) -> str:
+        """
+        Short format without 'saved'/'more' - just the signed amount.
+
+        Args:
+            amount: Positive = savings (shows as-is), Negative = costs more
+            decimals: Number of decimal places
+
+        Returns:
+            "$X" (positive) or "+$X" (negative/costs more)
+        """
+        if amount > 0:
+            return f"${amount:,.{decimals}f}"
+        elif amount < 0:
+            return f"+${abs(amount):,.{decimals}f}"
+        else:
+            return "$0"
+
+    @staticmethod
+    def for_metric(amount: float, decimals: int = 0) -> tuple:
+        """
+        Get delta text and color for Streamlit st.metric().
+
+        Args:
+            amount: Positive = savings, Negative = costs more
+            decimals: Number of decimal places
+
+        Returns:
+            Tuple of (delta_text, delta_color)
+            - Savings: ("$X saved", "normal") - shows green
+            - Costs more: ("$X more", "inverse") - shows red
+        """
+        if amount > 0:
+            return (f"${amount:,.{decimals}f} saved", "normal")
+        elif amount < 0:
+            return (f"${abs(amount):,.{decimals}f} more", "inverse")
+        else:
+            return ("no change", "off")
+
+    @staticmethod
+    def for_metric_with_pct(amount: float, pct: float, decimals: int = 0) -> tuple:
+        """
+        Get delta text with percentage and color for Streamlit st.metric().
+
+        Args:
+            amount: Positive = savings, Negative = costs more
+            pct: Percentage to display
+            decimals: Number of decimal places
+
+        Returns:
+            Tuple of (delta_text, delta_color)
+        """
+        if amount > 0:
+            return (f"{abs(pct):.1f}% saved", "normal")
+        elif amount < 0:
+            return (f"{abs(pct):.1f}% more", "inverse")
+        else:
+            return ("no change", "off")
+
+    @staticmethod
+    def format_comparison(amount: float, label: str = "", decimals: int = 0) -> str:
+        """
+        Format for comparison displays (e.g., "vs Current: $X saved").
+
+        Args:
+            amount: Positive = savings, Negative = costs more
+            label: Optional label (e.g., "vs Current", "vs Renewal")
+            decimals: Number of decimal places
+
+        Returns:
+            "vs Current: $X saved" or "vs Current: $X more"
+        """
+        prefix = f"{label}: " if label else ""
+        if amount > 0:
+            return f"{prefix}${amount:,.{decimals}f} saved"
+        elif amount < 0:
+            return f"{prefix}${abs(amount):,.{decimals}f} more"
+        else:
+            return f"{prefix}no change"
+
+
 class ContributionComparison:
     """Compare current group plan contributions vs ICHRA costs"""
 

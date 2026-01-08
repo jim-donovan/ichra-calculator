@@ -1327,16 +1327,23 @@ with context_cols[3]:
 # Current affordability status (compact display)
 current_status = aff_context.get('current_status', {})
 total_analyzed = current_status.get('affordable_at_current', 0) + current_status.get('needs_increase', 0)
+total_employees = len(census_df) if 'census_df' in dir() else total_analyzed
 if total_analyzed > 0:
     needs_increase_count = current_status.get('needs_increase', 0)
     affordable_count = current_status.get('affordable_at_current', 0)
     affordable_pct = (affordable_count / total_analyzed * 100) if total_analyzed > 0 else 0
 
+    # Note if some employees lack income data
+    missing_income_note = ""
+    if total_analyzed < total_employees:
+        missing_count = total_employees - total_analyzed
+        missing_income_note = f" ({missing_count} employee{'s' if missing_count != 1 else ''} missing income data)"
+
     # Compact status line
     if needs_increase_count > 0:
-        st.warning(f"⚠️ **{needs_increase_count}** of {total_analyzed} employees need contribution increase for affordability")
+        st.warning(f"⚠️ **{needs_increase_count}** of {total_analyzed} employees need contribution increase for affordability{missing_income_note}")
     else:
-        st.success(f"✅ All {total_analyzed} employees meet affordability threshold")
+        st.success(f"✅ All {total_analyzed} employees meet affordability threshold{missing_income_note}")
 
     # Show which employees need increases
     if needs_increase_count > 0:
@@ -1700,71 +1707,47 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
     # Show comparison section if we have ER data
     if current_er_annual > 0 or projected_2026 > 0:
         st.markdown("---")
-        st.markdown("### 💰 Employer cost comparison")
+        st.markdown("### 💰 Employer cost summary")
 
-        compare_cols = st.columns(2)
+        # Row 1: Cost totals
+        cost_cols = st.columns(3)
+        with cost_cols[0]:
+            st.metric("Current ER", f"${current_er_annual:,.0f}/yr" if current_er_annual > 0 else "N/A")
+        with cost_cols[1]:
+            st.metric("Renewal ER", f"${projected_2026:,.0f}/yr" if projected_2026 > 0 else "N/A")
+        with cost_cols[2]:
+            st.metric("Proposed ICHRA", f"${strategy_spend:,.0f}/yr")
 
-        # Column 1: vs Current ER Spend
-        with compare_cols[0]:
+        # Row 2: Savings comparisons
+        from utils import SavingsFormatter
+        savings_cols = st.columns(3)
+
+        # ICHRA vs Current
+        with savings_cols[0]:
             if current_er_annual > 0:
-                diff_er = strategy_spend - current_er_annual
-                pct_er = (diff_er / current_er_annual) * 100
-
-                if diff_er > 0:
-                    st.warning(f"""
-                    **vs Current ER Spend**
-
-                    ⬆️ **+${diff_er:,.0f}/yr** (+{pct_er:.1f}%)
-
-                    ${current_er_annual:,.0f} → ${strategy_spend:,.0f}
-                    """)
-                elif diff_er < 0:
-                    st.success(f"""
-                    **vs Current ER Spend**
-
-                    ⬇️ **-${abs(diff_er):,.0f}/yr** ({pct_er:.1f}%)
-
-                    ${current_er_annual:,.0f} → ${strategy_spend:,.0f}
-                    """)
-                else:
-                    st.info(f"""
-                    **vs Current ER Spend**
-
-                    ↔️ **No change** - ${strategy_spend:,.0f}/yr
-                    """)
+                savings_vs_current = current_er_annual - strategy_spend
+                pct_vs_current = (savings_vs_current / current_er_annual) * 100
+                delta_text, delta_color = SavingsFormatter.for_metric_with_pct(savings_vs_current, pct_vs_current)
+                st.metric("Savings vs Current", f"${abs(savings_vs_current):,.0f}", delta=delta_text, delta_color=delta_color)
             else:
-                st.warning("No ER spend data. Add 'Current ER Monthly' to census.")
+                st.metric("Savings vs Current", "N/A")
 
-        # Column 2: vs Projected 2026 Renewal
-        with compare_cols[1]:
+        # ICHRA vs Renewal
+        with savings_cols[1]:
             if projected_2026 > 0:
-                projected_diff = strategy_spend - projected_2026
-                projected_pct = (projected_diff / projected_2026) * 100
-
-                if projected_diff > 0:
-                    st.error(f"""
-                    **vs 2026 Projected Renewal**
-
-                    ⬆️ **+${projected_diff:,.0f}/yr** (+{projected_pct:.1f}%)
-
-                    ${projected_2026:,.0f} → ${strategy_spend:,.0f}
-                    """)
-                elif projected_diff < 0:
-                    st.success(f"""
-                    **vs 2026 Projected Renewal**
-
-                    ⬇️ **-${abs(projected_diff):,.0f}/yr** ({projected_pct:.1f}%)
-
-                    ${projected_2026:,.0f} → ${strategy_spend:,.0f}
-                    """)
-                else:
-                    st.info(f"""
-                    **vs 2026 Projected Renewal**
-
-                    ↔️ **No change** - ${strategy_spend:,.0f}/yr
-                    """)
+                savings_vs_renewal = projected_2026 - strategy_spend
+                pct_vs_renewal = (savings_vs_renewal / projected_2026) * 100
+                delta_text, delta_color = SavingsFormatter.for_metric_with_pct(savings_vs_renewal, pct_vs_renewal)
+                st.metric("Savings vs Renewal", f"${abs(savings_vs_renewal):,.0f}", delta=delta_text, delta_color=delta_color)
             else:
-                st.warning("No 2026 projection data. Add '2026 Premium' to census.")
+                st.metric("Savings vs Renewal", "N/A")
+
+        # ICHRA Projected (70% take rate)
+        with savings_cols[2]:
+            take_rate = 0.70
+            projected_ichra = strategy_spend * take_rate
+            st.metric("ICHRA Projected (70%)", f"${projected_ichra:,.0f}/yr",
+                     help="Estimated cost assuming 70% of employees enroll in ICHRA")
     if aff_impact:
         st.markdown("---")
         st.markdown("### IRS affordability compliance")
@@ -1782,21 +1765,18 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
             aff_pct = affordable_count / employees_analyzed
             st.progress(aff_pct, text=f"Affordability: {aff_pct*100:.0f}% ({affordable_count}/{employees_analyzed} employees meet 9.96% threshold)")
 
-            # Compact metrics row
-            aff_cols = st.columns(4)
+            # Simplified metrics - focus on strategy outcome
+            aff_cols = st.columns(3)
             with aff_cols[0]:
-                st.metric("Currently affordable", before.get('affordable_count', 0),
-                         help="Employees already meeting affordability threshold")
+                st.metric("Employees affordable", f"{affordable_count}/{employees_analyzed}",
+                         help="Employees meeting IRS 9.96% affordability threshold with this strategy")
             with aff_cols[1]:
-                st.metric("With this strategy", affordable_count,
-                         delta=f"+{delta.get('employees_gained', 0)}" if delta.get('employees_gained', 0) > 0 else None)
-            with aff_cols[2]:
-                st.metric("Still need adjustment", unaffordable_count,
+                st.metric("Need higher contribution", unaffordable_count if unaffordable_count > 0 else "None",
                          delta_color="inverse" if unaffordable_count > 0 else "normal")
-            with aff_cols[3]:
+            with aff_cols[2]:
                 gap_annual = after.get('total_gap', 0)
-                st.metric("Remaining gap", f"${gap_annual:,.0f}/yr" if gap_annual > 0 else "$0",
-                         help="Additional annual spend needed to reach 100% affordability")
+                st.metric("Cost to reach 100%", f"${gap_annual:,.0f}/yr" if gap_annual > 0 else "$0",
+                         help="Additional annual spend needed for all employees to meet affordability")
 
             if aff_pct >= 1.0:
                 st.success("All employees meet IRS affordability threshold")
@@ -1869,11 +1849,15 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                                         emp_id = emp.get('employee_id')
                                         if emp_id and emp_id in emp_contribs:
                                             old_contrib = emp_contribs[emp_id].get('monthly_contribution', 0)
-                                            new_contrib = emp.get('min_affordable', old_contrib)
+                                            min_needed = emp.get('min_affordable', old_contrib)
+                                            gap = emp.get('gap', 0)
+                                            new_contrib = min_needed
                                             # Update contribution
                                             emp_contribs[emp_id]['monthly_contribution'] = round(new_contrib, 2)
                                             emp_contribs[emp_id]['annual_contribution'] = round(new_contrib * 12, 2)
                                             emp_contribs[emp_id]['adjusted_for_affordability'] = True
+                                            emp_contribs[emp_id]['min_needed'] = round(min_needed, 2)
+                                            emp_contribs[emp_id]['original_gap'] = round(gap, 2)
                                             # Update running total
                                             adjusted_total = adjusted_total - old_contrib + new_contrib
 
@@ -1908,12 +1892,15 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                                         emp_id = emp.get('employee_id')
                                         if emp_id and emp_id in emp_contribs:
                                             old_contrib = emp_contribs[emp_id].get('monthly_contribution', 0)
-                                            min_contrib = emp.get('min_affordable', old_contrib)
-                                            new_contrib = min_contrib * buffer_mult
+                                            min_needed = emp.get('min_affordable', old_contrib)
+                                            gap = emp.get('gap', 0)
+                                            new_contrib = min_needed * buffer_mult
                                             # Update contribution
                                             emp_contribs[emp_id]['monthly_contribution'] = round(new_contrib, 2)
                                             emp_contribs[emp_id]['annual_contribution'] = round(new_contrib * 12, 2)
                                             emp_contribs[emp_id]['adjusted_for_affordability'] = True
+                                            emp_contribs[emp_id]['min_needed'] = round(min_needed, 2)
+                                            emp_contribs[emp_id]['original_gap'] = round(gap, 2)
                                             emp_contribs[emp_id]['buffer_applied'] = buffer_pct
                                             # Update running total
                                             adjusted_total = adjusted_total - old_contrib + new_contrib
@@ -2091,8 +2078,27 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
         emp_contribs = result.get('employee_contributions', {})
         if emp_contribs:
             export_rows = []
+            # Check if any employee has affordability adjustments
+            has_affordability_data = any(
+                data.get('adjusted_for_affordability') for data in emp_contribs.values()
+            )
+            has_buffer = result.get('buffer_applied', 0) > 0
+
+
+            # Build detailed strategy string with config
+            strategy_type = result['strategy_type']
+            config = result.get('config', {})
+            if strategy_type == 'percentage_lcsp':
+                strategy_str = f"percentage_lcsp_{int(config.get('lcsp_percentage', 0))}"
+            elif strategy_type == 'base_age_curve':
+                strategy_str = f"base_age_curve_{int(config.get('base_contribution', 0))}"
+            elif strategy_type == 'fixed_age_tiers':
+                strategy_str = "fixed_age_tiers"
+            else:
+                strategy_str = strategy_type
+
             for emp_id, data in emp_contribs.items():
-                export_rows.append({
+                row = {
                     'Employee ID': emp_id,
                     'Age': data.get('age', ''),
                     'State': data.get('state', ''),
@@ -2101,18 +2107,50 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                     'Location Adjustment': data.get('location_adjustment', 0),
                     'Monthly Contribution': data['monthly_contribution'],
                     'Annual Contribution': data['annual_contribution'],
-                    'Strategy': result['strategy_type']
-                })
+                    'Strategy': strategy_str
+                }
+
+                # Add affordability columns if adjustments were made
+                if has_affordability_data:
+                    if data.get('adjusted_for_affordability'):
+                        row['Original Amount'] = data.get('min_needed', '')
+                        row['Original Gap'] = data.get('original_gap', '')
+                        row['Adjusted'] = 'Yes'
+                        if has_buffer:
+                            row['Buffer %'] = data.get('buffer_applied', '')
+                    else:
+                        row['Original Amount'] = ''
+                        row['Original Gap'] = ''
+                        row['Adjusted'] = 'No'
+                        if has_buffer:
+                            row['Buffer %'] = ''
+
+                export_rows.append(row)
 
             export_df = pd.DataFrame(export_rows)
             csv_data = export_df.to_csv(index=False)
 
+            # Use dynamic key to prevent caching issues
+            adjusted_suffix = "_adjusted" if has_affordability_data else ""
+            buffer_suffix = f"_buffer{result.get('buffer_applied', 0)}" if has_buffer else ""
+
+            # Build filename with client name and timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            client_name = st.session_state.get('client_name', '').strip()
+            base_name = f"ichra_{result['strategy_type']}{adjusted_suffix}{buffer_suffix}_contributions"
+            if client_name:
+                safe_name = client_name.replace(' ', '_').replace('/', '-')
+                csv_filename = f"{base_name}_{safe_name}_{timestamp}.csv"
+            else:
+                csv_filename = f"{base_name}_{timestamp}.csv"
+
             st.download_button(
                 label="Download CSV",
                 data=csv_data,
-                file_name=f"ichra_{result['strategy_type']}_contributions.csv",
+                file_name=csv_filename,
                 mime="text/csv",
-                key="strategy_csv_export"
+                key=f"strategy_csv_export_{has_affordability_data}_{has_buffer}_{len(export_rows)}"
             )
 
     with action_cols[2]:
@@ -2570,10 +2608,21 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
                     # Strategy name for filename
                     strategy_name = settings.get('strategy_applied', 'contribution')
 
+                    # Build filename with client name and timestamp
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    client_name = st.session_state.get('client_name', '').strip()
+                    base_name = f"ichra_{strategy_name}_contributions"
+                    if client_name:
+                        safe_name = client_name.replace(' ', '_').replace('/', '-')
+                        csv_filename = f"{base_name}_{safe_name}_{timestamp}.csv"
+                    else:
+                        csv_filename = f"{base_name}_{timestamp}.csv"
+
                     st.download_button(
                         label="Download full contribution schedule (CSV)",
                         data=csv_data,
-                        file_name=f"ichra_{strategy_name}_contributions.csv",
+                        file_name=csv_filename,
                         mime="text/csv",
                         key=f"export_csv_{idx}"
                     )

@@ -739,10 +739,21 @@ if results and 'total_monthly' in results:
         })
 
         csv_data = detail_df.to_csv(index=False)
+
+        # Build filename with client name and timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        client_name = st.session_state.get('client_name', '').strip()
+        if client_name:
+            safe_name = client_name.replace(' ', '_').replace('/', '-')
+            csv_filename = f"lcsp_silver_detail_{safe_name}_{timestamp}.csv"
+        else:
+            csv_filename = f"lcsp_silver_detail_{timestamp}.csv"
+
         st.download_button(
             label="📥 Download full Silver LCSP detail CSV",
             data=csv_data,
-            file_name="lcsp_silver_detail.csv",
+            file_name=csv_filename,
             mime="text/csv",
             type="secondary"
         )

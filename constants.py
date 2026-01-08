@@ -263,7 +263,6 @@ COMPARISON_BENEFIT_ROWS = [
     ('pcp_copay', 'PCP Visit Copay', True),
     ('specialist_copay', 'Specialist Copay', True),
     ('er_copay', 'ER Visit Copay', True),
-    ('urgent_care_copay', 'Urgent Care Copay', True),
     ('generic_rx_copay', 'Generic Rx Copay', True),
     ('preferred_rx_copay', 'Preferred Brand Rx Copay', True),
     ('specialty_rx_copay', 'Specialty Rx Copay', True),

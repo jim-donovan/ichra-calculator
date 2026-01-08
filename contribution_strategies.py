@@ -647,15 +647,12 @@ def calculate_affordability_impact(
     lcsp_data = affordability_context.get('lcsp_data', {}).get('by_employee', {})
     current_status = affordability_context.get('current_status', {})
 
-    # Before metrics (from context)
-    before = {
-        'affordable_count': current_status.get('affordable_at_current', 0),
-        'affordable_pct': 0,
-        'annual_spend': current_status.get('current_er_spend_annual', 0),
-        'total_gap': current_status.get('total_gap_annual', 0),
-    }
+    # Calculate BEFORE and AFTER using the SAME population (employees in strategy with income data)
+    # This ensures apples-to-apples comparison
+    before_affordable_count = 0
+    before_total_gap = 0.0
+    before_spend = 0.0
 
-    # Calculate after metrics
     affordable_count = 0
     total_gap = 0.0
     total_proposed_spend = strategy_result.get('total_annual', 0)
@@ -667,6 +664,8 @@ def calculate_affordability_impact(
         monthly_income = emp_lcsp_data.get('monthly_income', 0)
         lcsp_premium = contrib.get('lcsp_ee_rate', 0) or emp_lcsp_data.get('lcsp', 0)
         monthly_contribution = contrib.get('monthly_contribution', 0)
+        # Get current ER contribution from lcsp_data context (original affordability analysis)
+        current_er_contribution = emp_lcsp_data.get('current_er_contribution', 0)
 
         # Skip employees without income data for affordability calculation
         if not monthly_income or monthly_income <= 0:
@@ -680,22 +679,27 @@ def calculate_affordability_impact(
 
         employees_analyzed += 1
 
-        # Calculate employee's out-of-pocket cost
-        employee_cost = max(0, lcsp_premium - monthly_contribution)
-
         # Max employee should pay (9.96% of income)
         max_employee_contribution = monthly_income * threshold
 
-        # Is it affordable?
-        is_affordable = employee_cost <= max_employee_contribution
+        # BEFORE: Calculate affordability with current ER contribution
+        before_employee_cost = max(0, lcsp_premium - current_er_contribution)
+        before_is_affordable = before_employee_cost <= max_employee_contribution
+        if before_is_affordable:
+            before_affordable_count += 1
+        else:
+            before_gap = before_employee_cost - max_employee_contribution
+            before_total_gap += before_gap * 12
+        before_spend += current_er_contribution * 12
 
-        # Affordability margin (positive = room to spare, negative = shortfall)
+        # AFTER: Calculate affordability with proposed contribution
+        employee_cost = max(0, lcsp_premium - monthly_contribution)
+        is_affordable = employee_cost <= max_employee_contribution
         affordability_margin = max_employee_contribution - employee_cost
 
         if is_affordable:
             affordable_count += 1
         else:
-            # Gap is how much more ER needs to contribute
             gap = employee_cost - max_employee_contribution
             total_gap += gap * 12  # Annualize
 
@@ -708,11 +712,17 @@ def calculate_affordability_impact(
             'monthly_contribution': round(monthly_contribution, 2),
             'lcsp_premium': round(lcsp_premium, 2),
             'monthly_income': round(monthly_income, 2),
+            'before_is_affordable': before_is_affordable,
         }
 
-    # Calculate percentages
-    before_total = before.get('affordable_count', 0) + current_status.get('needs_increase', 0)
-    before['affordable_pct'] = (before['affordable_count'] / before_total * 100) if before_total > 0 else 0
+    # Before metrics (recalculated for same population)
+    before = {
+        'affordable_count': before_affordable_count,
+        'affordable_pct': (before_affordable_count / employees_analyzed * 100) if employees_analyzed > 0 else 0,
+        'annual_spend': before_spend,
+        'total_gap': round(before_total_gap, 2),
+        'employees_analyzed': employees_analyzed,
+    }
 
     after = {
         'affordable_count': affordable_count,
