@@ -39,7 +39,6 @@ class CurrentEmployerPlan:
     pcp_copay: Optional[float] = 25.0
     specialist_copay: Optional[float] = 50.0
     er_copay: Optional[float] = None  # Often Ded + Coinsurance
-    urgent_care_copay: Optional[float] = None
     generic_rx_copay: Optional[float] = 10.0
     preferred_rx_copay: Optional[float] = None
     specialty_rx_copay: Optional[float] = None
@@ -91,7 +90,6 @@ class MarketplacePlanDetails:
     pcp_copay: Optional[float] = None
     specialist_copay: Optional[float] = None
     er_copay: Optional[float] = None
-    urgent_care_copay: Optional[float] = None
     generic_rx_copay: Optional[float] = None
     preferred_rx_copay: Optional[float] = None
     specialty_rx_copay: Optional[float] = None
@@ -135,7 +133,7 @@ class ComparisonLocation:
 @dataclass
 class ComparisonFilters:
     """Filter settings for marketplace plan selection."""
-    metal_levels: List[str] = field(default_factory=lambda: ["Bronze", "Silver", "Gold"])
+    metal_levels: List[str] = field(default_factory=lambda: ["Bronze", "Expanded Bronze", "Silver", "Gold", "Platinum", "Catastrophic"])
     plan_types: List[str] = field(default_factory=lambda: ["HMO", "PPO", "EPO", "POS"])
     hsa_only: bool = False
     max_deductible: Optional[float] = None

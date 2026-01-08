@@ -69,6 +69,71 @@ class PlanQueries:
         return result
 
     @staticmethod
+    def get_plan_counts_by_metal_for_census(db: DatabaseConnection,
+                                             state_rating_areas: List[tuple]) -> Dict[str, int]:
+        """
+        Get count of available marketplace plans by metal level for specific rating areas.
+
+        Args:
+            db: Database connection
+            state_rating_areas: List of (state_code, rating_area_id) tuples from census
+                e.g., [('WI', 12), ('IL', 5), ('WI', 3)]
+
+        Returns:
+            Dict mapping metal level to deduplicated plan count, e.g.:
+            {'Bronze': 45, 'Silver': 38, 'Gold': 22}
+            Note: Bronze count includes both standard Bronze and Expanded Bronze
+        """
+        if not state_rating_areas:
+            return {'Bronze': 0, 'Silver': 0, 'Gold': 0}
+
+        # Build WHERE clause for each state/rating_area combination
+        # We need plans that have rates in ANY of the census rating areas
+        conditions = []
+        params = []
+        for state_code, rating_area_id in state_rating_areas:
+            conditions.append("(SUBSTRING(p.hios_plan_id FROM 6 FOR 2) = %s AND br.rating_area_numeric = %s)")
+            params.extend([state_code, rating_area_id])
+
+        where_clause = " OR ".join(conditions)
+
+        query = f"""
+        SELECT
+            p.level_of_coverage as metal_level,
+            COUNT(DISTINCT p.hios_plan_id) as plan_count
+        FROM rbis_insurance_plan_20251019202724 p
+        JOIN rbis_insurance_plan_base_rates_20251019202724 br
+            ON p.hios_plan_id = br.plan_id
+            AND br.age = '21'
+            AND br.rate_effective_date = '2026-01-01'
+        WHERE p.market_coverage = 'Individual'
+          AND p.plan_effective_date = '2026-01-01'
+          AND p.level_of_coverage IN ('Bronze', 'Expanded Bronze', 'Silver', 'Gold')
+          AND ({where_clause})
+        GROUP BY p.level_of_coverage
+        ORDER BY
+            CASE p.level_of_coverage
+                WHEN 'Bronze' THEN 1
+                WHEN 'Expanded Bronze' THEN 2
+                WHEN 'Silver' THEN 3
+                WHEN 'Gold' THEN 4
+            END
+        """
+        df = db.execute_query(query, tuple(params))
+
+        # Combine Bronze and Expanded Bronze counts
+        result = {'Bronze': 0, 'Silver': 0, 'Gold': 0}
+        for _, row in df.iterrows():
+            metal = row['metal_level']
+            count = int(row['plan_count'])
+            if metal in ('Bronze', 'Expanded Bronze'):
+                result['Bronze'] += count
+            elif metal in result:
+                result[metal] = count
+
+        return result
+
+    @staticmethod
     def get_plans_by_filters(db: DatabaseConnection, state_code: Optional[str] = None,
                              state_codes: Optional[List[str]] = None,
                              metal_level: Optional[str] = None,

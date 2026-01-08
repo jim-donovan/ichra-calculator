@@ -84,8 +84,45 @@ class EmployerSummaryData:
     savings_vs_renewal_er: float = 0.0  # Renewal ER - ICHRA (positive = savings)
     savings_vs_renewal_er_pct: float = 0.0
 
+    savings_vs_current_total: float = 0.0  # Current Total - ICHRA
+    savings_vs_current_total_pct: float = 0.0
+
     savings_vs_renewal_total: float = 0.0  # Renewal Total - ICHRA
     savings_vs_renewal_total_pct: float = 0.0
+
+    # ICHRA projected at 70% take rate
+    ichra_projected_70: float = 0.0
+    savings_ichra_70_vs_renewal: float = 0.0  # Renewal Total - ICHRA 70%
+    savings_ichra_70_vs_renewal_pct: float = 0.0
+
+    # Affordability metrics
+    has_affordability_data: bool = False
+    affordability_adjusted: bool = False  # True if contributions were adjusted to meet threshold
+    employees_analyzed: int = 0  # Employees with income data
+    employees_affordable: int = 0  # Meeting 9.96% threshold
+    employees_affordable_pct: float = 0.0
+    employees_needing_increase: int = 0
+    affordability_gap_annual: float = 0.0  # Additional cost for 100% compliance
+
+
+def _savings_format(amount, decimals=0):
+    """Jinja2 filter for consistent savings formatting."""
+    if amount > 0:
+        return f"${amount:,.{decimals}f} saved"
+    elif amount < 0:
+        return f"${abs(amount):,.{decimals}f} more"
+    else:
+        return "no change"
+
+
+def _savings_er_only(amount, decimals=0):
+    """Jinja2 filter for ER-only fine print."""
+    if amount > 0:
+        return f"ER only: ${amount:,.{decimals}f} saved"
+    elif amount < 0:
+        return f"ER only: ${abs(amount):,.{decimals}f} more"
+    else:
+        return "ER only: no change"
 
 
 class EmployerSummaryPDFRenderer:
@@ -99,6 +136,9 @@ class EmployerSummaryPDFRenderer:
             loader=FileSystemLoader(str(self.TEMPLATE_DIR)),
             autoescape=False  # We control the HTML, no XSS risk
         )
+        # Add custom filters for savings formatting
+        self.env.filters['savings_format'] = _savings_format
+        self.env.filters['savings_er_only'] = _savings_er_only
 
     def generate(self, data: EmployerSummaryData) -> BytesIO:
         """
@@ -178,7 +218,8 @@ def build_employer_summary_data(
     strategy_results: dict,
     contrib_totals: dict,
     renewal_data: dict,
-    client_name: str = ""
+    client_name: str = "",
+    affordability_impact: dict = None
 ) -> EmployerSummaryData:
     """
     Build EmployerSummaryData from session state data.
@@ -188,6 +229,8 @@ def build_employer_summary_data(
         contrib_totals: Contribution totals from ContributionComparison.aggregate_contribution_totals()
         renewal_data: Dict with renewal_total_annual, projected_er_annual, projected_ee_annual
         client_name: Client/company name
+        affordability_impact: Optional dict from calculate_affordability_impact() with:
+            - after: {affordable_count, affordable_pct, employees_analyzed, total_gap}
 
     Returns:
         EmployerSummaryData instance
@@ -241,12 +284,42 @@ def build_employer_summary_data(
     else:
         data.savings_vs_renewal_er_pct = 0
 
-    # 3. vs Renewal Total (positive = ICHRA saves)
+    # 3. vs Current Total (positive = ICHRA saves)
+    data.savings_vs_current_total = data.current_total_annual - data.proposed_ichra_annual
+    if data.current_total_annual > 0:
+        data.savings_vs_current_total_pct = (data.savings_vs_current_total / data.current_total_annual) * 100
+    else:
+        data.savings_vs_current_total_pct = 0
+
+    # 4. vs Renewal Total (positive = ICHRA saves)
     data.savings_vs_renewal_total = data.renewal_total_annual - data.proposed_ichra_annual
     if data.renewal_total_annual > 0:
         data.savings_vs_renewal_total_pct = (data.savings_vs_renewal_total / data.renewal_total_annual) * 100
     else:
         data.savings_vs_renewal_total_pct = 0
+
+    # 5. ICHRA projected at 70% take rate
+    data.ichra_projected_70 = data.proposed_ichra_annual * 0.70
+
+    # 6. Savings: ICHRA 70% vs Renewal Total
+    data.savings_ichra_70_vs_renewal = data.renewal_total_annual - data.ichra_projected_70
+    if data.renewal_total_annual > 0:
+        data.savings_ichra_70_vs_renewal_pct = (data.savings_ichra_70_vs_renewal / data.renewal_total_annual) * 100
+    else:
+        data.savings_ichra_70_vs_renewal_pct = 0
+
+    # 7. Affordability metrics (if provided)
+    if affordability_impact:
+        after = affordability_impact.get('after', {})
+        data.has_affordability_data = True
+        data.employees_analyzed = after.get('employees_analyzed', 0)
+        data.employees_affordable = after.get('affordable_count', 0)
+        data.employees_affordable_pct = after.get('affordable_pct', 0)
+        data.employees_needing_increase = data.employees_analyzed - data.employees_affordable
+        data.affordability_gap_annual = after.get('total_gap', 0)
+
+        # Check if contributions were already adjusted to meet affordability
+        data.affordability_adjusted = result.get('affordability_adjusted', False)
 
     return data
 
@@ -255,7 +328,8 @@ def generate_employer_summary_pdf(
     strategy_results: dict,
     contrib_totals: dict,
     renewal_data: dict,
-    client_name: str = ""
+    client_name: str = "",
+    affordability_impact: dict = None
 ) -> BytesIO:
     """
     Convenience function to generate employer summary PDF.
@@ -265,6 +339,7 @@ def generate_employer_summary_pdf(
         contrib_totals: Contribution totals
         renewal_data: Renewal cost data
         client_name: Client/company name
+        affordability_impact: Optional affordability metrics
 
     Returns:
         BytesIO buffer containing the PDF
@@ -273,7 +348,8 @@ def generate_employer_summary_pdf(
         strategy_results=strategy_results,
         contrib_totals=contrib_totals,
         renewal_data=renewal_data,
-        client_name=client_name
+        client_name=client_name,
+        affordability_impact=affordability_impact
     )
 
     renderer = EmployerSummaryPDFRenderer()

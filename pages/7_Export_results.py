@@ -545,10 +545,19 @@ with col1:
         employee_export_df = pd.DataFrame(employee_export)
         csv = employee_export_df.to_csv(index=False)
 
+        # Build filename with client name and timestamp
+        timestamp = datetime.now().strftime(DATE_FORMAT)
+        client_name = st.session_state.get('client_name', '').strip()
+        if client_name:
+            safe_name = client_name.replace(' ', '_').replace('/', '-')
+            csv_filename = f"{EXPORT_FILE_PREFIX}_census_{safe_name}_{timestamp}.csv"
+        else:
+            csv_filename = f"{EXPORT_FILE_PREFIX}_census_{timestamp}.csv"
+
         st.download_button(
             label="📥 Download census CSV",
             data=csv,
-            file_name=f"{EXPORT_FILE_PREFIX}_census_{datetime.now().strftime(DATE_FORMAT)}.csv",
+            file_name=csv_filename,
             mime="text/csv",
             key="census_export"
         )
@@ -619,10 +628,19 @@ with col2:
         summary_df = pd.DataFrame(summary_rows)
         csv = summary_df.to_csv(index=False)
 
+        # Build filename with client name and timestamp
+        timestamp = datetime.now().strftime(DATE_FORMAT)
+        client_name = st.session_state.get('client_name', '').strip()
+        if client_name:
+            safe_name = client_name.replace(' ', '_').replace('/', '-')
+            csv_filename = f"{EXPORT_FILE_PREFIX}_summary_{safe_name}_{timestamp}.csv"
+        else:
+            csv_filename = f"{EXPORT_FILE_PREFIX}_summary_{timestamp}.csv"
+
         st.download_button(
             label="📥 Download summary CSV",
             data=csv,
-            file_name=f"{EXPORT_FILE_PREFIX}_summary_{datetime.now().strftime(DATE_FORMAT)}.csv",
+            file_name=csv_filename,
             mime="text/csv",
             key="summary_export"
         )
@@ -635,10 +653,19 @@ if dependents_df is not None and not dependents_df.empty:
     if st.button("Generate dependents export"):
         csv = dependents_df.to_csv(index=False)
 
+        # Build filename with client name and timestamp
+        timestamp = datetime.now().strftime(DATE_FORMAT)
+        client_name = st.session_state.get('client_name', '').strip()
+        if client_name:
+            safe_name = client_name.replace(' ', '_').replace('/', '-')
+            csv_filename = f"{EXPORT_FILE_PREFIX}_dependents_{safe_name}_{timestamp}.csv"
+        else:
+            csv_filename = f"{EXPORT_FILE_PREFIX}_dependents_{timestamp}.csv"
+
         st.download_button(
             label="📥 Download dependents CSV",
             data=csv,
-            file_name=f"{EXPORT_FILE_PREFIX}_dependents_{datetime.now().strftime(DATE_FORMAT)}.csv",
+            file_name=csv_filename,
             mime="text/csv",
             key="dependents_export"
         )
