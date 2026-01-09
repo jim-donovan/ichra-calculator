@@ -245,8 +245,8 @@ def init_session_state():
         default_location = ComparisonLocation()
         census_df = st.session_state.get('census_df')
         if census_df is not None and not census_df.empty:
-            # Find the most populated ZIP code
-            zip_col = 'Home Zip' if 'Home Zip' in census_df.columns else 'zip' if 'zip' in census_df.columns else None
+            # Find the most populated ZIP code (census stores as 'zip_code')
+            zip_col = 'zip_code' if 'zip_code' in census_df.columns else 'Home Zip' if 'Home Zip' in census_df.columns else None
             if zip_col and zip_col in census_df.columns:
                 zip_counts = census_df[zip_col].value_counts()
                 if not zip_counts.empty:
@@ -997,7 +997,7 @@ def render_stage_2_marketplace_selection():
     census_zip_hint = None
     census_df = st.session_state.get('census_df')
     if census_df is not None and not census_df.empty:
-        zip_col = 'Home Zip' if 'Home Zip' in census_df.columns else 'zip' if 'zip' in census_df.columns else None
+        zip_col = 'zip_code' if 'zip_code' in census_df.columns else 'Home Zip' if 'Home Zip' in census_df.columns else None
         if zip_col and zip_col in census_df.columns:
             zip_counts = census_df[zip_col].value_counts()
             if not zip_counts.empty:
@@ -2310,6 +2310,19 @@ def main():
     """Main page function."""
     # Initialize session state
     init_session_state()
+
+    # Sidebar: Client name for exports
+    with st.sidebar:
+        st.markdown("**📋 Client Name**")
+        if 'client_name' not in st.session_state:
+            st.session_state.client_name = ''
+        st.text_input(
+            "Client name",
+            placeholder="Enter client name",
+            key="client_name",
+            help="Used in export filenames",
+            label_visibility="collapsed"
+        )
 
     # Page header
     st.markdown('<p class="page-header">Plan Comparison Tool</p>', unsafe_allow_html=True)

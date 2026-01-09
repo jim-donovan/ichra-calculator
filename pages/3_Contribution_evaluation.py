@@ -59,6 +59,19 @@ logger = logging.getLogger(__name__)
 # Page config
 st.set_page_config(page_title="Contribution Evaluation", page_icon="💰", layout="wide")
 
+# Sidebar: Client name for exports
+with st.sidebar:
+    st.markdown("**📋 Client Name**")
+    if 'client_name' not in st.session_state:
+        st.session_state.client_name = ''
+    st.text_input(
+        "Client name",
+        placeholder="Enter client name",
+        key="client_name",
+        help="Used in export filenames",
+        label_visibility="collapsed"
+    )
+
 # Scroll fix CSS removed - was causing button interaction issues
 
 # =============================================================================

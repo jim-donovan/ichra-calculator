@@ -570,8 +570,8 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
     if dashboard_config and 'cooperative_ratio' in dashboard_config:
         cooperative_ratio = dashboard_config['cooperative_ratio']
 
-    # Load cooperative rate table from database
-    coop_rates_df = load_cooperative_rate_table(db)
+    # Load cooperative rate table from database (cached)
+    coop_rates_df = load_cooperative_rate_table(_db_available=db is not None)
 
     data.tier_costs = calculate_tier_costs(
         census_df, contribution_analysis, db,
@@ -811,8 +811,10 @@ def calculate_tier_costs(census_df: pd.DataFrame, contribution_analysis: Dict = 
     return tier_costs
 
 
-def load_cooperative_rate_table(db: DatabaseConnection = None) -> pd.DataFrame:
+@st.cache_data(show_spinner=False, ttl=3600)  # Cache for 1 hour
+def load_cooperative_rate_table(_db_available: bool = False) -> pd.DataFrame:
     """Load the HAS (Health Access Solutions) cooperative rate table from database."""
+    db = st.session_state.get('db')
     if db is None:
         return pd.DataFrame()
 
@@ -1023,8 +1025,10 @@ PREVENTIVE_CARE_RATE_WITH_DPC = 124.0
 PREVENTIVE_CARE_RATE_WITHOUT_DPC = 107.0
 
 
-def load_sedera_rate_table(db: DatabaseConnection = None) -> pd.DataFrame:
+@st.cache_data(show_spinner=False, ttl=3600)  # Cache for 1 hour
+def load_sedera_rate_table(_db_available: bool = False) -> pd.DataFrame:
     """Load Sedera rates from sedera_rates_with_dpc table."""
+    db = st.session_state.get('db')
     if db is None:
         return pd.DataFrame()
 
@@ -2512,15 +2516,15 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     }
     tiers = list(tier_info.keys())
 
-    # Load HAS rates and calculate totals
-    coop_rates_df = load_cooperative_rate_table(db)
+    # Load HAS rates and calculate totals (cached)
+    coop_rates_df = load_cooperative_rate_table(_db_available=db is not None)
     hap_totals = calculate_hap_totals(census_df, coop_rates_df)
 
-    # Load Sedera rates if enabled
+    # Load Sedera rates if enabled (cached)
     sedera_rates_df = None
     sedera_totals = {}
     if config['sedera_enabled'] and config['sedera_iuas']:
-        sedera_rates_df = load_sedera_rate_table(db)
+        sedera_rates_df = load_sedera_rate_table(_db_available=db is not None)
         sedera_totals = calculate_sedera_totals(census_df, sedera_rates_df, config['sedera_iuas'])
 
     # Build list of plan columns based on configuration
@@ -3060,8 +3064,8 @@ def render_age_bracket_table(data: DashboardData, db: DatabaseConnection = None,
     <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Individual rates by age group (excludes family multipliers)</p>
     """, unsafe_allow_html=True)
 
-    # Calculate age bracket costs
-    coop_rates_df = load_cooperative_rate_table(db)
+    # Calculate age bracket costs (cached)
+    coop_rates_df = load_cooperative_rate_table(_db_available=db is not None)
     bracket_costs = calculate_age_bracket_costs(
         census_df,
         multi_metal_results=data.multi_metal_results,
@@ -3984,9 +3988,22 @@ if db_health_issues:
                 st.markdown(f"- {issue}")
 
 # =============================================================================
-# SIDEBAR: Scenario Settings (User-Adjustable)
+# SIDEBAR: Client Name & Scenario Settings
 # =============================================================================
 with st.sidebar:
+    # Client name input for export filenames
+    st.markdown("**📋 Client Name**")
+    if 'client_name' not in st.session_state:
+        st.session_state.client_name = ''
+    st.text_input(
+        "Client name",
+        placeholder="Enter client name",
+        key="client_name",
+        help="Used in export filenames and proposal headers",
+        label_visibility="collapsed"
+    )
+    st.markdown("---")
+
     with st.expander("⚙️ Scenario Settings", expanded=False):
         st.markdown("**Adoption Rate Assumptions**")
         st.caption("Estimate how employees will choose their coverage")

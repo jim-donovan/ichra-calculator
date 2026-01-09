@@ -115,11 +115,25 @@ else:
         col1, col2 = st.columns(2)
 
         with col1:
-            client_name_raw = st.text_input("Client/company name", value="ABC Company", max_chars=100)
+            # Initialize client_name in session state if not present
+            if 'client_name' not in st.session_state:
+                st.session_state.client_name = ''
+
+            # Client name input - synced with session state for consistent filenames
+            client_name_raw = st.text_input(
+                "Client/company name",
+                value=st.session_state.get('client_name', '') or "ABC Company",
+                max_chars=100,
+                help="Used in PDF header and all export filenames"
+            )
             consultant_name_raw = st.text_input("Consultant name", value="Your Name", max_chars=100)
+
             # Sanitize inputs for safe PDF generation
             client_name = sanitize_text_input(client_name_raw)
             consultant_name = sanitize_text_input(consultant_name_raw)
+
+            # Save to session state for other pages and exports
+            st.session_state.client_name = client_name
 
         with col2:
             include_employee_detail = st.checkbox(

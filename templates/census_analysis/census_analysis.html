@@ -21,16 +21,22 @@
             background: white;
         }
 
+        @page {
+            size: letter portrait;
+            margin: 0;
+        }
+
         .page {
             width: 8.5in;
-            min-height: 11in;
+            min-height: 10in;  /* Leave room for footer */
             padding: 0.5in;
-            page-break-after: always;
+            padding-bottom: 0.6in;  /* Extra padding for footer space */
             background: white;
+            break-after: page;
         }
 
         .page:last-child {
-            page-break-after: avoid;
+            break-after: avoid;
         }
 
         /* Header */

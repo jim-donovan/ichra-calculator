@@ -123,13 +123,18 @@ st.subheader("📋 Client information")
 col1, col2 = st.columns(2)
 
 with col1:
+    # Initialize from main client_name if available, fallback to proposal_client_name
+    default_client = st.session_state.get('client_name', '') or st.session_state.get('proposal_client_name', '') or 'ABC Company'
+
     client_name = st.text_input(
         "Client/company name",
-        value=st.session_state.get('proposal_client_name', 'ABC Company'),
-        help="This will appear on the cover slide",
+        value=default_client,
+        help="This will appear on the cover slide and all export filenames",
         key="client_name_input"
     )
+    # Sync to both session state keys for consistency across pages
     st.session_state.proposal_client_name = client_name
+    st.session_state.client_name = client_name
 
     consultant_name = st.text_input(
         "Consultant name",

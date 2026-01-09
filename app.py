@@ -146,6 +146,19 @@ def main():
     else:
         st.sidebar.info("No census loaded")
 
+    # Client name for exports
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Client name")
+    if 'client_name' not in st.session_state:
+        st.session_state.client_name = ''
+    st.sidebar.text_input(
+        "Client name",
+        placeholder="Enter client name",
+        key="client_name",
+        help="Used in all export filenames",
+        label_visibility="collapsed"
+    )
+
     # Test database connection
     st.sidebar.markdown("---")
     if st.sidebar.button("🔌 Test database connection"):

@@ -21,11 +21,13 @@ from constants import FAMILY_STATUS_CODES
 # PDF renderer imported lazily when needed (requires playwright)
 
 
-# Cached PDF generation function (must be at module level for st.cache_data)
+# PDF template version - increment to invalidate cache when template changes
+_PDF_TEMPLATE_VERSION = 3
+
+# Cache expensive chart generation separately (must be at module level for st.cache_data)
 @st.cache_data(show_spinner=False)
-def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_name, _db_available, _ra_data_hash):
-    """Generate PDF and cache based on data hash. Returns PDF bytes only (filename generated separately)."""
-    from pdf_census_renderer import generate_census_analysis_pdf
+def _generate_charts_cached(_emp_hash, _dep_hash):
+    """Cache expensive chart generation separately from client_name."""
     from visualization_helpers import (
         generate_age_distribution_chart,
         generate_state_distribution_chart,
@@ -33,7 +35,6 @@ def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_n
         generate_dependent_age_distribution_chart
     )
 
-    # Reconstruct dataframes from session state
     emp_df = st.session_state.get('census_df', pd.DataFrame())
     dep_df = st.session_state.get('dependents_df', pd.DataFrame())
 
@@ -59,44 +60,73 @@ def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_n
         except Exception:
             chart_images['dependent_age'] = None
 
-    # Build plan availability data
-    plan_availability_df = pd.DataFrame()
-    db = st.session_state.get('db')
-    if emp_df is not None and not emp_df.empty and 'rating_area_id' in emp_df.columns and db is not None:
-        ra_counts = emp_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
-        ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
-        if not ra_counts.empty:
-            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
-            states = ra_counts['state'].unique().tolist()
-            rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+    return chart_images
 
-            query = """
-            SELECT
-                SUBSTRING(p.hios_plan_id, 6, 2) as state,
-                r.rating_area_id,
-                COUNT(DISTINCT p.hios_plan_id) as plan_count
-            FROM rbis_insurance_plan_20251019202724 p
-            JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
-            WHERE p.market_coverage = 'Individual'
-              AND p.plan_effective_date = '2026-01-01'
-              AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
-              AND r.rating_area_id IN %s
-            GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
-            """
-            try:
-                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
-                if not plan_counts_df.empty:
-                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
-                    plan_availability_df = ra_counts.merge(
-                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
-                        left_on=['state', 'rating_area_id'],
-                        right_on=['state', 'rating_area_num'],
-                        how='left'
-                    )
-                    plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
-                    plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
-            except Exception:
-                pass
+
+@st.cache_data(show_spinner=False)
+def _get_plan_availability_cached(_ra_hash, _db_available):
+    """Cache plan availability query separately from client_name."""
+    emp_df = st.session_state.get('census_df', pd.DataFrame())
+    db = st.session_state.get('db')
+
+    if emp_df is None or emp_df.empty or 'rating_area_id' not in emp_df.columns or db is None:
+        return pd.DataFrame()
+
+    ra_counts = emp_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
+    ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
+
+    if ra_counts.empty:
+        return pd.DataFrame()
+
+    ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+    states = ra_counts['state'].unique().tolist()
+    rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+
+    query = """
+    SELECT
+        SUBSTRING(p.hios_plan_id, 6, 2) as state,
+        r.rating_area_id,
+        COUNT(DISTINCT p.hios_plan_id) as plan_count
+    FROM rbis_insurance_plan_20251019202724 p
+    JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
+    WHERE p.market_coverage = 'Individual'
+      AND p.plan_effective_date = '2026-01-01'
+      AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
+      AND r.rating_area_id IN %s
+    GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
+    """
+    try:
+        plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
+        if not plan_counts_df.empty:
+            plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
+            plan_availability_df = ra_counts.merge(
+                plan_counts_df[['state', 'rating_area_num', 'plan_count']],
+                left_on=['state', 'rating_area_id'],
+                right_on=['state', 'rating_area_num'],
+                how='left'
+            )
+            plan_availability_df = plan_availability_df[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
+            plan_availability_df['plan_count'] = plan_availability_df['plan_count'].fillna(0).astype(int)
+            return plan_availability_df
+    except Exception:
+        pass
+
+    return pd.DataFrame()
+
+
+def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_name, _db_available, _ra_data_hash, _template_version):
+    """Generate PDF. Charts and plan data are cached separately so client_name changes are fast."""
+    from pdf_census_renderer import generate_census_analysis_pdf
+
+    # Reconstruct dataframes from session state
+    emp_df = st.session_state.get('census_df', pd.DataFrame())
+    dep_df = st.session_state.get('dependents_df', pd.DataFrame())
+
+    # Get cached charts (expensive - cached by data hash, NOT client_name)
+    chart_images = _generate_charts_cached(_employees_df_hash, _dependents_df_hash)
+
+    # Get cached plan availability (expensive - cached by data hash, NOT client_name)
+    plan_availability_df = _get_plan_availability_cached(_ra_data_hash, _db_available)
 
     display_name = client_name if client_name else 'Client'
 
@@ -138,6 +168,14 @@ if 'census_df' not in st.session_state:
 
 if 'dependents_df' not in st.session_state:
     st.session_state.dependents_df = None
+
+# Cache hashes for PDF generation (computed once when census is loaded)
+if 'census_emp_hash' not in st.session_state:
+    st.session_state.census_emp_hash = 0
+if 'census_dep_hash' not in st.session_state:
+    st.session_state.census_dep_hash = 0
+if 'census_ra_hash' not in st.session_state:
+    st.session_state.census_ra_hash = 0
 
 # Header
 st.title("📊 Employee census input")
@@ -295,30 +333,43 @@ if st.session_state.census_df is not None:
     with export_col2:
         st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Align with input
 
-        # Create hash keys for caching
-        emp_hash = hash(employees_df.to_json()) if not employees_df.empty else 0
-        dep_hash = hash(dependents_df.to_json()) if not dependents_df.empty else 0
+        # Use pre-computed hashes from session state
+        emp_hash = st.session_state.get('census_emp_hash', 0)
+        dep_hash = st.session_state.get('census_dep_hash', 0)
+        ra_hash = st.session_state.get('census_ra_hash', 0)
         client_name = st.session_state.get('client_name', '').strip()
         db_available = st.session_state.get('db') is not None
-        ra_hash = hash(tuple(employees_df['rating_area_id'].dropna().tolist())) if 'rating_area_id' in employees_df.columns else 0
 
-        try:
-            with st.spinner("Preparing PDF..."):
-                pdf_data = generate_census_pdf_cached(emp_hash, dep_hash, client_name, db_available, ra_hash)
-            filename = get_census_pdf_filename(client_name)
+        # Check if we need to regenerate (data or client_name changed)
+        current_pdf_key = (emp_hash, dep_hash, ra_hash, client_name)
+        cached_pdf_key = st.session_state.get('_pdf_cache_key_nav')
+        pdf_ready = cached_pdf_key == current_pdf_key and '_pdf_data_nav' in st.session_state
 
+        if pdf_ready:
+            # PDF is ready - show download button
             st.download_button(
                 label="📄 Export PDF",
-                data=pdf_data,
-                file_name=filename,
+                data=st.session_state['_pdf_data_nav'],
+                file_name=st.session_state.get('_pdf_filename_nav', 'census_analysis.pdf'),
                 mime="application/pdf",
                 type="secondary",
                 use_container_width=True,
                 key="pdf_download_nav"
             )
-        except Exception as e:
-            st.error(f"Error generating PDF: {str(e)}")
-            logging.exception("PDF generation error")
+        else:
+            # Need to generate - show generate button
+            if st.button("📄 Generate PDF", type="secondary", use_container_width=True, key="pdf_generate_nav"):
+                try:
+                    with st.spinner("Generating PDF..."):
+                        pdf_data = generate_census_pdf_cached(emp_hash, dep_hash, client_name, db_available, ra_hash, _PDF_TEMPLATE_VERSION)
+                        filename = get_census_pdf_filename(client_name)
+                        st.session_state['_pdf_data_nav'] = pdf_data
+                        st.session_state['_pdf_filename_nav'] = filename
+                        st.session_state['_pdf_cache_key_nav'] = current_pdf_key
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error generating PDF: {str(e)}")
+                    logging.exception("PDF generation error")
 
     st.markdown("---")
 
@@ -600,54 +651,21 @@ if st.session_state.census_df is not None:
         st.markdown("### 📋 Plan availability by rating area")
         st.caption("Count of Individual marketplace plans available in each rating area")
 
-        db = st.session_state.get('db')
-        if 'rating_area_id' in employees_df.columns and db is not None:
-            # Get employee counts by state, county, and rating area
-            ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
-            ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
-            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+        # Use cached plan availability data (same cache as PDF generation)
+        ra_hash = st.session_state.get('census_ra_hash', 0)
+        db_available = st.session_state.get('db') is not None
 
-            if not ra_counts.empty:
-                # Build optimized query that only looks at relevant states/rating areas
-                states = ra_counts['state'].unique().tolist()
-                rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+        if 'rating_area_id' in employees_df.columns and db_available:
+            # Get cached plan availability (no DB query on every keystroke!)
+            plan_availability_df = _get_plan_availability_cached(ra_hash, db_available)
 
-                # Single batch query filtered to relevant rating areas
-                query = """
-                SELECT
-                    SUBSTRING(p.hios_plan_id, 6, 2) as state,
-                    r.rating_area_id,
-                    COUNT(DISTINCT p.hios_plan_id) as plan_count
-                FROM rbis_insurance_plan_20251019202724 p
-                JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
-                WHERE p.market_coverage = 'Individual'
-                  AND p.plan_effective_date = '2026-01-01'
-                  AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
-                  AND r.rating_area_id IN %s
-                GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
-                """
-                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
-
-                if not plan_counts_df.empty:
-                    # Extract rating area number from string like "Rating Area 1"
-                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
-
-                    # Merge with employee counts
-                    merged = ra_counts.merge(
-                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
-                        left_on=['state', 'rating_area_id'],
-                        right_on=['state', 'rating_area_num'],
-                        how='left'
-                    )
-                    merged = merged[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
-                    merged = merged.sort_values(['state', 'county', 'rating_area_id'])
-                    merged.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
-                    merged['Plans Available'] = merged['Plans Available'].fillna(0).astype(int)
-                    st.dataframe(merged, width="stretch", hide_index=True)
-                else:
-                    st.info("No plan data available")
+            if not plan_availability_df.empty:
+                display_df = plan_availability_df.copy()
+                display_df = display_df.sort_values(['state', 'county', 'rating_area_id'])
+                display_df.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
+                st.dataframe(display_df, width="stretch", hide_index=True)
             else:
-                st.info("No rating area data available")
+                st.info("No plan data available")
         else:
             st.info("Rating area data not available. Ensure census has been processed.")
 
@@ -935,17 +953,24 @@ else:
                     st.session_state.census_df = employees_df
                     st.session_state.dependents_df = dependents_df
 
-                    # DEBUG: Verify what rating areas were stored in session state
-                    import logging
-                    logging.warning("=" * 80)
-                    logging.warning("DEBUG: Census stored in session state. Rating area DISTRIBUTION by state:")
-                    for state in sorted(employees_df['state'].unique()):
-                        state_df = employees_df[employees_df['state'] == state]
-                        rating_area_counts = state_df['rating_area_id'].value_counts().sort_index()
-                        logging.warning(f"  {state}:")
-                        for ra, count in rating_area_counts.items():
-                            logging.warning(f"    Rating Area {ra}: {count} employees")
-                    logging.warning("=" * 80)
+                    # Pre-compute FAST hashes for PDF caching (avoid expensive to_json())
+                    # Use shape + key column sums as proxy for data identity
+                    def fast_df_hash(df, key_cols=None):
+                        """Fast hash using shape and numeric column sums."""
+                        if df is None or df.empty:
+                            return 0
+                        parts = [len(df), len(df.columns)]
+                        if 'age' in df.columns:
+                            parts.append(int(df['age'].sum()))
+                        if key_cols:
+                            for col in key_cols:
+                                if col in df.columns:
+                                    parts.append(hash(tuple(df[col].head(5).tolist())))
+                        return hash(tuple(parts))
+
+                    st.session_state.census_emp_hash = fast_df_hash(employees_df, ['employee_id', 'zip_code', 'state'])
+                    st.session_state.census_dep_hash = fast_df_hash(dependents_df, ['employee_id'])
+                    st.session_state.census_ra_hash = hash(tuple(sorted(employees_df['rating_area_id'].dropna().unique()))) if 'rating_area_id' in employees_df.columns else 0
 
                     # Show success summary
                     st.success("✅ Census processed successfully!")
@@ -1021,30 +1046,43 @@ else:
                     with export_col2:
                         st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Align with input
 
-                        # Generate PDF data for download button (reuse cached function from nav section)
-                        emp_hash = hash(employees_df.to_json()) if not employees_df.empty else 0
-                        dep_hash = hash(dependents_df.to_json()) if not dependents_df.empty else 0
+                        # Use pre-computed hashes from session state
+                        emp_hash = st.session_state.get('census_emp_hash', 0)
+                        dep_hash = st.session_state.get('census_dep_hash', 0)
+                        ra_hash = st.session_state.get('census_ra_hash', 0)
                         client_name = st.session_state.get('client_name', '').strip()
                         db_available = st.session_state.get('db') is not None
-                        ra_hash = hash(tuple(employees_df['rating_area_id'].dropna().tolist())) if 'rating_area_id' in employees_df.columns else 0
 
-                        try:
-                            with st.spinner("Preparing PDF..."):
-                                pdf_data = generate_census_pdf_cached(emp_hash, dep_hash, client_name, db_available, ra_hash)
-                            filename = get_census_pdf_filename(client_name)
+                        # Check if we need to regenerate (data or client_name changed)
+                        current_pdf_key = (emp_hash, dep_hash, ra_hash, client_name)
+                        cached_pdf_key = st.session_state.get('_pdf_cache_key_upload')
+                        pdf_ready = cached_pdf_key == current_pdf_key and '_pdf_data_upload' in st.session_state
 
+                        if pdf_ready:
+                            # PDF is ready - show download button
                             st.download_button(
                                 label="📄 Export PDF",
-                                data=pdf_data,
-                                file_name=filename,
+                                data=st.session_state['_pdf_data_upload'],
+                                file_name=st.session_state.get('_pdf_filename_upload', 'census_analysis.pdf'),
                                 mime="application/pdf",
                                 type="secondary",
                                 use_container_width=True,
                                 key="pdf_download_upload"
                             )
-                        except Exception as e:
-                            st.error(f"Error generating PDF: {str(e)}")
-                            logging.exception("PDF generation error")
+                        else:
+                            # Need to generate - show generate button
+                            if st.button("📄 Generate PDF", type="secondary", use_container_width=True, key="pdf_generate_upload"):
+                                try:
+                                    with st.spinner("Generating PDF..."):
+                                        pdf_data = generate_census_pdf_cached(emp_hash, dep_hash, client_name, db_available, ra_hash, _PDF_TEMPLATE_VERSION)
+                                        filename = get_census_pdf_filename(client_name)
+                                        st.session_state['_pdf_data_upload'] = pdf_data
+                                        st.session_state['_pdf_filename_upload'] = filename
+                                        st.session_state['_pdf_cache_key_upload'] = current_pdf_key
+                                        st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error generating PDF: {str(e)}")
+                                    logging.exception("PDF generation error")
 
                     # Detailed breakdown
                     st.markdown("---")
@@ -1328,54 +1366,21 @@ else:
                         st.markdown("### 📋 Plan availability by rating area")
                         st.caption("Count of Individual marketplace plans available in each rating area")
 
-                        db = st.session_state.get('db')
-                        if 'rating_area_id' in employees_df.columns and db is not None:
-                            # Get employee counts by state, county, and rating area
-                            ra_counts = employees_df.groupby(['state', 'county', 'rating_area_id']).size().reset_index(name='employees')
-                            ra_counts = ra_counts[ra_counts['rating_area_id'].notna()]
-                            ra_counts['rating_area_id'] = ra_counts['rating_area_id'].astype(int)
+                        # Use cached plan availability data (same cache as PDF generation)
+                        ra_hash = st.session_state.get('census_ra_hash', 0)
+                        db_available = st.session_state.get('db') is not None
 
-                            if not ra_counts.empty:
-                                # Build optimized query that only looks at relevant states/rating areas
-                                states = ra_counts['state'].unique().tolist()
-                                rating_areas = [f"Rating Area {ra}" for ra in ra_counts['rating_area_id'].unique().tolist()]
+                        if 'rating_area_id' in employees_df.columns and db_available:
+                            # Get cached plan availability (no DB query on every keystroke!)
+                            plan_availability_df = _get_plan_availability_cached(ra_hash, db_available)
 
-                                # Single batch query filtered to relevant rating areas
-                                query = """
-                                SELECT
-                                    SUBSTRING(p.hios_plan_id, 6, 2) as state,
-                                    r.rating_area_id,
-                                    COUNT(DISTINCT p.hios_plan_id) as plan_count
-                                FROM rbis_insurance_plan_20251019202724 p
-                                JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
-                                WHERE p.market_coverage = 'Individual'
-                                  AND p.plan_effective_date = '2026-01-01'
-                                  AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
-                                  AND r.rating_area_id IN %s
-                                GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
-                                """
-                                plan_counts_df = pd.read_sql(query, db.engine, params=(tuple(states), tuple(rating_areas)))
-
-                                if not plan_counts_df.empty:
-                                    # Extract rating area number from string like "Rating Area 1"
-                                    plan_counts_df['rating_area_num'] = plan_counts_df['rating_area_id'].str.extract(r'(\d+)').astype(int)
-
-                                    # Merge with employee counts
-                                    merged = ra_counts.merge(
-                                        plan_counts_df[['state', 'rating_area_num', 'plan_count']],
-                                        left_on=['state', 'rating_area_id'],
-                                        right_on=['state', 'rating_area_num'],
-                                        how='left'
-                                    )
-                                    merged = merged[['state', 'county', 'rating_area_id', 'employees', 'plan_count']]
-                                    merged = merged.sort_values(['state', 'county', 'rating_area_id'])
-                                    merged.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
-                                    merged['Plans Available'] = merged['Plans Available'].fillna(0).astype(int)
-                                    st.dataframe(merged, width="stretch", hide_index=True)
-                                else:
-                                    st.info("No plan data available")
+                            if not plan_availability_df.empty:
+                                display_df = plan_availability_df.copy()
+                                display_df = display_df.sort_values(['state', 'county', 'rating_area_id'])
+                                display_df.columns = ['State', 'County', 'Rating Area', 'Employees', 'Plans Available']
+                                st.dataframe(display_df, width="stretch", hide_index=True)
                             else:
-                                st.info("No rating area data available")
+                                st.info("No plan data available")
                         else:
                             st.info("Rating area data not available. Ensure census has been processed.")
 
