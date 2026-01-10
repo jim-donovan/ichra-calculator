@@ -1,0 +1,6 @@
+# Railway configuration
+# References nixpacks.toml for build configuration
+
+[build]
+builder = "nixpacks"
+nixpacksConfigPath = "nixpacks.toml"
