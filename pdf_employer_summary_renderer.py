@@ -5,6 +5,9 @@ Renders employer cost summary as a one-page PDF by:
 1. Loading HTML template with Jinja2
 2. Rendering with Playwright headless Chromium
 3. Generating pixel-perfect PDF output
+
+Note: Requires Chromium system dependencies on the server.
+For Railway deployment, see nixpacks.toml for required apt packages.
 """
 
 from dataclasses import dataclass
