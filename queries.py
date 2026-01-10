@@ -90,11 +90,13 @@ class PlanQueries:
         # Build WHERE clause for each state/rating_area combination
         # We need plans that have rates in ANY of the census rating areas
         # Uses state_code column (generated from SUBSTRING) for index efficiency
+        # Note: rating_area_id in database is stored as "Rating Area X" format
         conditions = []
         params = []
         for state_code, rating_area_id in state_rating_areas:
-            conditions.append("(p.state_code = %s AND br.state_code = %s AND br.rating_area_numeric = %s)")
-            params.extend([state_code, state_code, rating_area_id])
+            rating_area_str = f"Rating Area {rating_area_id}"
+            conditions.append("(p.state_code = %s AND br.state_code = %s AND br.rating_area_id = %s)")
+            params.extend([state_code, state_code, rating_area_str])
 
         where_clause = " OR ".join(conditions)
 

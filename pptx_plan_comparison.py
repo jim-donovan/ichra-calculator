@@ -26,8 +26,8 @@ COLORS = {
     # Comparison colors - more saturated for PPT visibility
     'better_bg': RGBColor(0xD1, 0xFA, 0xE5),       # #D1FAE5 - emerald-100
     'better_text': RGBColor(0x05, 0x96, 0x69),     # #059669
-    'similar_bg': RGBColor(0xFE, 0xF3, 0xC7),      # #FEF3C7 - yellow-100
-    'similar_text': RGBColor(0xCA, 0x8A, 0x04),    # #CA8A04
+    'similar_bg': RGBColor(0xE8, 0xF1, 0xFD),      # #E8F1FD - cobalt-50 (light blue)
+    'similar_text': RGBColor(0x1D, 0x4E, 0xD8),    # #1D4ED8 - blue-700
     'worse_bg': RGBColor(0xFE, 0xE2, 0xE2),        # #FEE2E2 - red-100
     'worse_text': RGBColor(0xDC, 0x26, 0x26),      # #DC2626
 
@@ -201,8 +201,7 @@ class PlanComparisonSlideGenerator:
         rows = [
             ('header', 'Plan'),
             ('data', 'Age 21 Premium', 'age_21_premium'),
-            ('data', 'Affordable Contribution*', 'affordable_contribution'),
-            ('data', 'Total Premium*', 'total_premium'),
+            ('data', 'Total Monthly Premium*', 'total_premium'),
             ('section', 'PLAN FEATURES'),
             ('data', 'Plan Type', 'plan_type'),
             ('data', 'HSA Eligible', 'hsa_eligible'),
@@ -326,7 +325,6 @@ class PlanComparisonSlideGenerator:
                     else:
                         # Get comparison result using same logic as UI:
                         # - Premium rows: use dedicated comparison fields
-                        # - Affordable Contribution: no color (matches UI)
                         # - Benefit rows: read from tuple
                         comparison = None
 
@@ -336,9 +334,6 @@ class PlanComparisonSlideGenerator:
                         elif attr_name == 'total_premium':
                             # Use pre-calculated comparison (same logic as UI)
                             comparison = plan.total_premium_comparison
-                        elif attr_name == 'affordable_contribution':
-                            # No color for Affordable Contribution (matches UI)
-                            comparison = None
                         elif attr_name and hasattr(plan, attr_name):
                             # Benefit rows: comparison stored in tuple
                             attr_val = getattr(plan, attr_name)
@@ -382,7 +377,7 @@ class PlanComparisonSlideGenerator:
         legend_top = Inches(7.0)
         legend_box = slide.shapes.add_textbox(table_left, legend_top, Inches(10), Inches(0.3))
         legend_tf = legend_box.text_frame
-        legend_tf.paragraphs[0].text = "Green = Equivalent or better  |  Yellow = Similar (within 5%)  |  Red = Less generous"
+        legend_tf.paragraphs[0].text = "Green = Equivalent or better  |  Blue = Similar (within 5%)  |  Red = Less generous"
         legend_tf.paragraphs[0].font.name = 'Poppins'
         legend_tf.paragraphs[0].font.size = Pt(9)
         legend_tf.paragraphs[0].font.color.rgb = COLORS['detail_text']
@@ -397,22 +392,12 @@ class PlanComparisonSlideGenerator:
 
         if attr_name == 'age_21_premium':
             if plan.is_current:
-                # Show current/renewal for current plan
-                curr = plan.current_age_21_premium
-                renew = plan.renewal_age_21_premium
-                if curr and renew:
-                    return f"${curr:,.0f} / ${renew:,.0f}"
-                elif renew:
-                    return f"${renew:,.0f}"
-                elif curr:
-                    return f"${curr:,.0f}"
+                # Show current plan premium (EE-only, all ages) - not age-banded like marketplace
+                display_prem = plan.renewal_age_21_premium or plan.current_age_21_premium
+                if display_prem:
+                    return self._format_currency(display_prem)
                 return "—"
             return self._format_currency(plan.age_21_premium)
-
-        elif attr_name == 'affordable_contribution':
-            if plan.is_current:
-                return "—"
-            return self._format_currency(plan.affordable_contribution)
 
         elif attr_name == 'total_premium':
             if plan.is_current:
@@ -456,8 +441,13 @@ class PlanComparisonSlideGenerator:
 
     def _get_detail_value(self, plan: PlanColumnData, attr_name: str, data: PlanComparisonSlideData) -> str:
         """Get detail text for specific rows"""
-        if attr_name == 'affordable_contribution' and plan.contribution_range:
-            return plan.contribution_range
+        if attr_name == 'age_21_premium':
+            if plan.is_current:
+                # Note that group plans use flat rates, not age-banded
+                display_prem = plan.renewal_age_21_premium or plan.current_age_21_premium
+                if display_prem:
+                    return "(EE-only, all ages)"
+            return ""
 
         if attr_name == 'total_premium':
             if plan.is_current:
@@ -491,12 +481,8 @@ class PlanComparisonSlideGenerator:
 
         if attr_name == 'age_21_premium':
             if plan.is_current:
-                # Show increase for current plan
-                curr = plan.current_age_21_premium
-                renew = plan.renewal_age_21_premium
-                if curr and renew and renew > curr:
-                    increase = renew - curr
-                    return f"+${increase:,.0f} increase"
+                # No detail for current plan - Age 21 Premium is N/A for group plans
+                return ""
             else:
                 # Marketplace plan - show diff from renewal premium
                 renewal_age_21 = None
@@ -570,7 +556,7 @@ if __name__ == "__main__":
     data = PlanComparisonSlideData(
         employee_count=42,
         avg_age=38.5,
-        footnote="*Assumes all 42 employees are in Rating Area 12. Affordable Contribution = minimum to meet 9.96% IRS threshold.",
+        footnote="*Assumes all 42 employees are in Rating Area 12.",
         plans=[
             PlanColumnData(
                 plan_name="Blue Preferred Plus POS HSA",

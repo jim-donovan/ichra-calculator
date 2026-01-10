@@ -22,7 +22,7 @@ from constants import FAMILY_STATUS_CODES
 
 
 # PDF template version - increment to invalidate cache when template changes
-_PDF_TEMPLATE_VERSION = 3
+_PDF_TEMPLATE_VERSION = 4
 
 # Cache expensive chart generation separately (must be at module level for st.cache_data)
 @st.cache_data(show_spinner=False)
@@ -88,9 +88,11 @@ def _get_plan_availability_cached(_ra_hash, _db_available):
         r.rating_area_id,
         COUNT(DISTINCT p.hios_plan_id) as plan_count
     FROM rbis_insurance_plan_20251019202724 p
+    JOIN rbis_insurance_plan_variant_20251019202724 v ON v.hios_plan_id = p.hios_plan_id
     JOIN rbis_insurance_plan_base_rates_20251019202724 r ON r.plan_id = p.hios_plan_id
     WHERE p.market_coverage = 'Individual'
       AND p.plan_effective_date = '2026-01-01'
+      AND v.csr_variation_type IN ('Exchange variant (no CSR)', 'Non-Exchange variant')
       AND SUBSTRING(p.hios_plan_id, 6, 2) IN %s
       AND r.rating_area_id IN %s
     GROUP BY SUBSTRING(p.hios_plan_id, 6, 2), r.rating_area_id
@@ -155,6 +157,86 @@ def get_census_pdf_filename(client_name: str) -> str:
 # Page config
 st.set_page_config(page_title="Census Input", page_icon="📊", layout="wide")
 
+# Custom CSS to match app branding
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;700&display=swap');
+
+    .stApp {
+        font-family: 'Poppins', sans-serif;
+        background-color: #ffffff;
+    }
+
+    [data-testid="stSidebar"] {
+        background-color: #F0F4FA;
+    }
+
+    /* Sidebar navigation links */
+    [data-testid="stSidebarNav"] a {
+        background-color: transparent !important;
+    }
+    [data-testid="stSidebarNav"] a[aria-selected="true"] {
+        background-color: #E8F1FD !important;
+        border-left: 3px solid #0047AB !important;
+    }
+    [data-testid="stSidebarNav"] a:hover {
+        background-color: #E8F1FD !important;
+    }
+
+    /* Sidebar buttons */
+    [data-testid="stSidebar"] button {
+        background-color: #E8F1FD !important;
+        border: 1px solid #B3D4FC !important;
+        color: #0047AB !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background-color: #B3D4FC !important;
+        border-color: #0047AB !important;
+    }
+
+    /* Info boxes in sidebar */
+    [data-testid="stSidebar"] [data-testid="stAlert"] {
+        background-color: #E8F1FD !important;
+        border: 1px solid #B3D4FC !important;
+        color: #003d91 !important;
+    }
+
+    .hero-section {
+        background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+        border-radius: 12px;
+        padding: 32px;
+        margin-bottom: 24px;
+        border-left: 4px solid #0047AB;
+    }
+
+    .hero-title {
+        font-family: 'Poppins', sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        color: #0a1628;
+        margin-bottom: 8px;
+    }
+
+    .hero-subtitle {
+        font-size: 16px;
+        color: #475569;
+        margin: 0;
+    }
+
+    .upload-hint {
+        font-size: 14px;
+        color: #667085;
+        margin-bottom: 16px;
+    }
+
+    .template-section {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialize session state
 if 'db' not in st.session_state:
@@ -178,86 +260,68 @@ if 'census_ra_hash' not in st.session_state:
     st.session_state.census_ra_hash = 0
 
 # Header
-st.title("📊 Employee census input")
-st.markdown("Upload your employee census with ZIP codes, dates of birth, and family status.")
+st.markdown("""
+<div class="hero-section">
+    <div class="hero-title">📊 Census Input</div>
+    <p class="hero-subtitle">Upload employee census data to begin ICHRA analysis</p>
+</div>
+""", unsafe_allow_html=True)
 
 # ==============================================================================
-# TEMPLATE DOWNLOAD
+# UPLOAD SECTION
 # ==============================================================================
 
-st.header("📥 Step 1: Download census template")
-
-col1, col2 = st.columns([2, 1])
-
+# Template download inline with hint text
+template_csv = CensusProcessor.create_new_census_template()
+col1, col2 = st.columns([4, 1])
 with col1:
-    st.markdown("""
-    **Census format requirements:**
-
-    **Required columns:**
-    - **Employee Number** - Unique identifier for each employee
-    - **Home Zip** - 5-digit ZIP code
-    - **Home State** - 2-letter state code (e.g., NY, CA, PA)
-    - **Family Status** - Code indicating family coverage:
-      - **EE** = Employee Only
-      - **ES** = Employee + Spouse
-      - **EC** = Employee + Children
-      - **F** = Family (Employee + Spouse + Children)
-    - **EE DOB** - Employee date of birth (M/D/YY format)
-
-    **Optional columns** (based on family status):
-    - **Spouse DOB** - Required if Family Status = ES or F
-    - **Dep 2 DOB** through **Dep 6 DOB** - Child dates of birth (required if Family Status = EC or F)
-
-    **Current group plan contributions** (optional - for cost comparison):
-    - **Current EE Monthly** - Employee's current monthly contribution (e.g., "$250" or "250")
-    - **Current ER Monthly** - Employer's current monthly contribution for this employee
-    - **2026 Premium** - Projected 2026 renewal premium for this employee (from carrier rate table)
-
-    *If provided, enables per-employee comparison between current/renewal and ICHRA costs.*
-    """)
-
+    st.markdown('<p class="upload-hint">Upload a CSV with employee demographics, ZIP codes, and family status.</p>', unsafe_allow_html=True)
 with col2:
-    # Generate and offer template download
-    template_csv = CensusProcessor.create_new_census_template()
-
     st.download_button(
-        label="📄 Download template CSV",
+        label="📥 Template",
         data=template_csv,
         file_name="census_template.csv",
         mime="text/csv",
-        help="Download a CSV template with example data"
+        help="Download CSV template with example data",
+        use_container_width=True
     )
 
-    st.info("The template includes 4 example employees showing all Family Status codes.")
-
-st.markdown("---")
-
-# ==============================================================================
-# FILE UPLOAD
-# ==============================================================================
-
-st.header("📤 Step 2: Upload your census file")
+# Format requirements in expander
+with st.expander("View format requirements"):
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("""
+        **Required columns:**
+        - `Employee Number` — Unique ID
+        - `Home Zip` — 5-digit ZIP
+        - `Home State` — 2-letter code
+        - `Family Status` — EE, ES, EC, or F
+        - `EE DOB` — Employee date of birth
+        """)
+    with col_b:
+        st.markdown("""
+        **Optional columns:**
+        - `Spouse DOB` — For ES/F status
+        - `Dep 2-6 DOB` — Child DOBs for EC/F
+        - `Current EE Monthly` — Employee contribution
+        - `Current ER Monthly` — Employer contribution
+        """)
 
 # Check if census is already loaded in session state
 if st.session_state.census_df is not None:
-    st.success(f"✅ Census already loaded with {len(st.session_state.census_df)} employees")
-
-    # Show summary and option to replace
-    col_a, col_b = st.columns([3, 1])
-    with col_a:
-        st.markdown(f"**Current Census:** {len(st.session_state.census_df)} employees")
-        if st.session_state.dependents_df is not None and not st.session_state.dependents_df.empty:
-            st.markdown(f"**Dependents:** {len(st.session_state.dependents_df)} dependents")
-    with col_b:
-        if st.button("📤 Upload new census", type="secondary"):
+    # Compact loaded state with replace option
+    load_col1, load_col2 = st.columns([4, 1])
+    with load_col1:
+        dep_count = len(st.session_state.dependents_df) if st.session_state.dependents_df is not None and not st.session_state.dependents_df.empty else 0
+        st.success(f"Census loaded: **{len(st.session_state.census_df)}** employees, **{dep_count}** dependents")
+    with load_col2:
+        if st.button("Replace", type="secondary", use_container_width=True):
             st.session_state.census_df = None
             st.session_state.dependents_df = None
             st.session_state.contribution_analysis = {}
             st.rerun()
 
-    # Display the loaded census data
     st.markdown("---")
-    st.subheader("📋 Loaded census data")
 
     employees_df = st.session_state.census_df
     dependents_df = st.session_state.dependents_df if st.session_state.dependents_df is not None else pd.DataFrame()
@@ -265,14 +329,7 @@ if st.session_state.census_df is not None:
     # Check for per-employee contribution data
     if ContributionComparison.has_individual_contributions(employees_df):
         contrib_totals = ContributionComparison.aggregate_contribution_totals(employees_df)
-        st.info(f"""
-        **📊 Per-employee contribution data found:**
-        - Employees with data: **{contrib_totals['employees_with_data']}**
-        - Total current EE contributions: **${contrib_totals['total_current_ee_monthly']:,.2f}/mo** (${contrib_totals['total_current_ee_annual']:,.2f}/yr)
-        - Total current ER contributions: **${contrib_totals['total_current_er_monthly']:,.2f}/mo** (${contrib_totals['total_current_er_annual']:,.2f}/yr)
-
-        *Per-employee cost comparisons will be available in **Employer Summary**.*
-        """)
+        st.info(f"Contribution data found for **{contrib_totals['employees_with_data']}** employees — EE: **${contrib_totals['total_current_ee_monthly']:,.0f}/mo**, ER: **${contrib_totals['total_current_er_monthly']:,.0f}/mo**")
 
     # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -315,23 +372,20 @@ if st.session_state.census_df is not None:
         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
 
     # PDF Export Section
-    st.markdown("### 📄 Export Census Analysis")
+    st.markdown("---")
     export_col1, export_col2 = st.columns([3, 1])
     with export_col1:
-        # Initialize client_name in session state if not present
         if 'client_name' not in st.session_state:
             st.session_state.client_name = ''
-
-        # Client name input - bound directly to session state via key
         st.text_input(
-            "Client name (optional)",
-            placeholder="Enter client name for PDF",
+            "Client name",
+            placeholder="For PDF header",
             key="client_name",
-            help="Client name will appear in the PDF header and filename"
+            help="Appears in PDF header and filename"
         )
 
     with export_col2:
-        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Align with input
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
 
         # Use pre-computed hashes from session state
         emp_hash = st.session_state.get('census_emp_hash', 0)
@@ -446,7 +500,7 @@ if st.session_state.census_df is not None:
                 ("Total Dependents", f"{total_deps}", "#3b82f6"),
                 ("Coverage Burden", f"{coverage_burden:.2f}:1", "#8b5cf6"),
                 ("Average Age", f"{avg_age:.1f}", "#10b981"),
-                ("Age Range", f"{youngest}–{oldest}", "#f59e0b"),
+                ("Age Range", f"{youngest}–{oldest}", "#0047AB"),
             ]
 
             for col, (label, value, color) in zip(metric_cols, metrics):
@@ -672,6 +726,9 @@ if st.session_state.census_df is not None:
     with tab4:
         import plotly.express as px
 
+        # Diverse accessible color palette (high contrast between adjacent segments)
+        CHART_COLORS = ['#0047AB', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#f97316', '#6366f1']
+
         # Age distribution chart
         st.markdown("### Age distribution")
         col1, col2 = st.columns(2)
@@ -694,7 +751,8 @@ if st.session_state.census_df is not None:
             fig = px.pie(
                 values=age_dist.values,
                 names=age_dist.index,
-                title='Employee age distribution'
+                title='Employee age distribution',
+                color_discrete_sequence=CHART_COLORS
             )
             st.plotly_chart(fig, width='stretch')
 
@@ -706,7 +764,8 @@ if st.session_state.census_df is not None:
                 x=state_dist.index,
                 y=state_dist.values,
                 title='Employees by State',
-                labels={'x': 'State', 'y': 'Number of employees'}
+                labels={'x': 'State', 'y': 'Number of employees'},
+                color_discrete_sequence=['#0047AB']
             )
             st.plotly_chart(fig, width='stretch')
 
@@ -723,7 +782,8 @@ if st.session_state.census_df is not None:
                 fig = px.pie(
                     values=family_counts.values,
                     names=family_labels,
-                    title='Employees by family status'
+                    title='Employees by family status',
+                    color_discrete_sequence=CHART_COLORS
                 )
                 st.plotly_chart(fig, width='stretch')
 
@@ -746,7 +806,8 @@ if st.session_state.census_df is not None:
                 fig = px.pie(
                     values=rel_counts.values,
                     names=[rel.title() + 's' for rel in rel_counts.index],
-                    title='Dependents by relationship'
+                    title='Dependents by relationship',
+                    color_discrete_sequence=CHART_COLORS
                 )
                 st.plotly_chart(fig, width='stretch')
 
@@ -769,7 +830,8 @@ if st.session_state.census_df is not None:
                     x=dep_age_dist.index,
                     y=dep_age_dist.values,
                     title='Dependent age distribution',
-                    labels={'x': 'Age group', 'y': 'Number of dependents'}
+                    labels={'x': 'Age group', 'y': 'Number of dependents'},
+                    color_discrete_sequence=['#0891b2']
                 )
                 st.plotly_chart(fig, width='stretch')
 
@@ -793,7 +855,8 @@ if st.session_state.census_df is not None:
                 y=county_counts.index,
                 orientation='h',
                 title='Top 10 counties by employee count',
-                labels={'x': 'Number of employees', 'y': 'County'}
+                labels={'x': 'Number of employees', 'y': 'County'},
+                color_discrete_sequence=['#6366f1']
             )
             fig.update_layout(yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig, width='stretch')
@@ -978,14 +1041,11 @@ else:
                     # Check for per-employee contribution data
                     if ContributionComparison.has_individual_contributions(employees_df):
                         contrib_totals = ContributionComparison.aggregate_contribution_totals(employees_df)
-                        st.info(f"""
-                        **📊 Per-employee contribution data found:**
-                        - Employees with data: **{contrib_totals['employees_with_data']}**
-                        - Total current EE contributions: **${contrib_totals['total_current_ee_monthly']:,.2f}/mo** (${contrib_totals['total_current_ee_annual']:,.2f}/yr)
-                        - Total current ER contributions: **${contrib_totals['total_current_er_monthly']:,.2f}/mo** (${contrib_totals['total_current_er_annual']:,.2f}/yr)
-
-                        *Per-employee cost comparisons will be available in **Employer Summary**.*
-                        """)
+                        st.info(
+                            f"📊 Contribution data found for {contrib_totals['employees_with_data']} employees — "
+                            f"EE: \\${contrib_totals['total_current_ee_monthly']:,.0f}/mo, "
+                            f"ER: \\${contrib_totals['total_current_er_monthly']:,.0f}/mo"
+                        )
 
                     # Summary metrics
                     col1, col2, col3, col4 = st.columns(4)
@@ -1161,7 +1221,7 @@ else:
                                 ("Total Dependents", f"{total_deps}", "#3b82f6"),
                                 ("Coverage Burden", f"{coverage_burden:.2f}:1", "#8b5cf6"),
                                 ("Average Age", f"{avg_age:.1f}", "#10b981"),
-                                ("Age Range", f"{youngest}–{oldest}", "#f59e0b"),
+                                ("Age Range", f"{youngest}–{oldest}", "#0047AB"),
                             ]
 
                             for col, (label, value, color) in zip(metric_cols, metrics):
@@ -1387,6 +1447,9 @@ else:
                     with tab4:
                         import plotly.express as px
 
+                        # Diverse accessible color palette (high contrast between adjacent segments)
+                        CHART_COLORS = ['#0047AB', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#f97316', '#6366f1']
+
                         # Age distribution chart
                         st.markdown("### Age distribution")
                         col1, col2 = st.columns(2)
@@ -1409,7 +1472,8 @@ else:
                             fig = px.pie(
                                 values=age_dist.values,
                                 names=age_dist.index,
-                                title='Employee age distribution'
+                                title='Employee age distribution',
+                                color_discrete_sequence=CHART_COLORS
                             )
                             st.plotly_chart(fig, width='stretch')
 
@@ -1421,7 +1485,8 @@ else:
                                 x=state_dist.index,
                                 y=state_dist.values,
                                 title='Employees by State',
-                                labels={'x': 'State', 'y': 'Number of employees'}
+                                labels={'x': 'State', 'y': 'Number of employees'},
+                                color_discrete_sequence=['#0047AB']
                             )
                             st.plotly_chart(fig, width='stretch')
 
@@ -1438,7 +1503,8 @@ else:
                                 fig = px.pie(
                                     values=family_counts.values,
                                     names=family_labels,
-                                    title='Employees by family status'
+                                    title='Employees by family status',
+                                    color_discrete_sequence=CHART_COLORS
                                 )
                                 st.plotly_chart(fig, width='stretch')
 
@@ -1461,7 +1527,8 @@ else:
                                 fig = px.pie(
                                     values=rel_counts.values,
                                     names=[rel.title() + 's' for rel in rel_counts.index],
-                                    title='Dependents by relationship'
+                                    title='Dependents by relationship',
+                                    color_discrete_sequence=CHART_COLORS
                                 )
                                 st.plotly_chart(fig, width='stretch')
 
@@ -1484,7 +1551,8 @@ else:
                                     x=dep_age_dist.index,
                                     y=dep_age_dist.values,
                                     title='Dependent Age Distribution',
-                                    labels={'x': 'Age Group', 'y': 'Number of Dependents'}
+                                    labels={'x': 'Age Group', 'y': 'Number of Dependents'},
+                                    color_discrete_sequence=['#0891b2']
                                 )
                                 st.plotly_chart(fig, width='stretch')
 
@@ -1508,7 +1576,8 @@ else:
                                 y=county_counts.index,
                                 orientation='h',
                                 title='Top 10 Counties by Employee Count',
-                                labels={'x': 'Number of Employees', 'y': 'County'}
+                                labels={'x': 'Number of Employees', 'y': 'County'},
+                                color_discrete_sequence=['#6366f1']
                             )
                             fig.update_layout(yaxis={'categoryorder': 'total ascending'})
                             st.plotly_chart(fig, width='stretch')
@@ -1543,81 +1612,54 @@ else:
 
 st.markdown("---")
 
-with st.expander("ℹ️ Help & instructions"):
-    st.markdown("""
-    ## Census file format
+with st.expander("Help & Format Reference"):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        **Required Columns**
+        - `Employee Number` — Unique ID
+        - `Home Zip` — 5-digit ZIP code
+        - `Home State` — 2-letter state code
+        - `Family Status` — EE, ES, EC, or F
+        - `EE DOB` — Employee date of birth
 
-    Your census file should be a CSV file (comma or tab-delimited) with the following structure:
+        **Family Status Codes**
+        - **EE** = Employee Only
+        - **ES** = Employee + Spouse
+        - **EC** = Employee + Children
+        - **F** = Full Family
+        """)
+    with col2:
+        st.markdown("""
+        **Conditional Columns**
+        - `Spouse DOB` — Required for ES/F
+        - `Dep 2-6 DOB` — Child DOBs for EC/F
 
-    ### Required columns
+        **Date Formats**
+        - `m/d/yy` or `mm/dd/yyyy`
+        - 2-digit years: 00-29 → 2000s
 
-    1. **Employee Number** - Unique identifier for each employee (e.g., EMP001, 12345)
-    2. **Home Zip** - 5-digit ZIP code (e.g., 10001, 90210)
-       - Leading zeros will be preserved (e.g., 00501 for Holtsville, NY)
-    3. **Home State** - 2-letter state code (e.g., NY, CA, PA, FL)
-    4. **Family Status** - One of these codes:
-       - **EE** = Employee Only (no dependents)
-       - **ES** = Employee + Spouse (spouse coverage, no children)
-       - **EC** = Employee + Children (children only, no spouse)
-       - **F** = Family (employee + spouse + children)
-    5. **EE DOB** - Employee date of birth (flexible format: m/d/yy, mm/dd/yy, m/d/yyyy, mm/dd/yyyy)
-
-    ### Optional columns (conditional)
-
-    - **Spouse DOB** - Required if Family Status is ES or F
-    - **Dep 2 DOB** - First child DOB (required if Family Status is EC or F)
-    - **Dep 3 DOB** through **Dep 6 DOB** - Additional children (optional)
-
-    ### Example rows
-
-    | Employee Number | Home Zip | Home State | Family Status | EE DOB | Spouse DOB | Dep 2 DOB | Dep 3 DOB |
-    |----------------|----------|------------|---------------|--------|------------|-----------|-----------|
-    | EMP001 | 10001 | NY | F | 05/15/1985 | 07/22/1987 | 03/10/2015 | 11/05/2017 |
-    | EMP002 | 60601 | IL | ES | 12/03/1978 | 06/18/1980 | | |
-    | EMP003 | 18801 | PA | EC | 08/25/1990 | | 02/14/2018 | |
-    | EMP004 | 33101 | FL | EE | 10/30/1995 | | | |
-
-    ### Notes
-
-    - **File formats:** Both comma-delimited (.csv) and tab-delimited (.tsv/.txt) files are supported
-    - **Date formats accepted:** Flexible formats supported
-      - With 4-digit year: `m/d/yyyy` or `mm/dd/yyyy` (e.g., 3/15/1985 or 03/15/1985)
-      - With 2-digit year: `m/d/yy` or `mm/dd/yy` (e.g., 3/15/85 or 03/15/85)
-      - 2-digit year logic: 00-29 → 2000s, 30-99 → 1900s
-    - ZIP codes will be automatically looked up to determine county and rating area
-    - Family Status must match the dependent DOBs provided:
-      - ES and F require Spouse DOB
-      - EC and F require at least one child DOB (Dep 2 DOB)
-    - Children must be age 0-26
-    - Employees must be age 18-64
-
-    ### Common errors
-
-    - **Invalid ZIP code** - ZIP not found in database for the specified state
-    - **Missing required field** - ES/F without Spouse DOB, or EC/F without child DOB
-    - **Invalid date format** - Accepted formats: m/d/yy, mm/dd/yy, m/d/yyyy, mm/dd/yyyy
-    - **Age out of range** - Employee too young (<18) or too old (>64), or child over 26
-    """)
+        **Limits**
+        - Employees: age 18-64
+        - Children: age 0-26
+        """)
 
 # Show current census status in sidebar
 with st.sidebar:
-    st.markdown("### Census status")
+    st.markdown("### Census Status")
 
     if st.session_state.census_df is not None:
         num_employees = len(st.session_state.census_df)
         num_dependents = len(st.session_state.dependents_df) if st.session_state.dependents_df is not None else 0
 
-        st.success(f"✅ **{num_employees}** employees loaded")
-
+        st.success(f"**{num_employees}** employees")
         if num_dependents > 0:
-            st.info(f"👨‍👩‍👧‍👦 **{num_dependents}** dependents")
+            st.info(f"**{num_dependents}** dependents")
+        st.metric("Covered Lives", num_employees + num_dependents)
 
-        st.metric("Covered lives", num_employees + num_dependents)
-
-        if st.button("Clear census"):
+        if st.button("Clear Census", use_container_width=True):
             st.session_state.census_df = None
             st.session_state.dependents_df = None
             st.rerun()
     else:
         st.warning("No census loaded")
-        st.info("Upload a census file or generate sample data")

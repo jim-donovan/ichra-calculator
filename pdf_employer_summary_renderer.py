@@ -59,6 +59,7 @@ class EmployerSummaryData:
 
     # Strategy info
     strategy_name: str = ""
+    strategy_description: str = ""  # e.g., "65% of Silver LCSP" or "$400/mo flat"
     employees_covered: int = 0
     er_share_pct: float = 0.0
 
@@ -242,6 +243,34 @@ def build_employer_summary_data(
     data.strategy_name = result.get('strategy_name', 'Applied Strategy')
     data.employees_covered = result.get('employees_covered', 0)
 
+    # Build strategy description from config
+    config = strategy_results.get('config', {})
+    strategy_type = config.get('strategy_type', '')
+    if strategy_type == 'PERCENTAGE_LCSP':
+        pct = config.get('lcsp_percentage', 0)
+        data.strategy_description = f"{pct:.0f}% of lowest-cost Silver plan (LCSP)"
+    elif strategy_type == 'BASE_AGE_CURVE':
+        base = config.get('base_amount', 0)
+        data.strategy_description = f"${base:,.0f}/mo base (age 21), scaled by ACA age curve"
+    elif strategy_type == 'FIXED_AGE_TIERS':
+        data.strategy_description = "Fixed dollar amounts by age tier"
+    elif strategy_type == 'flat' or 'flat' in data.strategy_name.lower():
+        # Flat contribution - calculate from total/employees
+        if data.employees_covered > 0:
+            proposed_monthly = result.get('total_monthly', 0)
+            avg_monthly = proposed_monthly / data.employees_covered
+            data.strategy_description = f"${avg_monthly:,.0f}/mo flat contribution per employee"
+        else:
+            data.strategy_description = "Flat contribution per employee"
+    else:
+        # Default: try to use strategy name or calculate from totals
+        if data.employees_covered > 0:
+            proposed_monthly = result.get('total_monthly', 0)
+            avg_monthly = proposed_monthly / data.employees_covered
+            data.strategy_description = f"~${avg_monthly:,.0f}/mo average per employee"
+        else:
+            data.strategy_description = data.strategy_name
+
     # Proposed ICHRA
     data.proposed_ichra_annual = result.get('total_annual', 0)
     proposed_monthly = result.get('total_monthly', 0)
@@ -312,14 +341,28 @@ def build_employer_summary_data(
     if affordability_impact:
         after = affordability_impact.get('after', {})
         data.has_affordability_data = True
-        data.employees_analyzed = after.get('employees_analyzed', 0)
+        employees_analyzed_raw = after.get('employees_analyzed', 0)
+        # Fall back to employees_covered if employees_analyzed is 0
+        data.employees_analyzed = employees_analyzed_raw if employees_analyzed_raw > 0 else data.employees_covered
         data.employees_affordable = after.get('affordable_count', 0)
+        # If no affordability data but we have employees, assume all are affordable
+        if data.employees_affordable == 0 and employees_analyzed_raw == 0 and data.employees_covered > 0:
+            data.employees_affordable = data.employees_covered
         data.employees_affordable_pct = after.get('affordable_pct', 0)
         data.employees_needing_increase = data.employees_analyzed - data.employees_affordable
         data.affordability_gap_annual = after.get('total_gap', 0)
 
         # Check if contributions were already adjusted to meet affordability
         data.affordability_adjusted = result.get('affordability_adjusted', False)
+    else:
+        # No affordability data provided - use employees_covered as fallback
+        data.has_affordability_data = True  # Show the section anyway
+        data.employees_analyzed = data.employees_covered
+        data.employees_affordable = data.employees_covered  # Assume all affordable
+        data.employees_affordable_pct = 100.0
+        data.employees_needing_increase = 0
+        data.affordability_gap_annual = 0
+        data.affordability_adjusted = False
 
     return data
 

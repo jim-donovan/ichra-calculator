@@ -34,13 +34,70 @@ with st.sidebar:
 # STYLING
 # =============================================================================
 
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {
+        background-color: #F0F4FA;
+    }
+    [data-testid="stSidebarNav"] a {
+        background-color: transparent !important;
+    }
+    [data-testid="stSidebarNav"] a[aria-selected="true"] {
+        background-color: #E8F1FD !important;
+        border-left: 3px solid #0047AB !important;
+    }
+    [data-testid="stSidebarNav"] a:hover {
+        background-color: #E8F1FD !important;
+    }
+    [data-testid="stSidebar"] button {
+        background-color: #E8F1FD !important;
+        border: 1px solid #B3D4FC !important;
+        color: #0047AB !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background-color: #B3D4FC !important;
+        border-color: #0047AB !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stAlert"] {
+        background-color: #E8F1FD !important;
+        border: 1px solid #B3D4FC !important;
+        color: #003d91 !important;
+    }
+
+    .hero-section {
+        background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+        border-radius: 12px;
+        padding: 32px;
+        margin-bottom: 24px;
+        border-left: 4px solid #0047AB;
+    }
+
+    .hero-title {
+        font-family: 'Poppins', sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        color: #0a1628;
+        margin-bottom: 8px;
+    }
+
+    .hero-subtitle {
+        font-size: 16px;
+        color: #475569;
+        margin: 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # =============================================================================
 # PAGE HEADER
 # =============================================================================
 
-st.title("📊 LCSP analysis")
-st.markdown("Compare current group plan costs to 100% LCSP (Lowest Cost Silver Plan) premiums across all states.")
+st.markdown("""
+<div class="hero-section">
+    <div class="hero-title">📊 LCSP Analysis</div>
+    <p class="hero-subtitle">Compare current group plan costs to 100% LCSP (Lowest Cost Silver Plan) premiums across all states</p>
+</div>
+""", unsafe_allow_html=True)
 
 # =============================================================================
 # VALIDATION
@@ -399,8 +456,13 @@ if results and 'total_monthly' in results:
 
     # Savings Heatmap by Age and Family Status
     if results.get('employee_details') and has_renewal:
-        with st.expander("🗺️ Savings heatmap by age & family status", expanded=True):
-            st.markdown("**Monthly savings per employee** comparing 2026 Renewal vs LCSP. Green = savings, Red = increase.")
+        with st.expander("🗺️ Who saves the most? Breakdown by age & family", expanded=True):
+            st.markdown("""
+            This heatmap shows **average monthly savings** when comparing what you'd pay under the 2026 renewal
+            vs. 100% LCSP coverage. Each cell shows the average savings and employee count in parentheses.
+
+            **How to read:** 🟢 Green = employees save money | 🔴 Red = employees pay more | Hover for details
+            """)
 
             detail_df = pd.DataFrame(results['employee_details'])
 
@@ -535,20 +597,20 @@ if results and 'total_monthly' in results:
 
                 fig.update_layout(
                     title=dict(
-                        text="Average monthly savings: 2026 renewal vs LCSP",
+                        text="",
                         font=dict(size=16)
                     ),
-                    xaxis_title="Family status",
-                    yaxis_title="Employee age band",
+                    xaxis_title="Family Status",
+                    yaxis_title="Age Group",
                     height=450,
                     yaxis=dict(autorange='reversed'),  # Youngest at top
-                    margin=dict(l=80, r=40, t=60, b=60)
+                    margin=dict(l=80, r=40, t=20, b=60)
                 )
 
                 st.plotly_chart(fig, width='stretch')
 
                 # Summary stats below heatmap
-                st.markdown("**Quick Stats:**")
+                st.markdown("##### Summary")
                 stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
 
                 # Employees with savings vs increases
@@ -557,19 +619,19 @@ if results and 'total_monthly' in results:
                 total_emp = len(detail_df)
 
                 with stats_col1:
-                    st.metric("Employees with savings", f"{emp_with_savings}", f"{emp_with_savings/total_emp*100:.0f}%")
+                    st.metric("Would save", f"{emp_with_savings} employees", f"{emp_with_savings/total_emp*100:.0f}% of workforce")
                 with stats_col2:
-                    st.metric("Employees with increase", f"{emp_with_increase}", f"{emp_with_increase/total_emp*100:.0f}%")
+                    st.metric("Would pay more", f"{emp_with_increase} employees", f"{emp_with_increase/total_emp*100:.0f}% of workforce")
                 with stats_col3:
                     avg_savings = detail_df['savings'].mean()
                     if avg_savings >= 0:
-                        st.metric("Avg savings/employee", f"${avg_savings:,.0f}/mo")
+                        st.metric("Avg savings", f"${avg_savings:,.0f}/mo", "per employee")
                     else:
-                        st.metric("Avg increase/employee", f"${abs(avg_savings):,.0f}/mo")
+                        st.metric("Avg increase", f"${abs(avg_savings):,.0f}/mo", "per employee")
                 with stats_col4:
                     max_savings = detail_df['savings'].max()
                     max_increase = detail_df['savings'].min()
-                    st.metric("Range", f"${max_increase:,.0f} to ${max_savings:,.0f}")
+                    st.metric("Savings range", f"${max_increase:,.0f} to ${max_savings:,.0f}", "monthly")
             else:
                 st.info("Not enough data to generate heatmap.")
 
@@ -598,7 +660,7 @@ if results and 'total_monthly' in results:
                 labels=['Saves Money', 'Breakeven (±$50)', 'Pays More'],
                 values=[n_saves, n_breakeven, n_pays_more],
                 hole=0.5,
-                marker_colors=['#16a34a', '#fbbf24', '#dc2626'],
+                marker_colors=['#16a34a', '#0047AB', '#dc2626'],
                 textinfo='label+percent',
                 textposition='outside',
                 pull=[0.02, 0, 0.02]
@@ -636,8 +698,8 @@ if results and 'total_monthly' in results:
 
                 # Breakeven
                 st.markdown(f"""
-                <div style="background: #fef3c7; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #fbbf24;">
-                    <strong style="color: #b45309;">≈ Breakeven (±$50): {n_breakeven} employees ({n_breakeven/total_emp*100:.0f}%)</strong><br>
+                <div style="background: #E8F1FD; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #0047AB;">
+                    <strong style="color: #003d91;">≈ Breakeven (±$50): {n_breakeven} employees ({n_breakeven/total_emp*100:.0f}%)</strong><br>
                     <span style="font-size: 0.9em;">Avg difference: ${breakeven['savings'].mean():,.0f}/mo</span> |
                     <span style="font-size: 0.9em;">Total: ${breakeven['savings'].sum():,.0f}/mo</span>
                 </div>

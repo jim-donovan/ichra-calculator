@@ -53,6 +53,38 @@ PPTX_TEMPLATE_PATH = Path(__file__).parent.parent / 'templates' / 'glove_proposa
 # Page config
 st.set_page_config(page_title="Proposal Generator", page_icon="📑", layout="wide")
 
+# Sidebar styling and hero section
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] { background-color: #F0F4FA; }
+    [data-testid="stSidebarNav"] a { background-color: transparent !important; }
+    [data-testid="stSidebarNav"] a[aria-selected="true"] { background-color: #E8F1FD !important; border-left: 3px solid #0047AB !important; }
+    [data-testid="stSidebarNav"] a:hover { background-color: #E8F1FD !important; }
+    [data-testid="stSidebar"] button { background-color: #E8F1FD !important; border: 1px solid #B3D4FC !important; color: #0047AB !important; }
+    [data-testid="stSidebar"] button:hover { background-color: #B3D4FC !important; border-color: #0047AB !important; }
+    [data-testid="stSidebar"] [data-testid="stAlert"] { background-color: #E8F1FD !important; border: 1px solid #B3D4FC !important; color: #003d91 !important; }
+
+    .hero-section {
+        background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+        border-radius: 12px;
+        padding: 32px;
+        margin-bottom: 24px;
+        border-left: 4px solid #0047AB;
+    }
+    .hero-title {
+        font-family: 'Poppins', sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        color: #0a1628;
+        margin-bottom: 8px;
+    }
+    .hero-subtitle {
+        font-size: 16px;
+        color: #475569;
+        margin: 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialize session state
 if 'db' not in st.session_state:
@@ -87,8 +119,12 @@ if 'send_email_enabled' not in st.session_state:
     st.session_state.send_email_enabled = False
 
 # Page header
-st.title("📑 Proposal generator")
-st.markdown("Generate a branded GLOVE ICHRA proposal PowerPoint presentation")
+st.markdown("""
+<div class="hero-section">
+    <div class="hero-title">📑 Proposal Generator</div>
+    <p class="hero-subtitle">Generate a branded GLOVE ICHRA proposal PowerPoint presentation</p>
+</div>
+""", unsafe_allow_html=True)
 
 # Note: PPTX template check is done at generation time (PDF doesn't need template)
 
@@ -196,7 +232,7 @@ with score_col1:
         score_color = "#16a34a"  # Green
         score_label = "Strong fit"
     elif fit_score >= 50:
-        score_color = "#f59e0b"  # Amber
+        score_color = "#0047AB"  # Cobalt
         score_label = "Moderate fit"
     else:
         score_color = "#dc2626"  # Red

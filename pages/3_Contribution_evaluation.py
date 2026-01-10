@@ -107,15 +107,69 @@ BADGE_CSS = """
     --green-600: #16a34a;
     --green-700: #15803d;
 
-    --amber-50: #fffbeb;
-    --amber-100: #fef3c7;
-    --amber-500: #f59e0b;
-    --amber-600: #d97706;
+    --amber-50: #E8F1FD;
+    --amber-100: #B3D4FC;
+    --amber-500: #0047AB;
+    --amber-600: #003d91;
 
     --red-50: #fef2f2;
     --red-100: #fee2e2;
     --red-500: #ef4444;
     --red-600: #dc2626;
+}
+
+/* ============================================
+   SIDEBAR STYLING
+   ============================================ */
+[data-testid="stSidebar"] {
+    background-color: #F0F4FA;
+}
+[data-testid="stSidebarNav"] a {
+    background-color: transparent !important;
+}
+[data-testid="stSidebarNav"] a[aria-selected="true"] {
+    background-color: #E8F1FD !important;
+    border-left: 3px solid #0047AB !important;
+}
+[data-testid="stSidebarNav"] a:hover {
+    background-color: #E8F1FD !important;
+}
+[data-testid="stSidebar"] button {
+    background-color: #E8F1FD !important;
+    border: 1px solid #B3D4FC !important;
+    color: #0047AB !important;
+}
+[data-testid="stSidebar"] button:hover {
+    background-color: #B3D4FC !important;
+    border-color: #0047AB !important;
+}
+[data-testid="stSidebar"] [data-testid="stAlert"] {
+    background-color: #E8F1FD !important;
+    border: 1px solid #B3D4FC !important;
+    color: #003d91 !important;
+}
+
+/* Hero section */
+.hero-section {
+    background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+    border-left: 4px solid #0047AB;
+}
+
+.hero-title {
+    font-family: 'Poppins', sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: #0a1628;
+    margin-bottom: 8px;
+}
+
+.hero-subtitle {
+    font-size: 16px;
+    color: #475569;
+    margin: 0;
 }
 
 /* ============================================
@@ -1182,8 +1236,12 @@ def get_evaluation_response(user_message: str, context: str) -> str:
 # PAGE UI
 # =============================================================================
 
-st.title("💰 Contribution evaluation")
-st.markdown("Evaluate what employees can get on the marketplace compared to their current contributions.")
+st.markdown("""
+<div class="hero-section">
+    <div class="hero-title">💰 Contribution Evaluation</div>
+    <p class="hero-subtitle">Evaluate what employees can get on the marketplace compared to their current contributions</p>
+</div>
+""", unsafe_allow_html=True)
 
 # Check for census
 if 'census_df' not in st.session_state or st.session_state.census_df is None:
@@ -2097,6 +2155,25 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
             )
             has_buffer = result.get('buffer_applied', 0) > 0
 
+            # Get multi_metal_results for Bronze/Silver/Gold rates
+            financial_summary = st.session_state.get('financial_summary', {})
+            multi_metal_results = financial_summary.get('multi_metal_scenario', {})
+
+            # Build employee rate lookup from multi_metal_results
+            # emp_id -> {Bronze: rate, Silver: rate, Gold: rate}
+            emp_metal_rates = {}
+            for metal in ['Bronze', 'Silver', 'Gold']:
+                metal_data = multi_metal_results.get(metal, {})
+                for emp_detail in metal_data.get('employee_details', []):
+                    eid = str(emp_detail.get('employee_id', ''))
+                    if eid not in emp_metal_rates:
+                        emp_metal_rates[eid] = {'Bronze': 0, 'Silver': 0, 'Gold': 0}
+                    # Use aggregate family premium if available, otherwise estimated_tier_premium
+                    emp_metal_rates[eid][metal] = (
+                        emp_detail.get('aggregate_family_premium') or
+                        emp_detail.get('estimated_tier_premium') or
+                        emp_detail.get('lcp_ee_rate', 0)
+                    )
 
             # Build detailed strategy string with config
             strategy_type = result['strategy_type']
@@ -2122,6 +2199,12 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                     'Annual Contribution': data['annual_contribution'],
                     'Strategy': strategy_str
                 }
+
+                # Add Bronze/Silver/Gold marketplace rates
+                emp_rates = emp_metal_rates.get(str(emp_id), {})
+                row['Bronze Rate'] = emp_rates.get('Bronze', '') or ''
+                row['Silver Rate'] = emp_rates.get('Silver', '') or ''
+                row['Gold Rate'] = emp_rates.get('Gold', '') or ''
 
                 # Add affordability columns if adjustments were made
                 if has_affordability_data:
@@ -2312,7 +2395,7 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
         fig = go.Figure(data=[go.Pie(
             labels=['Affordable', 'Needs Increase'],
             values=[summary['affordable_at_current'], summary['needs_increase']],
-            marker_colors=['#10b981', '#f59e0b'],
+            marker_colors=['#10b981', '#0047AB'],
             hole=0.4,  # Donut style
             textinfo='label+value',
             textposition='outside',
@@ -2571,6 +2654,25 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
                 # Build comprehensive export DataFrame
                 assignments = settings.get('employee_assignments', {})
                 if assignments:
+                    # Get multi_metal_results for Bronze/Silver/Gold rates
+                    financial_summary = st.session_state.get('financial_summary', {})
+                    multi_metal_results = financial_summary.get('multi_metal_scenario', {})
+
+                    # Build employee rate lookup from multi_metal_results
+                    emp_metal_rates = {}
+                    for metal in ['Bronze', 'Silver', 'Gold']:
+                        metal_data = multi_metal_results.get(metal, {})
+                        for emp_detail in metal_data.get('employee_details', []):
+                            eid = str(emp_detail.get('employee_id', ''))
+                            if eid not in emp_metal_rates:
+                                emp_metal_rates[eid] = {'Bronze': 0, 'Silver': 0, 'Gold': 0}
+                            # Use aggregate family premium if available
+                            emp_metal_rates[eid][metal] = (
+                                emp_detail.get('aggregate_family_premium') or
+                                emp_detail.get('estimated_tier_premium') or
+                                emp_detail.get('lcp_ee_rate', 0)
+                            )
+
                     export_data = []
                     for emp_id, assign in assignments.items():
                         emp_row = census_df[
@@ -2599,6 +2701,9 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
                             rating_area = ''
                             zip_code = ''
 
+                        # Get rates for this employee
+                        emp_rates = emp_metal_rates.get(str(emp_id), {})
+
                         export_data.append({
                             'Employee ID': emp_id,
                             'First Name': first_name,
@@ -2610,7 +2715,10 @@ if not _skip_old_affordability and 'affordability_analysis' in st.session_state 
                             'Family Status': family_status,
                             'Contribution Class': assign['class_id'],
                             'Monthly Contribution': assign['monthly_contribution'],
-                            'Annual Contribution': assign['annual_contribution']
+                            'Annual Contribution': assign['annual_contribution'],
+                            'Bronze Rate': emp_rates.get('Bronze', '') or '',
+                            'Silver Rate': emp_rates.get('Silver', '') or '',
+                            'Gold Rate': emp_rates.get('Gold', '') or ''
                         })
 
                     export_df = pd.DataFrame(export_data)

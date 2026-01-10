@@ -539,10 +539,10 @@ DISPLAY_PLACEHOLDERS = {
 
 # Tier colors for workforce composition charts
 TIER_COLORS = {
-    'EE': '#2b7fff',   # Blue - Employee Only
-    'ES': '#ad46ff',   # Purple - Employee + Spouse
-    'EC': '#f6339a',   # Pink - Employee + Children
-    'F': '#ff6900',    # Orange - Family
+    'EE': '#0047AB',   # Cobalt - Employee Only
+    'ES': '#6366f1',   # Indigo - Employee + Spouse
+    'EC': '#0d9488',   # Teal - Employee + Children
+    'F': '#0891b2',    # Cyan - Family
 }
 
 # Tier display labels

@@ -1,8 +1,8 @@
 [theme]
 base = "light"
-primaryColor = "#0D7377"
+primaryColor = "#0047AB"
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f5f0e8"
+secondaryBackgroundColor = "#F0F4FA"
 textColor = "#2C2C2C"
 
 # DM Sans from Google Fonts (with fallback)

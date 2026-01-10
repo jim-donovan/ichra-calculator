@@ -24,8 +24,17 @@ st.set_page_config(page_title="Individual analysis", page_icon="👤", layout="w
 
 st.markdown("""
 <style>
+/* Sidebar styling */
+[data-testid="stSidebar"] { background-color: #F0F4FA; }
+[data-testid="stSidebarNav"] a { background-color: transparent !important; }
+[data-testid="stSidebarNav"] a[aria-selected="true"] { background-color: #E8F1FD !important; border-left: 3px solid #0047AB !important; }
+[data-testid="stSidebarNav"] a:hover { background-color: #E8F1FD !important; }
+[data-testid="stSidebar"] button { background-color: #E8F1FD !important; border: 1px solid #B3D4FC !important; color: #0047AB !important; }
+[data-testid="stSidebar"] button:hover { background-color: #B3D4FC !important; border-color: #0047AB !important; }
+[data-testid="stSidebar"] [data-testid="stAlert"] { background-color: #E8F1FD !important; border: 1px solid #B3D4FC !important; color: #003d91 !important; }
+
 .plan-badge {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #0047AB 0%, #003d91 100%);
     color: white;
     padding: 0.5rem 1rem;
     border-radius: 8px;
@@ -36,6 +45,26 @@ st.markdown("""
 .plan-badge-label {
     opacity: 0.8;
     margin-right: 0.5rem;
+}
+
+.hero-section {
+    background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+    border-left: 4px solid #0047AB;
+}
+.hero-title {
+    font-family: 'Poppins', sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: #0a1628;
+    margin-bottom: 8px;
+}
+.hero-subtitle {
+    font-size: 16px;
+    color: #475569;
+    margin: 0;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -440,7 +469,12 @@ def get_equivalent_plan(employee_id: str, target_premium: float = None) -> dict:
 # PAGE CONTENT
 # =============================================================================
 
-st.title("👤 Individual employee analysis")
+st.markdown("""
+<div class="hero-section">
+    <div class="hero-title">👤 Individual Employee Analysis</div>
+    <p class="hero-subtitle">Analyze individual employees' marketplace options and ICHRA contributions</p>
+</div>
+""", unsafe_allow_html=True)
 
 # Check for census
 if 'census_df' not in st.session_state or st.session_state.census_df is None:

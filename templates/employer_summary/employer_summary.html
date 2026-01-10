@@ -131,7 +131,15 @@
             font-size: 14px;
             font-weight: 600;
             color: #166534;
-            margin-bottom: 20px;
+            margin-bottom: 6px;
+        }
+
+        .hero-strategy {
+            text-align: center;
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 16px;
+            font-style: italic;
         }
 
         .hero-main {
@@ -505,6 +513,9 @@
         <!-- ======================== -->
         <div class="hero-section">
             <div class="hero-title">The Bottom Line</div>
+            {% if data.strategy_description %}
+            <div class="hero-strategy">Contribution Strategy: {{ data.strategy_description }}</div>
+            {% endif %}
             <div class="hero-main">
                 <div class="hero-budget">
                     <div class="label">Your ICHRA Budget</div>
@@ -578,7 +589,7 @@
                 <div class="insight-title">You may save even more</div>
                 <div class="insight-text">
                     Not all employees use their full allowance. At typical 70% utilization,
-                    your actual cost would be ~${{ "{:,.0f}".format(data.ichra_projected_70) }}/yr.
+                    your <strong>actual cost</strong> would be ~${{ "{:,.0f}".format(data.ichra_projected_70) }}/yr.
                 </div>
             </div>
             <div class="insight-value">
@@ -609,7 +620,7 @@
             <div class="compliance-result success">
                 <div class="compliance-icon">✓</div>
                 <div class="compliance-text">
-                    <strong>{{ data.employees_analyzed }} of {{ data.employees_analyzed }} employees</strong> meet IRS requirements.
+                    <strong>All {{ data.employees_analyzed }} employees</strong> meet IRS requirements.
                     Adjustments are already included in your budget.
                 </div>
             </div>
@@ -632,7 +643,7 @@
             <div class="compliance-result success">
                 <div class="compliance-icon">✓</div>
                 <div class="compliance-text">
-                    <strong>{{ data.employees_analyzed }} of {{ data.employees_analyzed }} employees</strong> meet IRS requirements.
+                    <strong>All {{ data.employees_analyzed }} employees</strong> meet IRS requirements.
                     No additional budget needed.
                 </div>
             </div>

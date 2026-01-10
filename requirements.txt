@@ -40,3 +40,9 @@ python-dotenv>=1.0.0
 
 # Email
 sendgrid>=6.10.0
+
+# Cloud storage (Cloudflare R2 via S3-compatible API)
+boto3>=1.28.0
+
+# QR code generation
+qrcode[pil]>=7.4

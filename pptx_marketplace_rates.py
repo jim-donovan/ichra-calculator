@@ -47,6 +47,10 @@ COLORS = {
     'savings_green': RGBColor(0x00, 0xA6, 0x3E),      # #00A63E
     'savings_bg': RGBColor(0xDC, 0xFC, 0xE7),         # #DCFCE7
     'cost_red': RGBColor(0xDC, 0x26, 0x26),           # #DC2626
+
+    # Renewal comparison row (more visible gray)
+    'renewal_bg': RGBColor(0xE5, 0xE7, 0xEB),         # #E5E7EB (gray-200)
+    'renewal_text': RGBColor(0x37, 0x41, 0x51),       # #374151 (gray-700)
 }
 
 # Slide dimensions (standard widescreen 16:9)
@@ -57,6 +61,9 @@ SLIDE_HEIGHT = Inches(7.5)
 DECORATIVE_IMAGES_DIR = Path(__file__).parent / "glove-design" / "Design + Crit 01"
 CORNER_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-corner.png"
 EDGE_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-edge-h-fade.png"
+
+# Banner image path
+BANNER_IMAGE = Path("/Users/jimdonovan/Desktop/GLOVE/PPT_header.png")
 
 
 @dataclass
@@ -205,7 +212,7 @@ class MarketplaceRatesSlideGenerator:
 
     def _set_cell_text(self, cell, text: str, color: RGBColor,
                        font_size: int = 11, bold: bool = False,
-                       align: PP_ALIGN = PP_ALIGN.CENTER):
+                       align: PP_ALIGN = PP_ALIGN.CENTER, italic: bool = False):
         """Set cell text with formatting"""
         cell.text = text
         cell.text_frame.paragraphs[0].alignment = align
@@ -213,6 +220,7 @@ class MarketplaceRatesSlideGenerator:
         cell.text_frame.paragraphs[0].font.size = Pt(font_size)
         cell.text_frame.paragraphs[0].font.color.rgb = color
         cell.text_frame.paragraphs[0].font.bold = bold
+        cell.text_frame.paragraphs[0].font.italic = italic
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
 
     def _add_cell_line(self, cell, text: str, color: RGBColor,
@@ -273,23 +281,49 @@ class MarketplaceRatesSlideGenerator:
         blank_layout = self.prs.slide_layouts[6]
         slide = self.prs.slides.add_slide(blank_layout)
 
+        # Add banner at top
+        if BANNER_IMAGE.exists():
+            slide.shapes.add_picture(
+                str(BANNER_IMAGE),
+                left=Inches(0),
+                top=Inches(0),
+                width=SLIDE_WIDTH,
+                height=Inches(0.25)
+            )
+
+        # Banner offset for content positioning
+        banner_offset = Inches(0.2)
+
+        # Add company name (top right)
+        if data.client_name:
+            company_box = slide.shapes.add_textbox(
+                Inches(9.5), Inches(0.3), Inches(3.5), Inches(0.3)
+            )
+            company_tf = company_box.text_frame
+            company_tf.paragraphs[0].text = data.client_name
+            company_tf.paragraphs[0].font.name = 'Poppins'
+            company_tf.paragraphs[0].font.size = Pt(14)
+            company_tf.paragraphs[0].font.bold = True
+            company_tf.paragraphs[0].font.color.rgb = COLORS['total_text']
+            company_tf.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
         # Add title
         title_left = Inches(0.5)
-        title_top = Inches(0.4)
-        title_width = Inches(12.33)
+        title_top = Inches(0.35) + banner_offset
+        title_width = Inches(9)
         title_height = Inches(0.6)
 
         title_box = slide.shapes.add_textbox(title_left, title_top, title_width, title_height)
         title_tf = title_box.text_frame
         title_tf.paragraphs[0].text = "Marketplace Rates by Coverage Type"
         title_tf.paragraphs[0].font.name = 'Poppins'
-        title_tf.paragraphs[0].font.size = Pt(28)
+        title_tf.paragraphs[0].font.size = Pt(26)
         title_tf.paragraphs[0].font.bold = True
         title_tf.paragraphs[0].font.color.rgb = COLORS['total_text']
 
         # Add subtitle
-        subtitle_top = Inches(1.0)
-        subtitle_box = slide.shapes.add_textbox(title_left, subtitle_top, title_width, Inches(0.4))
+        subtitle_top = Inches(0.85) + banner_offset
+        subtitle_box = slide.shapes.add_textbox(title_left, subtitle_top, Inches(12.33), Inches(0.4))
         subtitle_tf = subtitle_box.text_frame
         subtitle_tf.paragraphs[0].text = "Lowest cost plans by metal level"
         subtitle_tf.paragraphs[0].font.name = 'Poppins'
@@ -303,7 +337,7 @@ class MarketplaceRatesSlideGenerator:
 
         # Create table
         table_left = Inches(0.5)
-        table_top = Inches(1.6)
+        table_top = Inches(1.4) + banner_offset
         table_width = Inches(12.33)
         table_height = Inches(0.5 + 0.4 + (num_tiers * 0.6) + (4 * 0.45))
 
@@ -347,13 +381,14 @@ class MarketplaceRatesSlideGenerator:
             self._set_cell_fill(cell, COLORS['row_label_bg'])
             self._set_cell_text(cell, f"{count:,}" if count > 0 else "--", COLORS['secondary_text'], font_size=12)
 
-        # Tier rows
-        # Find lowest cost metal for each tier
-        for row_idx, tier in enumerate(data.tiers, start=2):
-            metal_totals = [tier.bronze.total, tier.silver.total, tier.gold.total]
-            valid_totals = [t for t in metal_totals if t > 0]
-            min_cost = min(valid_totals) if valid_totals else 0
+        # Determine which metal column has lowest total (for consistent column highlighting)
+        monthly_totals = {'Bronze': data.bronze_monthly, 'Silver': data.silver_monthly, 'Gold': data.gold_monthly}
+        valid_totals = {k: v for k, v in monthly_totals.items() if v > 0}
+        lowest_metal = min(valid_totals, key=valid_totals.get) if valid_totals else None
+        lowest_col = {'Bronze': 1, 'Silver': 2, 'Gold': 3}.get(lowest_metal)
 
+        # Tier rows with column-based highlighting
+        for row_idx, tier in enumerate(data.tiers, start=2):
             # Coverage Type column
             cell = table.cell(row_idx, 0)
             self._set_cell_fill(cell, COLORS['row_label_bg'])
@@ -363,15 +398,14 @@ class MarketplaceRatesSlideGenerator:
             self._add_cell_line(cell, f"{tier.count} employee{'s' if tier.count != 1 else ''}{age_suffix}",
                                COLORS['secondary_text'], font_size=10, align=PP_ALIGN.LEFT)
 
-            # Metal columns
+            # Metal columns - highlight entire column if lowest total
             for col_idx, (metal_data, text_color) in enumerate([
                 (tier.bronze, COLORS['bronze_text']),
                 (tier.silver, COLORS['silver_text']),
                 (tier.gold, COLORS['gold_text']),
             ], start=1):
                 cell = table.cell(row_idx, col_idx)
-                is_lowest = metal_data.total > 0 and metal_data.total == min_cost
-                self._set_cell_fill(cell, COLORS['savings_bg'] if is_lowest else COLORS['white'])
+                self._set_cell_fill(cell, COLORS['white'])
                 self._set_cell_text(cell, self._format_currency(metal_data.total),
                                    text_color, font_size=14, bold=True)
                 self._add_cell_line(cell, self._format_range(metal_data.min_rate, metal_data.max_rate),
@@ -383,34 +417,34 @@ class MarketplaceRatesSlideGenerator:
         # Total Monthly row
         row_idx = footer_row_start
         cell = table.cell(row_idx, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
+        self._set_cell_fill(cell, COLORS['white'])
         self._set_cell_text(cell, "Total Monthly", COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
         monthly_values = [data.bronze_monthly, data.silver_monthly, data.gold_monthly]
-        for col_idx, (value, text_color) in enumerate(zip(monthly_values, metal_text_colors), start=1):
+        for col_idx, value in enumerate(monthly_values, start=1):
             cell = table.cell(row_idx, col_idx)
             self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, self._format_currency(value), text_color, font_size=14, bold=True)
+            # Use dark text color for readability
+            self._set_cell_text(cell, self._format_currency(value), COLORS['total_text'], font_size=14, bold=True)
 
-        # Annual Total row
+        # "vs a renewal of $X/mo:" merged row
         row_idx = footer_row_start + 1
-        cell = table.cell(row_idx, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
-        self._set_cell_text(cell, "Annual Total", COLORS['total_text'],
-                           font_size=12, bold=True, align=PP_ALIGN.LEFT)
+        # Merge all cells in this row
+        start_cell = table.cell(row_idx, 0)
+        end_cell = table.cell(row_idx, 3)
+        start_cell.merge(end_cell)
+        merged_cell = table.cell(row_idx, 0)
+        self._set_cell_fill(merged_cell, COLORS['renewal_bg'])
+        renewal_text = f"vs a renewal of {self._format_currency(data.renewal_monthly)}/mo:"
+        self._set_cell_text(merged_cell, renewal_text, COLORS['renewal_text'],
+                           font_size=14, bold=True, align=PP_ALIGN.CENTER, italic=True)
 
-        annual_values = [data.bronze_annual, data.silver_annual, data.gold_annual]
-        for col_idx, (value, text_color) in enumerate(zip(annual_values, metal_text_colors), start=1):
-            cell = table.cell(row_idx, col_idx)
-            self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, self._format_currency(value), text_color, font_size=12, bold=True)
-
-        # Savings vs Renewal row
+        # Monthly Savings row
         row_idx = footer_row_start + 2
         cell = table.cell(row_idx, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
-        self._set_cell_text(cell, "Savings vs Renewal", COLORS['total_text'],
+        self._set_cell_fill(cell, COLORS['white'])
+        self._set_cell_text(cell, "Monthly Savings", COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
         for col_idx, value in enumerate(monthly_values, start=1):
@@ -422,7 +456,7 @@ class MarketplaceRatesSlideGenerator:
         # Premium savings % row
         row_idx = footer_row_start + 3
         cell = table.cell(row_idx, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
+        self._set_cell_fill(cell, COLORS['white'])
         self._set_cell_text(cell, "Premium Savings %", COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 

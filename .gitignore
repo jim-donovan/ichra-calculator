@@ -166,6 +166,7 @@ ichra_dashboard.py
 templates/population_overview_placeholders_2.csv
 docs/
 PLAN_current_employer_plan.md
+CMS_DATASET_COVERAGE_QUERIES.md
 
 # Unused files
 pdf_playwright_renderer.py

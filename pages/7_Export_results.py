@@ -49,6 +49,38 @@ except ImportError:
 
 st.set_page_config(page_title="Export results", page_icon="📄", layout="wide")
 
+# Sidebar styling and hero section
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] { background-color: #F0F4FA; }
+    [data-testid="stSidebarNav"] a { background-color: transparent !important; }
+    [data-testid="stSidebarNav"] a[aria-selected="true"] { background-color: #E8F1FD !important; border-left: 3px solid #0047AB !important; }
+    [data-testid="stSidebarNav"] a:hover { background-color: #E8F1FD !important; }
+    [data-testid="stSidebar"] button { background-color: #E8F1FD !important; border: 1px solid #B3D4FC !important; color: #0047AB !important; }
+    [data-testid="stSidebar"] button:hover { background-color: #B3D4FC !important; border-color: #0047AB !important; }
+    [data-testid="stSidebar"] [data-testid="stAlert"] { background-color: #E8F1FD !important; border: 1px solid #B3D4FC !important; color: #003d91 !important; }
+
+    .hero-section {
+        background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+        border-radius: 12px;
+        padding: 32px;
+        margin-bottom: 24px;
+        border-left: 4px solid #0047AB;
+    }
+    .hero-title {
+        font-family: 'Poppins', sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        color: #0a1628;
+        margin-bottom: 8px;
+    }
+    .hero-subtitle {
+        font-size: 16px;
+        color: #475569;
+        margin: 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialize session state
 if 'db' not in st.session_state:
@@ -68,8 +100,12 @@ if 'contribution_settings' not in st.session_state:
 
 
 # Page header
-st.title("📄 Export results")
-st.markdown("Generate PDF reports and export data to CSV")
+st.markdown("""
+<div class="hero-section">
+    <div class="hero-title">📄 Export Results</div>
+    <p class="hero-subtitle">Generate PDF reports and export data to CSV</p>
+</div>
+""", unsafe_allow_html=True)
 
 # Check prerequisites
 if st.session_state.census_df is None:
@@ -170,13 +206,21 @@ else:
             # Container for PDF elements
             elements = []
 
-            # Styles
+            # Styles - Cobalt theme to match UI
             styles = getSampleStyleSheet()
+
+            # Brand colors
+            COBALT = colors.HexColor('#0047AB')
+            COBALT_DARK = colors.HexColor('#003d91')
+            COBALT_LIGHT = colors.HexColor('#E8F1FD')
+            TEXT_DARK = colors.HexColor('#0a1628')
+            TEXT_SECONDARY = colors.HexColor('#475569')
+
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
                 fontSize=24,
-                textColor=colors.HexColor('#1f77b4'),
+                textColor=COBALT,
                 spaceAfter=30
             )
 
@@ -184,7 +228,7 @@ else:
                 'CustomHeading',
                 parent=styles['Heading2'],
                 fontSize=16,
-                textColor=colors.HexColor('#333333'),
+                textColor=TEXT_DARK,
                 spaceAfter=12,
                 spaceBefore=12
             )
@@ -193,7 +237,7 @@ else:
                 'CustomSubheading',
                 parent=styles['Heading3'],
                 fontSize=12,
-                textColor=colors.HexColor('#555555'),
+                textColor=TEXT_SECONDARY,
                 spaceAfter=8,
                 spaceBefore=8
             )
@@ -277,10 +321,10 @@ else:
                 # Headline savings/cost message
                 if change_annual < 0:
                     savings_text = f"<b>Annual Savings: {DataFormatter.format_currency(abs(change_annual))} ({abs(change_pct):.0f}% reduction)</b>"
-                    elements.append(Paragraph(savings_text, ParagraphStyle('Savings', parent=styles['Normal'], textColor=colors.HexColor('#228B22'), fontSize=12)))
+                    elements.append(Paragraph(savings_text, ParagraphStyle('Savings', parent=styles['Normal'], textColor=colors.HexColor('#10b981'), fontSize=12)))
                 elif change_annual > 0:
                     cost_text = f"<b>Additional Cost: {DataFormatter.format_currency(change_annual)}/year ({change_pct:.0f}% increase)</b>"
-                    elements.append(Paragraph(cost_text, ParagraphStyle('Cost', parent=styles['Normal'], textColor=colors.HexColor('#CC0000'), fontSize=12)))
+                    elements.append(Paragraph(cost_text, ParagraphStyle('Cost', parent=styles['Normal'], textColor=colors.HexColor('#ef4444'), fontSize=12)))
                 else:
                     elements.append(Paragraph("<b>Cost Neutral</b>", styles['Normal']))
                 elements.append(Spacer(1, 0.15*inch))
@@ -304,15 +348,15 @@ else:
 
                 cost_table = Table(cost_table_data, colWidths=[1.3*inch, 1.75*inch, 1.75*inch, 1.5*inch])
                 cost_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f77b4')),
+                    ('BACKGROUND', (0, 0), (-1, 0), COBALT),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, 0), 10),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#B3D4FC')),
                     ('FONTSIZE', (0, 1), (-1, -1), 9),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, COBALT_LIGHT])
                 ]))
 
                 elements.append(cost_table)
@@ -362,15 +406,15 @@ else:
 
                 detail_table = Table(detail_table_data, colWidths=[1.5*inch, 0.75*inch, 1.25*inch, 1.25*inch, 1.25*inch])
                 detail_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f77b4')),
+                    ('BACKGROUND', (0, 0), (-1, 0), COBALT),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, 0), 9),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#B3D4FC')),
                     ('FONTSIZE', (0, 1), (-1, -1), 8),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, COBALT_LIGHT])
                 ]))
 
                 elements.append(detail_table)
@@ -406,13 +450,13 @@ else:
 
                 age_table = Table(age_table_data, colWidths=[2*inch, 1*inch, 1*inch])
                 age_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#555555')),
+                    ('BACKGROUND', (0, 0), (-1, 0), COBALT_DARK),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, -1), 9),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+                    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#B3D4FC')),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, COBALT_LIGHT])
                 ]))
 
                 elements.append(age_table)
@@ -432,14 +476,14 @@ else:
 
                     family_table = Table(family_table_data, colWidths=[1*inch, 2.5*inch, 0.75*inch, 1*inch])
                     family_table.setStyle(TableStyle([
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#555555')),
+                        ('BACKGROUND', (0, 0), (-1, 0), COBALT_DARK),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                         ('ALIGN', (1, 1), (1, -1), 'LEFT'),
                         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                         ('FONTSIZE', (0, 0), (-1, -1), 9),
-                        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+                        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#B3D4FC')),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, COBALT_LIGHT])
                     ]))
 
                     elements.append(family_table)
@@ -457,13 +501,13 @@ else:
 
                 state_table = Table(state_table_data, colWidths=[1*inch, 1*inch, 1*inch])
                 state_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#555555')),
+                    ('BACKGROUND', (0, 0), (-1, 0), COBALT_DARK),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, -1), 9),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+                    ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#B3D4FC')),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, COBALT_LIGHT])
                 ]))
 
                 elements.append(state_table)

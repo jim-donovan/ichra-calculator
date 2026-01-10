@@ -24,6 +24,8 @@ from plan_comparison_types import (
     ComparisonFilters,
     calculate_match_score,
     compare_benefit,
+    is_plan_better,
+    calculate_enhanced_ranking_score,
 )
 from queries import PlanComparisonQueries, PlanQueries
 from pptx_plan_comparison import (
@@ -63,24 +65,67 @@ st.markdown("""
         background-color: #ffffff;
     }
 
-    .page-header {
+    [data-testid="stSidebar"] {
+        background-color: #F0F4FA;
+    }
+
+    /* Sidebar navigation links */
+    [data-testid="stSidebarNav"] a {
+        background-color: transparent !important;
+    }
+    [data-testid="stSidebarNav"] a[aria-selected="true"] {
+        background-color: #E8F1FD !important;
+        border-left: 3px solid #0047AB !important;
+    }
+    [data-testid="stSidebarNav"] a:hover {
+        background-color: #E8F1FD !important;
+    }
+
+    /* Sidebar buttons */
+    [data-testid="stSidebar"] button {
+        background-color: #E8F1FD !important;
+        border: 1px solid #B3D4FC !important;
+        color: #0047AB !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background-color: #B3D4FC !important;
+        border-color: #0047AB !important;
+    }
+
+    /* Info boxes in sidebar */
+    [data-testid="stSidebar"] [data-testid="stAlert"] {
+        background-color: #E8F1FD !important;
+        border: 1px solid #B3D4FC !important;
+        color: #003d91 !important;
+    }
+
+    .hero-section {
+        background: linear-gradient(135deg, #ffffff 0%, #e8f1fd 100%);
+        border-radius: 12px;
+        padding: 32px;
+        margin-bottom: 24px;
+        border-left: 4px solid #0047AB;
+    }
+
+    .hero-title {
+        font-family: 'Poppins', sans-serif;
         font-size: 28px;
         font-weight: 700;
-        color: #101828;
+        color: #0a1628;
         margin-bottom: 8px;
     }
 
-    .page-subtitle {
+    .hero-subtitle {
         font-size: 16px;
-        color: #667085;
-        margin-bottom: 24px;
+        color: #475569;
+        margin: 0;
     }
 
     .stage-header {
         background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
         border-radius: 10px;
         padding: 20px 24px;
-        border-left: 4px solid #f97316;
+        border-left: 4px solid #0047AB;
         margin-bottom: 24px;
     }
 
@@ -155,9 +200,9 @@ st.markdown("""
     }
 
     .match-score-medium {
-        background: #fffbeb;
-        border: 1px solid #fde68a;
-        color: #92400e;
+        background: #E8F1FD;
+        border: 1px solid #B3D4FC;
+        color: #003d91;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -239,6 +284,44 @@ def init_session_state():
             current_premium=current_premium,
             renewal_premium=renewal_premium,
         )
+    else:
+        # If plan exists but has no premiums, try to get them from census
+        # (handles case where page 9 was visited before census was loaded)
+        plan = st.session_state.current_employer_plan
+        if plan.current_premium is None or plan.renewal_premium is None:
+            census_current, census_renewal = get_ee_premiums_from_census()
+            if census_current or census_renewal:
+                # Update the plan with census premiums (only if missing)
+                st.session_state.current_employer_plan = CurrentEmployerPlan(
+                    plan_name=plan.plan_name,
+                    carrier=plan.carrier,
+                    plan_type=plan.plan_type,
+                    metal_tier=plan.metal_tier,
+                    hsa_eligible=plan.hsa_eligible,
+                    current_premium=plan.current_premium or census_current,
+                    renewal_premium=plan.renewal_premium or census_renewal,
+                    individual_deductible=plan.individual_deductible,
+                    family_deductible=plan.family_deductible,
+                    individual_oop_max=plan.individual_oop_max,
+                    family_oop_max=plan.family_oop_max,
+                    coinsurance_pct=plan.coinsurance_pct,
+                    pcp_copay=plan.pcp_copay,
+                    specialist_copay=plan.specialist_copay,
+                    er_copay=plan.er_copay,
+                    generic_rx_copay=plan.generic_rx_copay,
+                    preferred_rx_copay=plan.preferred_rx_copay,
+                    specialty_rx_copay=plan.specialty_rx_copay,
+                    pcp_coinsurance=plan.pcp_coinsurance,
+                    specialist_coinsurance=plan.specialist_coinsurance,
+                    er_coinsurance=plan.er_coinsurance,
+                    generic_rx_coinsurance=plan.generic_rx_coinsurance,
+                    preferred_rx_coinsurance=plan.preferred_rx_coinsurance,
+                    specialty_rx_coinsurance=plan.specialty_rx_coinsurance,
+                )
+                # Clear premium widget keys so they refresh with new values
+                for key in ['current_premium_input', 'renewal_premium_input']:
+                    if key in st.session_state:
+                        del st.session_state[key]
 
     if 'comparison_location' not in st.session_state:
         # Try to prefill with most common ZIP from census
@@ -266,6 +349,10 @@ def init_session_state():
     if 'parsed_sbc_data' not in st.session_state:
         st.session_state.parsed_sbc_data = None
 
+    # Form refresh counter - incrementing this forces widget recreation
+    if 'form_refresh_counter' not in st.session_state:
+        st.session_state.form_refresh_counter = 0
+
 
 # ==============================================================================
 # STAGE 1: CURRENT EMPLOYER PLAN INPUT
@@ -292,60 +379,153 @@ def render_stage_1_current_plan():
 
         if uploaded_sbc is not None:
             try:
+                # Read file content and seek back to beginning for potential re-reads
                 content = uploaded_sbc.read().decode('utf-8')
-                parsed = parse_sbc_markdown(content)
+                uploaded_sbc.seek(0)  # Reset file pointer for subsequent reads
 
-                if parsed.get("plan_name"):
-                    st.success(f"Extracted: **{parsed['plan_name']}**")
-
-                    # Show preview of extracted values
-                    preview_cols = st.columns(3)
-                    with preview_cols[0]:
-                        st.metric("Deductible (Individual)", f"${parsed.get('individual_deductible', 0):,.0f}" if parsed.get('individual_deductible') else "—")
-                    with preview_cols[1]:
-                        st.metric("OOP Max (Individual)", f"${parsed.get('individual_oop_max', 0):,.0f}" if parsed.get('individual_oop_max') else "—")
-                    with preview_cols[2]:
-                        st.metric("Coinsurance", f"{parsed.get('coinsurance_pct', 0)}%" if parsed.get('coinsurance_pct') else "—")
-
-                    if st.button("Apply to Form", type="primary"):
-                        # Store parsed data and create updated plan
-                        # PRESERVE existing premium values (from census or user input)
-                        existing_plan = st.session_state.current_employer_plan
-                        st.session_state.parsed_sbc_data = parsed
-                        st.session_state.current_employer_plan = CurrentEmployerPlan(
-                            plan_name=parsed.get("plan_name", ""),
-                            carrier=parsed.get("carrier"),
-                            plan_type=parsed.get("plan_type", "HMO"),
-                            metal_tier=parsed.get("metal_tier"),
-                            hsa_eligible=parsed.get("hsa_eligible", False),
-                            # Preserve premium values from existing plan
-                            current_premium=existing_plan.current_premium,
-                            renewal_premium=existing_plan.renewal_premium,
-                            individual_deductible=parsed.get("individual_deductible", 0) or 0,
-                            family_deductible=parsed.get("family_deductible"),
-                            individual_oop_max=parsed.get("individual_oop_max", 0) or 0,
-                            family_oop_max=parsed.get("family_oop_max"),
-                            coinsurance_pct=parsed.get("coinsurance_pct", 20) or 20,
-                            pcp_copay=parsed.get("pcp_copay"),
-                            specialist_copay=parsed.get("specialist_copay"),
-                            er_copay=parsed.get("er_copay"),
-                            generic_rx_copay=parsed.get("generic_rx_copay"),
-                            preferred_rx_copay=parsed.get("preferred_rx_copay"),
-                            specialty_rx_copay=parsed.get("specialty_rx_copay"),
-                        )
-                        # Clear copay widget keys so they reflect new values
-                        for key in ['pcp_type', 'specialist_type', 'er_type',
-                                    'generic_type', 'preferred_type', 'specialty_type']:
-                            if key in st.session_state:
-                                del st.session_state[key]
-                        st.rerun()
+                # Skip parsing if content is empty (can happen after rerun)
+                if not content.strip():
+                    st.info("File appears empty. Please re-upload the SBC file.")
                 else:
-                    st.warning("Could not extract plan name from the file. Please check the file format.")
+                    parsed = parse_sbc_markdown(content)
+                    # Cache parsed data for use after button click
+                    st.session_state.pending_sbc_data = parsed
+
+                    if parsed.get("plan_name"):
+                        st.success(f"Extracted: **{parsed['plan_name']}**")
+
+                        # Show preview of extracted values
+                        preview_cols = st.columns(3)
+                        with preview_cols[0]:
+                            st.metric("Deductible (Individual)", f"${parsed.get('individual_deductible', 0):,.0f}" if parsed.get('individual_deductible') else "—")
+                        with preview_cols[1]:
+                            st.metric("OOP Max (Individual)", f"${parsed.get('individual_oop_max', 0):,.0f}" if parsed.get('individual_oop_max') else "—")
+                        with preview_cols[2]:
+                            st.metric("Coinsurance", f"{parsed.get('coinsurance_pct', 0)}%" if parsed.get('coinsurance_pct') else "—")
+
+                        if st.button("Apply to Form", type="primary"):
+                            # Store parsed data and create updated plan
+                            # PRESERVE existing premium values (from census or user input)
+                            existing_plan = st.session_state.current_employer_plan
+
+                            # Try to get premium values: first from existing plan, then from census
+                            current_prem = existing_plan.current_premium
+                            renewal_prem = existing_plan.renewal_premium
+                            if not current_prem or not renewal_prem:
+                                # Try to fetch from census if not already set
+                                census_current, census_renewal = get_ee_premiums_from_census()
+                                if not current_prem and census_current:
+                                    current_prem = census_current
+                                if not renewal_prem and census_renewal:
+                                    renewal_prem = census_renewal
+
+                            # Create the updated plan object
+                            new_plan = CurrentEmployerPlan(
+                                plan_name=parsed.get("plan_name", ""),
+                                carrier=parsed.get("carrier"),
+                                plan_type=parsed.get("plan_type", "HMO"),
+                                metal_tier=parsed.get("metal_tier"),
+                                hsa_eligible=parsed.get("hsa_eligible", False),
+                                # Preserve premium values (from existing plan or census)
+                                current_premium=current_prem,
+                                renewal_premium=renewal_prem,
+                                individual_deductible=parsed.get("individual_deductible", 0) or 0,
+                                family_deductible=parsed.get("family_deductible"),
+                                individual_oop_max=parsed.get("individual_oop_max", 0) or 0,
+                                family_oop_max=parsed.get("family_oop_max"),
+                                coinsurance_pct=parsed.get("coinsurance_pct", 20) or 20,
+                                pcp_copay=parsed.get("pcp_copay"),
+                                specialist_copay=parsed.get("specialist_copay"),
+                                er_copay=parsed.get("er_copay"),
+                                generic_rx_copay=parsed.get("generic_rx_copay"),
+                                preferred_rx_copay=parsed.get("preferred_rx_copay"),
+                                specialty_rx_copay=parsed.get("specialty_rx_copay"),
+                            )
+                            st.session_state.parsed_sbc_data = parsed
+                            st.session_state.current_employer_plan = new_plan
+
+                            # DIRECTLY SET widget values in session state
+                            # This ensures widgets display the correct values on rerun
+                            st.session_state['plan_name_input'] = new_plan.plan_name
+                            st.session_state['carrier_input'] = new_plan.carrier or ""
+                            st.session_state['hsa_eligible_checkbox'] = new_plan.hsa_eligible
+                            st.session_state['current_premium_input'] = int(new_plan.current_premium or 0)
+                            st.session_state['renewal_premium_input'] = int(new_plan.renewal_premium or 0)
+                            st.session_state['individual_deductible_input'] = int(new_plan.individual_deductible)
+                            st.session_state['family_deductible_input'] = int(new_plan.family_deductible or 0)
+                            st.session_state['individual_oop_max_input'] = int(new_plan.individual_oop_max)
+                            st.session_state['family_oop_max_input'] = int(new_plan.family_oop_max or 0)
+                            st.session_state['coinsurance_slider'] = int(new_plan.coinsurance_pct)
+
+                            # Set plan type selectbox index
+                            plan_type_val = new_plan.plan_type or "HMO"
+                            if plan_type_val in PLAN_TYPES:
+                                st.session_state['plan_type_select'] = plan_type_val
+
+                            # Set metal tier selectbox
+                            metal_options = ["N/A", "Bronze", "Silver", "Gold", "Platinum"]
+                            if new_plan.metal_tier in metal_options:
+                                st.session_state['metal_tier_select'] = new_plan.metal_tier
+                            else:
+                                st.session_state['metal_tier_select'] = "N/A"
+
+                            # Set copay type dropdowns based on copay values
+                            def get_copay_type(copay_value):
+                                if copay_value == -1:
+                                    return "N/A"
+                                elif copay_value == -2:
+                                    return "Not Covered"
+                                elif copay_value is None:
+                                    return "Ded + Coinsurance"
+                                else:
+                                    return "Flat Copay"
+
+                            st.session_state['pcp_type'] = get_copay_type(new_plan.pcp_copay)
+                            st.session_state['specialist_type'] = get_copay_type(new_plan.specialist_copay)
+                            st.session_state['er_type'] = get_copay_type(new_plan.er_copay)
+                            st.session_state['generic_type'] = get_copay_type(new_plan.generic_rx_copay)
+                            st.session_state['preferred_type'] = get_copay_type(new_plan.preferred_rx_copay)
+                            st.session_state['specialty_type'] = get_copay_type(new_plan.specialty_rx_copay)
+
+                            # Set copay value inputs (only if Flat Copay)
+                            if new_plan.pcp_copay and new_plan.pcp_copay > 0:
+                                st.session_state['pcp_copay_input'] = int(new_plan.pcp_copay)
+                            if new_plan.specialist_copay and new_plan.specialist_copay > 0:
+                                st.session_state['specialist_copay_input'] = int(new_plan.specialist_copay)
+                            if new_plan.er_copay and new_plan.er_copay > 0:
+                                st.session_state['er_copay_input'] = int(new_plan.er_copay)
+                            if new_plan.generic_rx_copay and new_plan.generic_rx_copay > 0:
+                                st.session_state['generic_copay_input'] = int(new_plan.generic_rx_copay)
+                            if new_plan.preferred_rx_copay and new_plan.preferred_rx_copay > 0:
+                                st.session_state['preferred_copay_input'] = int(new_plan.preferred_rx_copay)
+                            if new_plan.specialty_rx_copay and new_plan.specialty_rx_copay > 0:
+                                st.session_state['specialty_copay_input'] = int(new_plan.specialty_rx_copay)
+
+                            # Increment form refresh counter to signal update
+                            st.session_state.form_refresh_counter += 1
+                            st.rerun()
+                    else:
+                        st.warning("Could not extract plan name from the file. Please check the file format.")
             except Exception as e:
                 st.error(f"Error parsing file: {str(e)}")
 
     # Get current plan from session state
     plan = st.session_state.current_employer_plan
+
+    # Initialize widget keys with defaults from plan (only if not already set by SBC parsing)
+    # This prevents "widget created with default value but also had value set via Session State" warnings
+    if 'plan_name_input' not in st.session_state:
+        st.session_state['plan_name_input'] = plan.plan_name
+    if 'carrier_input' not in st.session_state:
+        st.session_state['carrier_input'] = plan.carrier or ""
+    if 'hsa_eligible_checkbox' not in st.session_state:
+        st.session_state['hsa_eligible_checkbox'] = plan.hsa_eligible
+    if 'current_premium_input' not in st.session_state:
+        st.session_state['current_premium_input'] = int(plan.current_premium or 0)
+    if 'renewal_premium_input' not in st.session_state:
+        st.session_state['renewal_premium_input'] = int(plan.renewal_premium or 0)
+    if 'coinsurance_slider' not in st.session_state:
+        st.session_state['coinsurance_slider'] = int(plan.coinsurance_pct)
 
     # Plan Overview Section
     st.markdown('<p class="section-header">Plan Overview</p>', unsafe_allow_html=True)
@@ -355,30 +535,31 @@ def render_stage_1_current_plan():
     with col1:
         plan_name = st.text_input(
             "Plan Name *",
-            value=plan.plan_name,
             placeholder="e.g., Acme Corp Gold PPO",
-            help="Name of your current group health plan"
+            help="Name of your current group health plan",
+            key="plan_name_input"
         )
 
         plan_type = st.selectbox(
             "Plan Type *",
             options=PLAN_TYPES,
             index=PLAN_TYPES.index(plan.plan_type) if plan.plan_type in PLAN_TYPES else 1,
-            help="HMO, PPO, EPO, or POS"
+            help="HMO, PPO, EPO, or POS",
+            key="plan_type_select"
         )
 
         hsa_eligible = st.checkbox(
             "HSA Eligible",
-            value=plan.hsa_eligible,
-            help="Is this a High Deductible Health Plan (HDHP) that qualifies for HSA?"
+            help="Is this a High Deductible Health Plan (HDHP) that qualifies for HSA?",
+            key="hsa_eligible_checkbox"
         )
 
     with col2:
         carrier = st.text_input(
             "Carrier",
-            value=plan.carrier or "",
             placeholder="e.g., Blue Cross Blue Shield",
-            help="Insurance carrier name (optional)"
+            help="Insurance carrier name (optional)",
+            key="carrier_input"
         )
 
         metal_tier = st.selectbox(
@@ -388,7 +569,8 @@ def render_stage_1_current_plan():
                 ["N/A", "Bronze", "Silver", "Gold", "Platinum"].index(plan.metal_tier)
                 if plan.metal_tier in ["Bronze", "Silver", "Gold", "Platinum"] else 0
             ),
-            help="Metal tier if known (most group plans don't have one)"
+            help="Metal tier if known (most group plans don't have one)",
+            key="metal_tier_select"
         )
 
     # Monthly Premium Section (EE-only)
@@ -402,9 +584,9 @@ def render_stage_1_current_plan():
             "Current Premium",
             min_value=0,
             max_value=5000,
-            value=int(getattr(plan, 'current_premium', None) or 0),
             step=10,
-            help="Current monthly premium for EE-only coverage"
+            help="Current monthly premium for EE-only coverage",
+            key="current_premium_input"
         )
 
     with col2:
@@ -412,9 +594,9 @@ def render_stage_1_current_plan():
             "Renewal Premium",
             min_value=0,
             max_value=5000,
-            value=int(getattr(plan, 'renewal_premium', None) or 0),
             step=10,
-            help="Renewal monthly premium for EE-only coverage"
+            help="Renewal monthly premium for EE-only coverage",
+            key="renewal_premium_input"
         )
 
     with col3:
@@ -444,7 +626,8 @@ def render_stage_1_current_plan():
             max_value=20000,
             value=int(plan.individual_deductible),
             step=100,
-            help="Annual deductible for single coverage"
+            help="Annual deductible for single coverage",
+            key="individual_deductible_input"
         )
 
         individual_oop_max = st.number_input(
@@ -453,7 +636,8 @@ def render_stage_1_current_plan():
             max_value=20000,
             value=int(plan.individual_oop_max),
             step=100,
-            help="Maximum annual out-of-pocket for single coverage"
+            help="Maximum annual out-of-pocket for single coverage",
+            key="individual_oop_max_input"
         )
 
     with col2:
@@ -464,7 +648,8 @@ def render_stage_1_current_plan():
             max_value=40000,
             value=int(plan.family_deductible or 0),
             step=100,
-            help="Annual deductible for family coverage (leave 0 if N/A)"
+            help="Annual deductible for family coverage (leave 0 if N/A)",
+            key="family_deductible_input"
         )
 
         family_oop_max = st.number_input(
@@ -473,7 +658,8 @@ def render_stage_1_current_plan():
             max_value=40000,
             value=int(plan.family_oop_max or 0),
             step=100,
-            help="Maximum annual out-of-pocket for family (leave 0 if N/A)"
+            help="Maximum annual out-of-pocket for family (leave 0 if N/A)",
+            key="family_oop_max_input"
         )
 
     # Coinsurance Section
@@ -483,9 +669,9 @@ def render_stage_1_current_plan():
         "Coinsurance % (Employee pays after deductible)",
         min_value=0,
         max_value=80,
-        value=plan.coinsurance_pct,
         step=5,
-        help="After meeting deductible, employee pays this % of costs (e.g., 20% = 80/20 plan)"
+        help="After meeting deductible, employee pays this % of costs (e.g., 20% = 80/20 plan)",
+        key="coinsurance_slider"
     )
 
     # Copays Section
@@ -493,7 +679,19 @@ def render_stage_1_current_plan():
     st.caption("Select 'Flat Copay' for a fixed dollar amount, or 'Ded + Coinsurance' if the benefit requires meeting the deductible first.")
 
     # Helper to render copay input with type toggle
-    COPAY_TYPES = ["Flat Copay", "Ded + Coinsurance"]
+    # Convention: None = Ded + Coinsurance, -1 = N/A, -2 = Not Covered
+    COPAY_TYPES = ["Flat Copay", "Ded + Coinsurance", "N/A", "Not Covered"]
+
+    def get_copay_type_index(copay_value):
+        """Determine selectbox index based on copay value."""
+        if copay_value == -1:
+            return 2  # N/A
+        elif copay_value == -2:
+            return 3  # Not Covered
+        elif copay_value is None:
+            return 1  # Ded + Coinsurance
+        else:
+            return 0  # Flat Copay
 
     col1, col2, col3 = st.columns(3)
 
@@ -504,7 +702,7 @@ def render_stage_1_current_plan():
         pcp_type = st.selectbox(
             "PCP Visit",
             options=COPAY_TYPES,
-            index=0 if plan.pcp_copay is not None else 1,
+            index=get_copay_type_index(plan.pcp_copay),
             key="pcp_type"
         )
         if pcp_type == "Flat Copay":
@@ -512,19 +710,33 @@ def render_stage_1_current_plan():
                 "PCP Copay Amount",
                 min_value=0,
                 max_value=200,
-                value=int(plan.pcp_copay or 25),
+                value=int(plan.pcp_copay) if plan.pcp_copay and plan.pcp_copay > 0 else 0,
                 step=5,
                 key="pcp_copay_input"
             )
-        else:
+            pcp_coinsurance = None
+        elif pcp_type == "Ded + Coinsurance":
             pcp_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
+            pcp_coinsurance = st.slider(
+                "PCP Coinsurance %",
+                min_value=0, max_value=50,
+                value=int(plan.pcp_coinsurance if plan.pcp_coinsurance is not None else coinsurance_pct),
+                step=5, key="pcp_coins_slider"
+            )
+        elif pcp_type == "N/A":
+            pcp_copay = -1
+            pcp_coinsurance = None
+            st.info("N/A")
+        else:  # Not Covered
+            pcp_copay = -2
+            pcp_coinsurance = None
+            st.warning("Not Covered")
 
         # Specialist Copay
         specialist_type = st.selectbox(
             "Specialist Visit",
             options=COPAY_TYPES,
-            index=0 if plan.specialist_copay is not None else 1,
+            index=get_copay_type_index(plan.specialist_copay),
             key="specialist_type"
         )
         if specialist_type == "Flat Copay":
@@ -532,13 +744,27 @@ def render_stage_1_current_plan():
                 "Specialist Copay Amount",
                 min_value=0,
                 max_value=200,
-                value=int(plan.specialist_copay or 50),
+                value=int(plan.specialist_copay) if plan.specialist_copay and plan.specialist_copay > 0 else 0,
                 step=5,
                 key="specialist_copay_input"
             )
-        else:
+            specialist_coinsurance = None
+        elif specialist_type == "Ded + Coinsurance":
             specialist_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
+            specialist_coinsurance = st.slider(
+                "Specialist Coinsurance %",
+                min_value=0, max_value=50,
+                value=int(plan.specialist_coinsurance if plan.specialist_coinsurance is not None else coinsurance_pct),
+                step=5, key="specialist_coins_slider"
+            )
+        elif specialist_type == "N/A":
+            specialist_copay = -1
+            specialist_coinsurance = None
+            st.info("N/A")
+        else:  # Not Covered
+            specialist_copay = -2
+            specialist_coinsurance = None
+            st.warning("Not Covered")
 
     with col2:
         st.markdown("**Emergency Care**")
@@ -547,7 +773,7 @@ def render_stage_1_current_plan():
         er_type = st.selectbox(
             "ER Visit",
             options=COPAY_TYPES,
-            index=0 if plan.er_copay is not None else 1,
+            index=get_copay_type_index(plan.er_copay),
             key="er_type"
         )
         if er_type == "Flat Copay":
@@ -555,13 +781,27 @@ def render_stage_1_current_plan():
                 "ER Copay Amount",
                 min_value=0,
                 max_value=1000,
-                value=int(plan.er_copay or 250),
+                value=int(plan.er_copay) if plan.er_copay and plan.er_copay > 0 else 0,
                 step=25,
                 key="er_copay_input"
             )
-        else:
+            er_coinsurance = None
+        elif er_type == "Ded + Coinsurance":
             er_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
+            er_coinsurance = st.slider(
+                "ER Coinsurance %",
+                min_value=0, max_value=50,
+                value=int(plan.er_coinsurance if plan.er_coinsurance is not None else coinsurance_pct),
+                step=5, key="er_coins_slider"
+            )
+        elif er_type == "N/A":
+            er_copay = -1
+            er_coinsurance = None
+            st.info("N/A")
+        else:  # Not Covered
+            er_copay = -2
+            er_coinsurance = None
+            st.warning("Not Covered")
 
     with col3:
         st.markdown("**Prescription Drugs**")
@@ -570,7 +810,7 @@ def render_stage_1_current_plan():
         generic_type = st.selectbox(
             "Generic Rx",
             options=COPAY_TYPES,
-            index=0 if plan.generic_rx_copay is not None else 1,
+            index=get_copay_type_index(plan.generic_rx_copay),
             key="generic_type"
         )
         if generic_type == "Flat Copay":
@@ -578,19 +818,33 @@ def render_stage_1_current_plan():
                 "Generic Rx Copay Amount",
                 min_value=0,
                 max_value=100,
-                value=int(plan.generic_rx_copay or 10),
+                value=int(plan.generic_rx_copay) if plan.generic_rx_copay and plan.generic_rx_copay > 0 else 0,
                 step=5,
                 key="generic_copay_input"
             )
-        else:
+            generic_rx_coinsurance = None
+        elif generic_type == "Ded + Coinsurance":
             generic_rx_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
+            generic_rx_coinsurance = st.slider(
+                "Generic Rx Coinsurance %",
+                min_value=0, max_value=50,
+                value=int(plan.generic_rx_coinsurance if plan.generic_rx_coinsurance is not None else coinsurance_pct),
+                step=5, key="generic_coins_slider"
+            )
+        elif generic_type == "N/A":
+            generic_rx_copay = -1
+            generic_rx_coinsurance = None
+            st.info("N/A")
+        else:  # Not Covered
+            generic_rx_copay = -2
+            generic_rx_coinsurance = None
+            st.warning("Not Covered")
 
         # Preferred Brand Rx Copay
         preferred_type = st.selectbox(
             "Preferred Brand Rx",
             options=COPAY_TYPES,
-            index=0 if plan.preferred_rx_copay is not None else 1,
+            index=get_copay_type_index(plan.preferred_rx_copay),
             key="preferred_type"
         )
         if preferred_type == "Flat Copay":
@@ -598,19 +852,33 @@ def render_stage_1_current_plan():
                 "Preferred Rx Copay Amount",
                 min_value=0,
                 max_value=200,
-                value=int(plan.preferred_rx_copay or 40),
+                value=int(plan.preferred_rx_copay) if plan.preferred_rx_copay and plan.preferred_rx_copay > 0 else 0,
                 step=5,
                 key="preferred_copay_input"
             )
-        else:
+            preferred_rx_coinsurance = None
+        elif preferred_type == "Ded + Coinsurance":
             preferred_rx_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
+            preferred_rx_coinsurance = st.slider(
+                "Preferred Rx Coinsurance %",
+                min_value=0, max_value=50,
+                value=int(plan.preferred_rx_coinsurance if plan.preferred_rx_coinsurance is not None else coinsurance_pct),
+                step=5, key="preferred_coins_slider"
+            )
+        elif preferred_type == "N/A":
+            preferred_rx_copay = -1
+            preferred_rx_coinsurance = None
+            st.info("N/A")
+        else:  # Not Covered
+            preferred_rx_copay = -2
+            preferred_rx_coinsurance = None
+            st.warning("Not Covered")
 
         # Specialty Rx Copay
         specialty_type = st.selectbox(
             "Specialty Rx",
             options=COPAY_TYPES,
-            index=0 if plan.specialty_rx_copay is not None else 1,
+            index=get_copay_type_index(plan.specialty_rx_copay),
             key="specialty_type"
         )
         if specialty_type == "Flat Copay":
@@ -618,13 +886,27 @@ def render_stage_1_current_plan():
                 "Specialty Rx Copay Amount",
                 min_value=0,
                 max_value=500,
-                value=int(plan.specialty_rx_copay or 150),
+                value=int(plan.specialty_rx_copay) if plan.specialty_rx_copay and plan.specialty_rx_copay > 0 else 0,
                 step=25,
                 key="specialty_copay_input"
             )
-        else:
+            specialty_rx_coinsurance = None
+        elif specialty_type == "Ded + Coinsurance":
             specialty_rx_copay = None
-            st.info(f"Ded + {coinsurance_pct}%")
+            specialty_rx_coinsurance = st.slider(
+                "Specialty Rx Coinsurance %",
+                min_value=0, max_value=50,
+                value=int(plan.specialty_rx_coinsurance if plan.specialty_rx_coinsurance is not None else coinsurance_pct),
+                step=5, key="specialty_coins_slider"
+            )
+        elif specialty_type == "N/A":
+            specialty_rx_copay = -1
+            specialty_rx_coinsurance = None
+            st.info("N/A")
+        else:  # Not Covered
+            specialty_rx_copay = -2
+            specialty_rx_coinsurance = None
+            st.warning("Not Covered")
 
     # Update session state with form values
     # Note: copay values are None when "Ded + Coinsurance" is selected
@@ -647,6 +929,13 @@ def render_stage_1_current_plan():
         generic_rx_copay=float(generic_rx_copay) if generic_rx_copay is not None else None,
         preferred_rx_copay=float(preferred_rx_copay) if preferred_rx_copay is not None else None,
         specialty_rx_copay=float(specialty_rx_copay) if specialty_rx_copay is not None else None,
+        # Per-service coinsurance overrides
+        pcp_coinsurance=pcp_coinsurance,
+        specialist_coinsurance=specialist_coinsurance,
+        er_coinsurance=er_coinsurance,
+        generic_rx_coinsurance=generic_rx_coinsurance,
+        preferred_rx_coinsurance=preferred_rx_coinsurance,
+        specialty_rx_coinsurance=specialty_rx_coinsurance,
     )
 
     # Validation and navigation
@@ -940,14 +1229,19 @@ def search_marketplace_plans(db: DatabaseConnection, state: str, rating_area_id:
             score = calculate_match_score(current_plan, mp)
             mp.match_score = score
 
+            # Calculate enhanced ranking (includes cost consideration)
+            ranking_score, tier = calculate_enhanced_ranking_score(current_plan, mp, score)
+
             results.append({
                 'plan': mp,
                 'issuer': row.get('issuer_name', 'Unknown'),
                 'match_score': score,
+                'ranking_score': ranking_score,
+                'tier': tier,
             })
 
-        # Sort by match score (highest first)
-        results.sort(key=lambda x: x['match_score'], reverse=True)
+        # Sort by RANKING score (includes cost consideration), not just match score
+        results.sort(key=lambda x: x['ranking_score'], reverse=True)
         return results
 
     except Exception as e:
@@ -1159,6 +1453,57 @@ def render_stage_2_marketplace_selection():
             key="plan_name_search"
         )
 
+        # Display selected plans as removable chips
+        selected_plan_ids = st.session_state.selected_comparison_plans
+        if selected_plan_ids:
+            # Build lookup of plan details from search results
+            plan_lookup = {r['plan'].hios_plan_id: r['plan'] for r in st.session_state.search_results}
+
+            # Create chip container with CSS
+            st.markdown("""
+            <style>
+            .chip-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin: 12px 0;
+            }
+            .plan-chip {
+                display: inline-flex;
+                align-items: center;
+                background-color: #e3f2fd;
+                border: 1px solid #90caf9;
+                border-radius: 16px;
+                padding: 4px 12px;
+                font-size: 0.85em;
+                color: #1565c0;
+            }
+            .plan-chip-name {
+                max-width: 200px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"**Selected Plans ({len(selected_plan_ids)}/{MAX_COMPARISON_PLANS}):**")
+
+            # Display chips with remove buttons
+            chip_cols = st.columns(min(len(selected_plan_ids), 3) + 1)
+            for idx, plan_id in enumerate(selected_plan_ids):
+                plan = plan_lookup.get(plan_id)
+                if plan:
+                    col_idx = idx % 3
+                    with chip_cols[col_idx]:
+                        # Truncate long plan names
+                        display_name = plan.plan_name[:30] + "..." if len(plan.plan_name) > 30 else plan.plan_name
+                        if st.button(f"✕ {display_name}", key=f"remove_chip_{plan_id}", help=f"Remove {plan.plan_name}"):
+                            st.session_state.selected_comparison_plans.remove(plan_id)
+                            st.rerun()
+
+            st.markdown("---")
+
         # Filter results by search term
         all_results = st.session_state.search_results
         if plan_search.strip():
@@ -1171,7 +1516,29 @@ def render_stage_2_marketplace_selection():
         else:
             filtered_results = all_results
 
-        st.caption(f"Showing {len(filtered_results)} of {len(all_results)} plans. Select up to {MAX_COMPARISON_PLANS} to compare.")
+        # Pagination settings (must be before caption that uses these vars)
+        PLANS_PER_PAGE = 25
+        total_plans = len(filtered_results)
+        total_pages = max(1, (total_plans + PLANS_PER_PAGE - 1) // PLANS_PER_PAGE)
+
+        # Initialize page in session state
+        if 'plan_list_page' not in st.session_state:
+            st.session_state.plan_list_page = 0
+
+        # Reset page if search changed or out of bounds
+        current_page = st.session_state.plan_list_page
+        if current_page >= total_pages:
+            current_page = 0
+            st.session_state.plan_list_page = 0
+
+        # Calculate slice for current page
+        start_idx = current_page * PLANS_PER_PAGE
+        end_idx = min(start_idx + PLANS_PER_PAGE, total_plans)
+
+        if total_plans > PLANS_PER_PAGE:
+            st.caption(f"Showing {start_idx + 1}-{end_idx} of {total_plans} plans (filtered from {len(all_results)}). Select up to {MAX_COMPARISON_PLANS} to compare.")
+        else:
+            st.caption(f"Showing {total_plans} of {len(all_results)} plans. Select up to {MAX_COMPARISON_PLANS} to compare.")
 
         with st.expander("How are plans ranked?"):
             st.markdown("""
@@ -1196,56 +1563,74 @@ def render_stage_2_marketplace_selection():
         if not filtered_results:
             if plan_search.strip():
                 st.info(f"No plans match '{plan_search}'. Try a different search term.")
-            # Don't show anything else if no filtered results
+            # Don't show plan list if no filtered results
+        else:
+            # Display plans with checkboxes (paginated)
+            page_results = filtered_results[start_idx:end_idx]
 
-        # Display plans with checkboxes
-        for i, result in enumerate(filtered_results):
-            mp = result['plan']
-            score = result['match_score']
+            for i, result in enumerate(page_results):
+                actual_idx = start_idx + i  # Global index for unique keys
+                mp = result['plan']
+                score = result['match_score']
 
-            # Determine score styling
-            if score >= 70:
-                score_class = "match-score"
-            elif score >= 50:
-                score_class = "match-score match-score-medium"
-            else:
-                score_class = "match-score match-score-low"
-
-            col1, col2, col3, col4, col5 = st.columns([0.5, 3, 1.5, 1.5, 1])
-
-            with col1:
-                # Checkbox for selection (use index in key to avoid duplicates)
-                is_selected = mp.hios_plan_id in selected
-                can_select = len(selected) < MAX_COMPARISON_PLANS or is_selected
-
-                if st.checkbox(
-                    f"Select {mp.plan_name}",
-                    value=is_selected,
-                    key=f"select_{i}_{mp.hios_plan_id}",
-                    disabled=not can_select,
-                    label_visibility="collapsed"
-                ):
-                    if mp.hios_plan_id not in selected:
-                        selected.add(mp.hios_plan_id)
+                # Determine score styling
+                if score >= 70:
+                    score_class = "match-score"
+                elif score >= 50:
+                    score_class = "match-score match-score-medium"
                 else:
-                    if mp.hios_plan_id in selected:
-                        selected.discard(mp.hios_plan_id)
+                    score_class = "match-score match-score-low"
 
-            with col2:
-                st.write(f"**{mp.plan_name}**")
-                st.caption(f"{result['issuer']} | {mp.plan_type}")
+                col1, col2, col3, col4, col5 = st.columns([0.5, 3, 1.5, 1.5, 1])
 
-            with col3:
-                st.write(f"{mp.metal_level}")
-                st.caption(f"Ded: ${mp.individual_deductible:,.0f}")
+                with col1:
+                    # Checkbox for selection (use index in key to avoid duplicates)
+                    is_selected = mp.hios_plan_id in selected
+                    can_select = len(selected) < MAX_COMPARISON_PLANS or is_selected
 
-            with col4:
-                st.write(f"OOP: ${mp.individual_oop_max:,.0f}")
-                hsa_text = "HSA" if mp.hsa_eligible else ""
-                st.caption(hsa_text)
+                    if st.checkbox(
+                        f"Select {mp.plan_name}",
+                        value=is_selected,
+                        key=f"select_{actual_idx}_{mp.hios_plan_id}",
+                        disabled=not can_select,
+                        label_visibility="collapsed"
+                    ):
+                        if mp.hios_plan_id not in selected:
+                            selected.add(mp.hios_plan_id)
+                    else:
+                        if mp.hios_plan_id in selected:
+                            selected.discard(mp.hios_plan_id)
 
-            with col5:
-                st.markdown(f'<span class="{score_class}">{score:.0f}%</span>', unsafe_allow_html=True)
+                with col2:
+                    st.write(f"**{mp.plan_name}**")
+                    st.caption(f"{result['issuer']} | {mp.plan_type}")
+
+                with col3:
+                    st.write(f"{mp.metal_level}")
+                    st.caption(f"Ded: ${mp.individual_deductible:,.0f}")
+
+                with col4:
+                    st.write(f"OOP: ${mp.individual_oop_max:,.0f}")
+                    hsa_text = "HSA" if mp.hsa_eligible else ""
+                    st.caption(hsa_text)
+
+                with col5:
+                    st.markdown(f'<span class="{score_class}">{score:.0f}%</span>', unsafe_allow_html=True)
+
+            # Pagination controls (inside else block)
+            if total_pages > 1:
+                st.markdown("---")
+                pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+                with pcol1:
+                    if st.button("← Previous", disabled=current_page == 0, key="prev_page"):
+                        st.session_state.plan_list_page = current_page - 1
+                        st.rerun()
+                with pcol2:
+                    st.markdown(f"<div style='text-align: center;'>Page {current_page + 1} of {total_pages} ({total_plans} plans)</div>", unsafe_allow_html=True)
+                with pcol3:
+                    if st.button("Next →", disabled=current_page >= total_pages - 1, key="next_page"):
+                        st.session_state.plan_list_page = current_page + 1
+                        st.rerun()
 
         # Update selected plans in session state
         st.session_state.selected_comparison_plans = list(selected)
@@ -1284,13 +1669,45 @@ def get_plan_value(plan, attr: str):
     return getattr(plan, attr, None)
 
 
+def get_coinsurance_for_attr(plan: CurrentEmployerPlan, attr: str) -> int:
+    """Get the coinsurance percentage for a specific attribute.
+
+    Uses per-service coinsurance if set, otherwise falls back to default coinsurance_pct.
+    """
+    service_map = {
+        'pcp_copay': plan.pcp_coinsurance,
+        'specialist_copay': plan.specialist_coinsurance,
+        'er_copay': plan.er_coinsurance,
+        'generic_rx_copay': plan.generic_rx_coinsurance,
+        'preferred_rx_copay': plan.preferred_rx_coinsurance,
+        'specialty_rx_copay': plan.specialty_rx_coinsurance,
+    }
+    override = service_map.get(attr)
+    return override if override is not None else plan.coinsurance_pct
+
+
 def format_value(value, attr: str, coinsurance_pct: int = 20) -> str:
-    """Format a benefit value for display."""
+    """Format a benefit value for display.
+
+    Copay conventions:
+    - None = Deductible + Coinsurance applies
+    - -1 = N/A (field not applicable)
+    - -2 = Not Covered (service excluded)
+    - 0 = No charge
+    - >0 = Dollar amount
+    """
     # Handle None for copay fields = "Ded + Coinsurance"
     if value is None:
         if 'copay' in attr:
             return f"Ded + {coinsurance_pct}%"
         return "N/A"
+
+    # Handle sentinel values for copays
+    if 'copay' in attr:
+        if value == -1:
+            return "N/A"
+        elif value == -2:
+            return "Not Covered"
 
     if attr == 'hsa_eligible':
         return "Yes" if value else "No"
@@ -1482,7 +1899,8 @@ def generate_comparison_csv(current_plan: CurrentEmployerPlan,
 
     # Add benefit comparison rows
     for attr, label, lower_is_better in COMPARISON_BENEFIT_ROWS:
-        row = [label, format_value(get_plan_value(current_plan, attr), attr, current_coinsurance)]
+        attr_coinsurance = get_coinsurance_for_attr(current_plan, attr)
+        row = [label, format_value(get_plan_value(current_plan, attr), attr, attr_coinsurance)]
         for mp in selected_plans:
             mp_coinsurance = mp.coinsurance_pct or 20
             row.append(format_value(get_plan_value(mp, attr), attr, mp_coinsurance))
@@ -1515,7 +1933,7 @@ def get_cell_bg_color(comparison: str) -> str:
     """Get cell background color based on comparison result."""
     colors = {
         'better': '#ecfdf5',   # emerald-50
-        'similar': '#fefce8',  # yellow-50
+        'similar': '#E8F1FD',  # cobalt-50
         'worse': '#fef2f2',    # red-50
     }
     return colors.get(comparison, '#f9fafb')  # gray-50 default
@@ -1581,7 +1999,7 @@ def render_stage_3_comparison_table():
         border-radius: 4px;
     }
     .legend-box.better { background: #ecfdf5; border: 1px solid #a7f3d0; }
-    .legend-box.similar { background: #fefce8; border: 1px solid #fef08a; }
+    .legend-box.similar { background: #E8F1FD; border: 1px solid #B3D4FC; }
     .legend-box.worse { background: #fef2f2; border: 1px solid #fecaca; }
     .legend-text { color: #6b7280; }
 
@@ -1719,11 +2137,12 @@ def render_stage_3_comparison_table():
     carrier_html = f'<div class="plan-issuer">{current_carrier}</div>' if current_carrier else ''
     header_html += f'<th class="current-plan"><div class="plan-header"><div class="plan-name" style="font-weight: 600; font-size: 14px;">{current_name}</div>{carrier_html}<div class="plan-issuer">Current plan</div><span class="plan-chip" style="background: #374151;">{current_type}</span></div></th>'
 
-    # Marketplace plan headers - plan name, issuer, AV%, chip with metal level + HSA
+    # Marketplace plan headers - plan name, issuer, plan ID, AV%, chip with metal level + HSA
     for mp in selected_plans:
         badge_color = get_metal_badge_color(mp.metal_level)
         mp_name = mp.plan_name or 'Unknown Plan'
         mp_issuer = mp.issuer_name or ''
+        mp_plan_id = mp.hios_plan_id or ''
 
         # Build AV display
         if mp.actuarial_value:
@@ -1734,13 +2153,16 @@ def render_stage_3_comparison_table():
         # Build issuer display
         issuer_html = f'<div class="plan-issuer">{mp_issuer}</div>' if mp_issuer else ''
 
+        # Build plan ID display (smaller font, muted color)
+        plan_id_html = f'<div style="font-size: 10px; color: #9ca3af; font-family: monospace; margin-top: 2px;">{mp_plan_id}</div>' if mp_plan_id else ''
+
         # Build chip text - METAL • HSA or just METAL
         chip_text = mp.metal_level.upper()
         if mp.hsa_eligible:
             chip_text += ' • HSA'
 
         # Group AV and chip at bottom with margin-top: auto
-        header_html += f'<th><div class="plan-header"><div class="plan-name" style="font-weight: 600; font-size: 14px;">{mp_name}</div>{issuer_html}<div style="margin-top: auto;">{av_html}<span class="plan-chip" style="background: {badge_color};">{chip_text}</span></div></div></th>'
+        header_html += f'<th><div class="plan-header"><div class="plan-name" style="font-weight: 600; font-size: 14px;">{mp_name}</div>{issuer_html}{plan_id_html}<div style="margin-top: auto;">{av_html}<span class="plan-chip" style="background: {badge_color};">{chip_text}</span></div></div></th>'
 
     header_html += '</tr>'
 
@@ -1750,28 +2172,19 @@ def render_stage_3_comparison_table():
     # Premium section (special handling - not in standard sections loop)
     body_html += f'<tr class="section-row"><td colspan="{num_plans + 2}"><div class="section-label">Monthly Premium (EE-Only)</div></td></tr>'
 
-    # Current plan premium display (use getattr for backwards compatibility with old session state)
+    # Current plan premium display - used for comparison calculations
+    # Age 21 Premium is a marketplace concept, not applicable to group plans
     current_prem = getattr(current_plan, 'current_premium', None)
     renewal_prem = getattr(current_plan, 'renewal_premium', None)
 
-    if current_prem and renewal_prem:
-        main_value = f"${current_prem:,.0f} / ${renewal_prem:,.0f}"
-        gap = renewal_prem - current_prem
-        if gap != 0:
-            gap_text = f"+${gap:,.0f}" if gap > 0 else f"-${abs(gap):,.0f}"
-            current_premium_display = f'<div class="cell-value">{main_value}</div><div class="cell-detail">{gap_text} increase</div>'
-        else:
-            current_premium_display = f'<div class="cell-value">{main_value}</div>'
-    elif current_prem:
-        current_premium_display = f'<div class="cell-value">${current_prem:,.0f}</div>'
-    elif renewal_prem:
-        current_premium_display = f'<div class="cell-value">${renewal_prem:,.0f}</div>'
-    else:
-        current_premium_display = '<div class="cell-value">—</div>'
-
     body_html += '<tr>'
     body_html += '<td>Age 21 Premium</td>'
-    body_html += f'<td class="current-col">{current_premium_display}</td>'
+    # Show current plan premium with note that it's a flat rate (not age-banded like marketplace)
+    display_prem = renewal_prem if renewal_prem else current_prem
+    if display_prem:
+        body_html += f'<td class="current-col"><div class="cell-value">${display_prem:,.0f}</div><div class="cell-detail" style="color: #6b7280;">(EE-only, all ages)</div></td>'
+    else:
+        body_html += '<td class="current-col"><div class="cell-value">—</div></td>'
 
     # Marketplace plan premiums
     for mp in selected_plans:
@@ -2022,7 +2435,7 @@ def render_stage_3_comparison_table():
             avg_age_text = f'<div class="cell-detail">{employee_count} employees, avg age {avg_age:.0f}</div>'
         elif employee_count > 0:
             avg_age_text = f'<div class="cell-detail">{employee_count} employees</div>'
-        body_html += f'<td>Total Premium*{avg_age_text}</td>'
+        body_html += f'<td>Total Monthly Premium*{avg_age_text}</td>'
 
         # Current plan total
         if current_total > 0:
@@ -2098,7 +2511,8 @@ def render_stage_3_comparison_table():
         for attr, label, lower_is_better in benefits:
             # Get current plan value
             current_value = get_plan_value(current_plan, attr)
-            current_display = format_value(current_value, attr, current_coinsurance)
+            attr_coinsurance = get_coinsurance_for_attr(current_plan, attr)
+            current_display = format_value(current_value, attr, attr_coinsurance)
 
             body_html += '<tr>'
             body_html += f'<td>{label}</td>'
@@ -2325,11 +2739,12 @@ def main():
         )
 
     # Page header
-    st.markdown('<p class="page-header">Plan Comparison Tool</p>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="page-subtitle">Compare your current employer group plan against marketplace alternatives.</p>',
-        unsafe_allow_html=True
-    )
+    st.markdown("""
+    <div class="hero-section">
+        <div class="hero-title">⚖️ Plan Comparison Tool</div>
+        <p class="hero-subtitle">Compare your current employer group plan against marketplace alternatives</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Progress indicator
     stages = ["1. Current Plan", "2. Select Plans", "3. Compare"]

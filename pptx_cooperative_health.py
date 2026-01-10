@@ -57,6 +57,9 @@ DECORATIVE_IMAGES_DIR = Path(__file__).parent.parent / "glove-design" / "✍️ 
 CORNER_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-corner.png"
 EDGE_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-edge-h-fade.png"
 
+# Banner image path
+BANNER_IMAGE = Path("/Users/jimdonovan/Desktop/GLOVE/PPT_header.png")
+
 
 @dataclass
 class PlanColumnData:
@@ -351,25 +354,51 @@ class CooperativeHealthSlideGenerator:
         blank_layout = self.prs.slide_layouts[6]  # Blank layout
         slide = self.prs.slides.add_slide(blank_layout)
 
+        # Add banner at top
+        if BANNER_IMAGE.exists():
+            slide.shapes.add_picture(
+                str(BANNER_IMAGE),
+                left=Inches(0),
+                top=Inches(0),
+                width=SLIDE_WIDTH,
+                height=Inches(0.25)
+            )
+
+        # Banner offset for content positioning
+        banner_offset = Inches(0.2)
+
+        # Add company name (top right)
+        if data.client_name:
+            company_box = slide.shapes.add_textbox(
+                Inches(9.5), Inches(0.3), Inches(3.5), Inches(0.3)
+            )
+            company_tf = company_box.text_frame
+            company_tf.paragraphs[0].text = data.client_name
+            company_tf.paragraphs[0].font.name = 'Poppins'
+            company_tf.paragraphs[0].font.size = Pt(14)
+            company_tf.paragraphs[0].font.bold = True
+            company_tf.paragraphs[0].font.color.rgb = COLORS['total_text']
+            company_tf.paragraphs[0].alignment = PP_ALIGN.RIGHT
+
         # Add title
         title_left = Inches(0.5)
-        title_top = Inches(0.4)
-        title_width = Inches(12.33)
+        title_top = Inches(0.35) + banner_offset
+        title_width = Inches(9)
         title_height = Inches(0.6)
 
         title_box = slide.shapes.add_textbox(title_left, title_top, title_width, title_height)
         title_tf = title_box.text_frame
         title_tf.paragraphs[0].text = "Cooperative Health Plan Comparison"
         title_tf.paragraphs[0].font.name = 'Poppins'
-        title_tf.paragraphs[0].font.size = Pt(28)
+        title_tf.paragraphs[0].font.size = Pt(26)
         title_tf.paragraphs[0].font.bold = True
         title_tf.paragraphs[0].font.color.rgb = COLORS['total_text']
 
         # Add subtitle/description
-        subtitle_top = Inches(1.0)
+        subtitle_top = Inches(0.85) + banner_offset
         subtitle_height = Inches(0.4)
 
-        subtitle_box = slide.shapes.add_textbox(title_left, subtitle_top, title_width, subtitle_height)
+        subtitle_box = slide.shapes.add_textbox(title_left, subtitle_top, Inches(12.33), subtitle_height)
         subtitle_tf = subtitle_box.text_frame
         subtitle_tf.paragraphs[0].text = "Traditional group plan vs. cooperative health plan alternatives"
         subtitle_tf.paragraphs[0].font.name = 'Poppins'
@@ -382,7 +411,7 @@ class CooperativeHealthSlideGenerator:
 
         # Create table
         table_left = Inches(0.5)
-        table_top = Inches(1.6)
+        table_top = Inches(1.4) + banner_offset
         table_width = Inches(12.33)
 
         # Calculate row heights
@@ -506,7 +535,7 @@ class CooperativeHealthSlideGenerator:
         total_label = "Total Monthly*" if data.has_gap else "Total Monthly"
 
         cell = table.cell(total_monthly_row, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
+        self._set_cell_fill(cell, COLORS['white'])
         self._set_cell_text(cell, total_label, COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
@@ -589,7 +618,7 @@ class CooperativeHealthSlideGenerator:
             grand_total_row = current_row
 
             cell = table.cell(grand_total_row, 0)
-            self._set_cell_fill(cell, COLORS['total_bg'])
+            self._set_cell_fill(cell, COLORS['white'])
             self._set_cell_text(cell, "Grand Total", COLORS['total_text'],
                                font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
@@ -612,7 +641,7 @@ class CooperativeHealthSlideGenerator:
         # Row: Annual Total
         annual_row = current_row
         cell = table.cell(annual_row, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
+        self._set_cell_fill(cell, COLORS['white'])
         self._set_cell_text(cell, "Annual Total", COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
@@ -636,7 +665,7 @@ class CooperativeHealthSlideGenerator:
         # Row: Savings vs Renewal
         savings_row = current_row
         cell = table.cell(savings_row, 0)
-        self._set_cell_fill(cell, COLORS['total_bg'])
+        self._set_cell_fill(cell, COLORS['white'])
         self._set_cell_text(cell, "Savings vs Renewal", COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
@@ -649,21 +678,29 @@ class CooperativeHealthSlideGenerator:
         self._set_cell_fill(cell, COLORS['white'])
         self._set_cell_text(cell, "—", COLORS['gap_text'], font_size=12)
 
-        # Plan column savings - percentage prominent, dollar amount secondary
+        # Plan column savings - dollar amount first, percentage on second line (matches UI)
         for col_offset, plan_col in enumerate(data.plan_columns):
             col_idx = 3 + col_offset
             cell = table.cell(savings_row, col_idx)
             self._set_cell_fill(cell, COLORS['white'])
-            if plan_col.savings_pct > 0:
-                # Percentage first - big and bold
-                self._set_cell_text(cell, f"{plan_col.savings_pct:.0f}%",
-                                   data_text_colors[col_idx], font_size=16, bold=True)
-                # Dollar amount second - smaller and not bold
-                self._add_cell_line(cell, f"({self._format_currency(plan_col.savings_amount)})",
-                                   COLORS['gap_text'], font_size=10, bold=False)
+
+            # Determine color based on savings (green for positive, red for negative)
+            if plan_col.savings_amount > 0:
+                savings_color = RGBColor(0x00, 0xA6, 0x3E)  # Green #00a63e
+            elif plan_col.savings_amount < 0:
+                savings_color = RGBColor(0xDC, 0x26, 0x26)  # Red #dc2626
             else:
+                savings_color = COLORS['gap_text']  # Gray for zero
+
+            if plan_col.savings_amount != 0:
+                # Dollar amount first - bold (matches UI)
                 self._set_cell_text(cell, self._format_currency(plan_col.savings_amount),
-                                   data_text_colors[col_idx], font_size=12, bold=True)
+                                   savings_color, font_size=12, bold=True)
+                # Percentage on second line - smaller (matches UI format)
+                self._add_cell_line(cell, f"({plan_col.savings_pct:.0f}%)",
+                                   savings_color, font_size=10, bold=False)
+            else:
+                self._set_cell_text(cell, "—", COLORS['gap_text'], font_size=12)
 
         # Add footnote if gap insurance exists
         if data.has_gap:

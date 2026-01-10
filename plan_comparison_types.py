@@ -36,17 +36,53 @@ class CurrentEmployerPlan:
     coinsurance_pct: int = 20
 
     # Copays - None means "Deductible + Coinsurance" applies instead of flat copay
-    pcp_copay: Optional[float] = 25.0
-    specialist_copay: Optional[float] = 50.0
-    er_copay: Optional[float] = None  # Often Ded + Coinsurance
-    generic_rx_copay: Optional[float] = 10.0
+    # Sentinel values: -1 = N/A, -2 = Not Covered
+    # Default to None (unspecified) - user must enter values or import from SBC
+    pcp_copay: Optional[float] = None
+    specialist_copay: Optional[float] = None
+    er_copay: Optional[float] = None
+    generic_rx_copay: Optional[float] = None
     preferred_rx_copay: Optional[float] = None
     specialty_rx_copay: Optional[float] = None
 
-    def format_copay(self, value: Optional[float]) -> str:
-        """Format copay for display. None = Deductible + Coinsurance."""
+    # Per-service coinsurance overrides (None = use default coinsurance_pct)
+    pcp_coinsurance: Optional[int] = None
+    specialist_coinsurance: Optional[int] = None
+    er_coinsurance: Optional[int] = None
+    generic_rx_coinsurance: Optional[int] = None
+    preferred_rx_coinsurance: Optional[int] = None
+    specialty_rx_coinsurance: Optional[int] = None
+
+    def get_service_coinsurance(self, service: str) -> int:
+        """Get the coinsurance % for a specific service, falling back to default."""
+        override_map = {
+            'pcp': self.pcp_coinsurance,
+            'specialist': self.specialist_coinsurance,
+            'er': self.er_coinsurance,
+            'generic_rx': self.generic_rx_coinsurance,
+            'preferred_rx': self.preferred_rx_coinsurance,
+            'specialty_rx': self.specialty_rx_coinsurance,
+        }
+        override = override_map.get(service)
+        if override is not None:
+            return override
+        # Fallback to default coinsurance_pct, or 20% if not set
+        return self.coinsurance_pct if self.coinsurance_pct is not None else 20
+
+    def format_copay(self, value: Optional[float], service: Optional[str] = None) -> str:
+        """Format copay for display.
+
+        Args:
+            value: Copay value (None = Ded+Coinsurance, -1 = N/A, -2 = Not Covered)
+            service: Optional service name for per-service coinsurance lookup
+        """
         if value is None:
-            return f"Ded + {self.coinsurance_pct}%"
+            coins = self.get_service_coinsurance(service) if service else (self.coinsurance_pct or 20)
+            return f"Ded + {coins}%"
+        elif value == -1:
+            return "N/A"
+        elif value == -2:
+            return "Not Covered"
         elif value == 0:
             return "No charge"
         else:
@@ -247,6 +283,108 @@ def get_comparison_indicator(comparison_result: str) -> str:
         'worse': '🔴',
     }
     return indicators.get(comparison_result, '')
+
+
+def is_plan_better(current_plan: CurrentEmployerPlan,
+                   marketplace_plan: MarketplacePlanDetails) -> tuple:
+    """
+    Check if marketplace plan is objectively better than current.
+
+    Returns:
+        (is_better, green_count, red_count)
+        - is_better: True if at least 1 green AND 0 reds
+        - green_count: Number of "better" benefits
+        - red_count: Number of "worse" benefits
+    """
+    comparisons = []
+
+    # Compare deductibles (lower is better)
+    comparisons.append(compare_benefit(
+        current_plan.individual_deductible,
+        marketplace_plan.individual_deductible,
+        lower_is_better=True
+    ))
+
+    # Compare OOPM (lower is better)
+    comparisons.append(compare_benefit(
+        current_plan.individual_oop_max,
+        marketplace_plan.individual_oop_max,
+        lower_is_better=True
+    ))
+
+    # Compare copays (lower is better) - only if current has values
+    copay_pairs = [
+        (current_plan.pcp_copay, marketplace_plan.pcp_copay),
+        (current_plan.specialist_copay, marketplace_plan.specialist_copay),
+        (current_plan.generic_rx_copay, marketplace_plan.generic_rx_copay),
+    ]
+    for current_copay, mp_copay in copay_pairs:
+        if current_copay is not None and current_copay > 0:
+            if mp_copay is not None:
+                comparisons.append(compare_benefit(current_copay, mp_copay, lower_is_better=True))
+
+    green_count = sum(1 for c in comparisons if c == 'better')
+    red_count = sum(1 for c in comparisons if c == 'worse')
+
+    is_better = green_count >= 1 and red_count == 0
+
+    return is_better, green_count, red_count
+
+
+def calculate_enhanced_ranking_score(
+    current_plan: CurrentEmployerPlan,
+    marketplace_plan: MarketplacePlanDetails,
+    match_score: float
+) -> tuple:
+    """
+    Calculate enhanced ranking score that considers cost.
+
+    Returns:
+        (ranking_score, tier) where tier is 'premium', 'standard', or 'value'
+
+    Ranking tiers:
+    - Premium (300-400): Better benefits + within 10% of renewal cost
+    - Standard (100-200): Good match score, may exceed cost threshold
+    - Value (0-100): Lower match scores
+    """
+    renewal_premium = current_plan.renewal_premium
+    age_21_premium = marketplace_plan.age_21_premium
+
+    # Check if plan is objectively better
+    is_better, green_count, red_count = is_plan_better(current_plan, marketplace_plan)
+
+    # Check cost threshold (within 10% of renewal)
+    cost_comparable = False
+    is_cheaper = False
+    if renewal_premium and renewal_premium > 0 and age_21_premium:
+        cost_diff_pct = abs(age_21_premium - renewal_premium) / renewal_premium * 100
+        cost_comparable = cost_diff_pct <= 10
+        is_cheaper = age_21_premium < renewal_premium
+
+    # Calculate final ranking score
+    if is_better and cost_comparable:
+        # PREMIUM TIER: Better benefits + comparable cost
+        tier = 'premium'
+        base_score = 300 + match_score
+
+        # Extra bonus if cheaper
+        if is_cheaper:
+            savings_pct = (renewal_premium - age_21_premium) / renewal_premium * 100
+            base_score += min(50, savings_pct * 5)
+    elif is_better:
+        # Better benefits but cost exceeds threshold
+        tier = 'standard'
+        base_score = 150 + match_score
+    elif cost_comparable:
+        # Comparable cost but not objectively "better"
+        base_score = 100 + match_score
+        tier = 'standard'
+    else:
+        # Neither better nor cost-comparable
+        tier = 'value'
+        base_score = match_score
+
+    return base_score, tier
 
 
 if __name__ == "__main__":
