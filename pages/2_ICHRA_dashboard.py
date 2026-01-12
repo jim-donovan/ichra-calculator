@@ -695,7 +695,8 @@ def load_dashboard_data(census_df: pd.DataFrame, dependents_df: pd.DataFrame = N
         coop_rates_df=coop_rates_df,
         flat_amounts=flat_amounts,
         sedera_rates_df=sedera_rates_df,
-        plan_config=plan_config
+        plan_config=plan_config,
+        contribution_settings=contribution_settings
     )
 
     # ==========================================================================
@@ -1007,31 +1008,29 @@ def calculate_cooperative_family_rate(
     return_breakdown: bool = False
 ) -> Union[float, Dict]:
     """
-    Calculate aggregate cooperative rate by summing rates for employee + all dependents.
+    Calculate cooperative rate using GROUP PRICING - single rate based on oldest member's age band.
 
-    IMPORTANT: Cooperative plans use the ELDEST family member's age band for ALL members.
-    For example, if employee is 45 and spouse is 50, both use the 50-59 age band rates.
-
-    Unlike marketplace plans, cooperative plans rate ALL dependents (no 3-child cap).
+    IMPORTANT: HAS/Cooperative uses GROUP PRICING, meaning the family pays ONE rate based on the
+    eldest family member's age band. Unlike individual marketplace plans which charge
+    per-member rates, HAS charges a single family rate.
 
     Args:
         employee_row: Census row for the employee
         family_status: EE, ES, EC, or F
         lookup: Dictionary from build_cooperative_rate_lookup()
         dependents_df: DataFrame with dependent info (employee_id, relationship, age)
-        return_breakdown: If True, return dict with individual member rates
+        return_breakdown: If True, return dict with rate info
 
     Returns:
-        If return_breakdown=False: Total monthly cooperative premium (float)
+        If return_breakdown=False: Total monthly cooperative premium (float) - single rate for family
         If return_breakdown=True: Dict with structure:
             {
                 'ee_rate': float, 'ee_age': int,
-                'spouse_rate': float or None, 'spouse_age': int or None,
-                'child_1_rate': float or None, 'child_1_age': int or None,
-                ... (through child_5)
-                'total_rate': float,
+                'spouse_rate': None (not applicable for group pricing),
+                'child_X_rate': None (not applicable for group pricing),
+                'total_rate': float (same as ee_rate for group pricing),
                 'eldest_age_band': str,
-                'rate_per_member': float
+                'rate_per_member': float (the single group rate)
             }
     """
     # Initialize breakdown structure
@@ -1088,29 +1087,29 @@ def calculate_cooperative_family_rate(
                 all_ages.append(child_age)
                 child_ages.append(child_age)
 
-    # Find eldest age and use that age band for ALL members
+    # Find eldest age and use that age band for the GROUP RATE
     eldest_age = max(all_ages)
     eldest_age_band = _get_age_band(eldest_age)
 
-    # Look up rate using eldest age band - multiply by member count
+    # GROUP PRICING: Single rate for the entire family based on eldest member's age band
     # The rate lookup uses (age_band, family_status) as key
-    member_count = len(all_ages)
-    rate_per_member = lookup.get((eldest_age_band, family_status), 0)
-    total_rate = rate_per_member * member_count
+    group_rate = lookup.get((eldest_age_band, family_status), 0)
+    total_rate = group_rate  # Single rate, NOT multiplied by member count
 
     if return_breakdown:
-        # All members get the same rate (based on eldest age band)
-        member_rates['ee_rate'] = rate_per_member
+        # Group pricing: only the employee rate applies (covers entire family)
+        member_rates['ee_rate'] = group_rate
 
+        # Store ages for reference but rates are None (group pricing)
         if spouse_age is not None:
-            member_rates['spouse_rate'] = rate_per_member
+            member_rates['spouse_rate'] = None  # Included in group rate
 
-        # Fill in child rates (up to 5 children)
+        # Store child ages for reference but rates are None (group pricing)
         for i, child_age in enumerate(child_ages[:5], start=1):
-            member_rates[f'child_{i}_rate'] = rate_per_member
+            member_rates[f'child_{i}_rate'] = None  # Included in group rate
             member_rates[f'child_{i}_age'] = child_age
 
-        return {**member_rates, 'total_rate': total_rate, 'eldest_age_band': eldest_age_band, 'rate_per_member': rate_per_member}
+        return {**member_rates, 'total_rate': total_rate, 'eldest_age_band': eldest_age_band, 'rate_per_member': group_rate}
 
     return total_rate
 
@@ -1120,8 +1119,8 @@ def calculate_hap_totals(census_df: pd.DataFrame, coop_rates_df: pd.DataFrame,
     """
     Calculate HAS totals for $1k and $2.5k deductible plans.
 
-    Uses aggregate family rates by summing rates for employee + all dependents.
-    Unlike marketplace plans, cooperative plans rate ALL dependents (no 3-child cap).
+    Uses GROUP PRICING - single rate per family based on oldest member's age band.
+    Unlike marketplace plans which charge per-member rates, HAS charges one family rate.
 
     Args:
         census_df: Employee census DataFrame with age and family_status columns
@@ -1314,31 +1313,29 @@ def calculate_sedera_family_rate(
     return_breakdown: bool = False
 ) -> Union[float, Dict]:
     """
-    Calculate aggregate Sedera rate by summing rates for employee + all dependents.
+    Calculate Sedera rate using GROUP PRICING - single rate based on oldest member's age band.
 
-    IMPORTANT: Sedera uses the ELDEST family member's age band for ALL members.
-    For example, if employee is 45 and spouse is 50, both use the 50-59 age band rates.
-
-    Unlike marketplace plans, Sedera rates ALL dependents (no 3-child cap).
+    IMPORTANT: Sedera uses GROUP PRICING, meaning the family pays ONE rate based on the
+    eldest family member's age band. Unlike individual marketplace plans which charge
+    per-member rates, Sedera charges a single family rate.
 
     Args:
         employee_row: Census row for the employee
         family_status: EE, ES, EC, or F
         lookup: Dictionary from build_sedera_rate_lookup()
         dependents_df: DataFrame with dependent info (employee_id, relationship, age)
-        return_breakdown: If True, return dict with individual member rates
+        return_breakdown: If True, return dict with rate info
 
     Returns:
-        If return_breakdown=False: Total monthly Sedera premium (float)
+        If return_breakdown=False: Total monthly Sedera premium (float) - single rate for family
         If return_breakdown=True: Dict with structure:
             {
                 'ee_rate': float, 'ee_age': int,
-                'spouse_rate': float or None, 'spouse_age': int or None,
-                'child_1_rate': float or None, 'child_1_age': int or None,
-                ... (through child_5)
-                'total_rate': float,
+                'spouse_rate': None (not applicable for group pricing),
+                'child_X_rate': None (not applicable for group pricing),
+                'total_rate': float (same as ee_rate for group pricing),
                 'eldest_age_band': str,
-                'rate_per_member': float
+                'rate_per_member': float (the single group rate)
             }
     """
     # Initialize breakdown structure
@@ -1395,29 +1392,29 @@ def calculate_sedera_family_rate(
                 all_ages.append(child_age)
                 child_ages.append(child_age)
 
-    # Find eldest age and use that age band for ALL members
+    # Find eldest age and use that age band for the GROUP RATE
     eldest_age = max(all_ages)
     eldest_age_band = _get_sedera_age_band(eldest_age)
 
-    # Look up rate using eldest age band - multiply by member count
+    # GROUP PRICING: Single rate for the entire family based on eldest member's age band
     # The rate lookup uses (age_band, family_status) as key
-    member_count = len(all_ages)
-    rate_per_member = lookup.get((eldest_age_band, family_status), 0)
-    total_rate = rate_per_member * member_count
+    group_rate = lookup.get((eldest_age_band, family_status), 0)
+    total_rate = group_rate  # Single rate, NOT multiplied by member count
 
     if return_breakdown:
-        # All members get the same rate (based on eldest age band)
-        member_rates['ee_rate'] = rate_per_member
+        # Group pricing: only the employee rate applies (covers entire family)
+        member_rates['ee_rate'] = group_rate
 
+        # Store ages for reference but rates are None (group pricing)
         if spouse_age is not None:
-            member_rates['spouse_rate'] = rate_per_member
+            member_rates['spouse_rate'] = None  # Included in group rate
 
-        # Fill in child rates (up to 5 children)
+        # Store child ages for reference but rates are None (group pricing)
         for i, child_age in enumerate(child_ages[:5], start=1):
-            member_rates[f'child_{i}_rate'] = rate_per_member
+            member_rates[f'child_{i}_rate'] = None  # Included in group rate
             member_rates[f'child_{i}_age'] = child_age
 
-        return {**member_rates, 'total_rate': total_rate, 'eldest_age_band': eldest_age_band, 'rate_per_member': rate_per_member}
+        return {**member_rates, 'total_rate': total_rate, 'eldest_age_band': eldest_age_band, 'rate_per_member': group_rate}
 
     return total_rate
 
@@ -1427,8 +1424,8 @@ def calculate_sedera_totals(census_df: pd.DataFrame, sedera_rates_df: pd.DataFra
     """
     Calculate Sedera totals for selected IUA levels.
 
-    Uses aggregate family rates by summing rates for employee + all dependents.
-    Unlike marketplace plans, Sedera rates ALL dependents (no 3-child cap).
+    Uses GROUP PRICING - single rate per family based on oldest member's age band.
+    Dependents are needed only to determine the eldest family member's age.
 
     Args:
         census_df: Employee census DataFrame with age and family_status columns
@@ -2212,31 +2209,41 @@ def select_employee_examples(census_df: pd.DataFrame, contribution_analysis: Dic
                               coop_rates_df: pd.DataFrame = None,
                               flat_amounts: Dict = None,
                               sedera_rates_df: pd.DataFrame = None,
-                              plan_config: Dict = None) -> List[Dict]:
+                              plan_config: Dict = None,
+                              contribution_settings: Dict = None) -> List[Dict]:
     """Select 3 representative employees: youngest, mid-age family, oldest."""
     examples = []
 
     if census_df is None or census_df.empty or 'age' not in census_df.columns:
         return examples
 
+    # Get exclude_dependent_ichra setting (default False = include dependents in ER contribution)
+    # When True, ER only covers employee rate; dependents fall to employee
+    exclude_deps = False
+    if contribution_settings:
+        exclude_deps = contribution_settings.get('exclude_dependent_ichra', False)
+
     # Sort by age to find youngest/oldest
     sorted_df = census_df.sort_values('age')
 
     # Youngest Employee Only (EE status only)
+    # For EE-only employees, use_ee_rate_only is always True (no dependents)
     ee_only = sorted_df[sorted_df['family_status'] == 'EE']
     if not ee_only.empty:
         youngest = ee_only.iloc[0]
         examples.append(build_employee_example(
             youngest, "Youngest Employee", contribution_analysis, tier_costs,
             multi_metal_results, contribution_pct, cooperative_ratio, dependents_df, db,
-            use_ee_rate_only=True,  # ICHRA is individual-level
+            use_ee_rate_only=True,  # EE-only always uses individual rate
             coop_rates_df=coop_rates_df,
             flat_amounts=flat_amounts,
             sedera_rates_df=sedera_rates_df,
-            plan_config=plan_config
+            plan_config=plan_config,
+            contribution_settings=contribution_settings
         ))
 
     # Mid-age family (Family status preferred)
+    # For families, use_ee_rate_only depends on exclude_deps toggle
     families = sorted_df[sorted_df['family_status'] == 'F']
     if not families.empty:
         mid_idx = len(families) // 2
@@ -2244,21 +2251,28 @@ def select_employee_examples(census_df: pd.DataFrame, contribution_analysis: Dic
         examples.append(build_employee_example(
             mid_family, "Mid-Age Family", contribution_analysis, tier_costs,
             multi_metal_results, contribution_pct, cooperative_ratio, dependents_df, db,
+            use_ee_rate_only=exclude_deps,  # When True, ER only covers employee rate
             coop_rates_df=coop_rates_df,
             flat_amounts=flat_amounts,
             sedera_rates_df=sedera_rates_df,
-            plan_config=plan_config
+            plan_config=plan_config,
+            contribution_settings=contribution_settings
         ))
 
     # Oldest
     oldest = sorted_df.iloc[-1]
+    # For oldest, also respect the exclude_deps toggle if they have family
+    oldest_family_status = oldest.get('family_status', 'EE')
+    use_ee_only_for_oldest = oldest_family_status == 'EE' or exclude_deps
     examples.append(build_employee_example(
         oldest, "Oldest Employee", contribution_analysis, tier_costs,
         multi_metal_results, contribution_pct, cooperative_ratio, dependents_df, db,
+        use_ee_rate_only=use_ee_only_for_oldest,
         coop_rates_df=coop_rates_df,
         flat_amounts=flat_amounts,
         sedera_rates_df=sedera_rates_df,
-        plan_config=plan_config
+        plan_config=plan_config,
+        contribution_settings=contribution_settings
     ))
 
     return examples
@@ -2274,7 +2288,8 @@ def build_employee_example(employee_row: pd.Series, label: str,
                            coop_rates_df: pd.DataFrame = None,
                            flat_amounts: Dict = None,
                            sedera_rates_df: pd.DataFrame = None,
-                           plan_config: Dict = None) -> Dict:
+                           plan_config: Dict = None,
+                           contribution_settings: Dict = None) -> Dict:
     """Build employee example dict from census row.
 
     Args:
@@ -2285,6 +2300,7 @@ def build_employee_example(employee_row: pd.Series, label: str,
                       If provided for this employee's tier, uses flat amount instead of percentage.
         sedera_rates_df: Optional Sedera rates DataFrame for Sedera cost calculation.
         plan_config: Plan configurator dict with hap_enabled, hap_iuas, sedera_enabled, sedera_iuas.
+        contribution_settings: Contribution configurator settings including strategy_type, base_age, etc.
     """
     # Use provided cooperative_ratio or fall back to constant
     if cooperative_ratio is None:
@@ -2354,10 +2370,12 @@ def build_employee_example(employee_row: pd.Series, label: str,
                 for emp_detail in metal_details:
                     if emp_detail.get('employee_id') == emp_id:
                         plan_id = emp_detail.get('lcp_plan_id')
-                        # Calculate aggregate family premium if needed (non-EE statuses)
+                        # Calculate aggregate family premium for non-EE statuses
+                        # Always calculate breakdown for display (regardless of toggle)
+                        # The toggle only affects ER/EE split, not rate visibility
                         aggregate_premium = 0
                         breakdown = None
-                        if not use_ee_rate_only and family_status in ['ES', 'EC', 'F'] and rating_area and db and plan_id:
+                        if family_status in ['ES', 'EC', 'F'] and rating_area and db and plan_id:
                             result = calculate_aggregate_family_premium(
                                 employee_row, plan_id, rating_area, db, dependents_df, return_breakdown=True
                             )
@@ -2407,17 +2425,21 @@ def build_employee_example(employee_row: pd.Series, label: str,
 
                         # Use Silver for the main ICHRA premium calculation
                         if metal == 'Silver':
-                            # Use ee_rate (individual only) if flag is set, otherwise use aggregate family premium
+                            # Store both employee-only and family rates for proper ER/EE split
+                            silver_ee_rate = emp_detail.get('lcp_ee_rate', 0) or 0
+                            silver_family_total = aggregate_premium or emp_detail.get('estimated_tier_premium', 0) or silver_ee_rate
+                            # ichra_premium is used for ER calculation (based on toggle)
                             if use_ee_rate_only:
-                                ichra_premium = emp_detail.get('lcp_ee_rate', 0)
+                                ichra_premium = silver_ee_rate
                             else:
-                                ichra_premium = aggregate_premium or emp_detail.get('estimated_tier_premium', 0)
+                                ichra_premium = silver_family_total
                             projected_2026_premium = emp_detail.get('projected_2026_premium', 0) or 0
                             plan_details = {
                                 'plan_id': plan_id,
                                 'plan_name': emp_detail.get('lcp_plan_name'),
                                 'actuarial_value': emp_detail.get('actuarial_value'),
-                                'ee_rate': emp_detail.get('lcp_ee_rate', 0),
+                                'ee_rate': silver_ee_rate,
+                                'family_total': silver_family_total,
                             }
                         break
 
@@ -2519,27 +2541,66 @@ def build_employee_example(employee_row: pd.Series, label: str,
             return er, ee
 
     # Calculate ER/EE split for ICHRA Silver
+    # Get the family total from plan_details (stored during Silver extraction)
+    silver_family_total = plan_details.get('family_total', 0) if plan_details else 0
+
     if ichra_premium > 0:
-        ichra_er, ichra_ee = calc_er_ee_split(ichra_premium, flat_er_amount)
+        if use_ee_rate_only and silver_family_total > 0:
+            # Toggle OFF: ER based on employee-only rate, EE pays the rest (including dependents)
+            ichra_er, _ = calc_er_ee_split(ichra_premium, flat_er_amount)
+            ichra_ee = max(0, silver_family_total - ichra_er)
+        else:
+            # Toggle ON: standard ER/EE split on full family rate
+            ichra_er, ichra_ee = calc_er_ee_split(ichra_premium, flat_er_amount)
+            silver_family_total = ichra_premium  # For EE employees, family total = individual
     else:
         ichra_er, ichra_ee = 0, 0
+        silver_family_total = 0
 
     # Calculate Bronze and Gold costs from metal_plan_details
+    # Total premium is ALWAYS the family rate (what they actually pay)
+    # ER contribution is based on toggle: employee-only rate OR family rate
     bronze_premium = 0
+    bronze_family_total = 0
     gold_premium = 0
+    gold_family_total = 0
     if metal_plan_details:
         bronze_details = metal_plan_details.get('Bronze', {})
         gold_details = metal_plan_details.get('Gold', {})
+
+        # Always get the family total for displaying Total
+        bronze_family_total = bronze_details.get('aggregate_family_premium', 0) or bronze_details.get('estimated_tier_premium', 0) or bronze_details.get('ee_rate', 0) or 0
+        gold_family_total = gold_details.get('aggregate_family_premium', 0) or gold_details.get('estimated_tier_premium', 0) or gold_details.get('ee_rate', 0) or 0
+
+        # ER contribution is based on toggle: employee-only OR family rate
         if use_ee_rate_only:
+            # Toggle OFF: ER covers employee only, dependents fall to employee
             bronze_premium = bronze_details.get('ee_rate', 0) or 0
             gold_premium = gold_details.get('ee_rate', 0) or 0
         else:
-            # Use aggregate_family_premium (actual summed rates), fall back to estimated_tier_premium
-            bronze_premium = bronze_details.get('aggregate_family_premium', 0) or bronze_details.get('estimated_tier_premium', 0) or 0
-            gold_premium = gold_details.get('aggregate_family_premium', 0) or gold_details.get('estimated_tier_premium', 0) or 0
+            # Toggle ON: ER covers full family
+            bronze_premium = bronze_family_total
+            gold_premium = gold_family_total
 
-    bronze_er, bronze_ee = calc_er_ee_split(bronze_premium, flat_er_amount)
-    gold_er, gold_ee = calc_er_ee_split(gold_premium, flat_er_amount)
+    # Calculate ER/EE split
+    # When toggle is OFF: ER is based on employee-only rate, EE pays the rest (including dependents)
+    # When toggle is ON: ER is based on family rate, standard split
+    if use_ee_rate_only and bronze_family_total > 0:
+        # ER contribution based on employee-only rate
+        bronze_er, _ = calc_er_ee_split(bronze_premium, flat_er_amount)
+        # EE pays the difference: family total - ER contribution
+        bronze_ee = max(0, bronze_family_total - bronze_er)
+        # Use family total for display (Total = ER + EE)
+    else:
+        bronze_er, bronze_ee = calc_er_ee_split(bronze_premium, flat_er_amount)
+        bronze_family_total = bronze_premium  # For EE employees, family total = individual
+
+    if use_ee_rate_only and gold_family_total > 0:
+        gold_er, _ = calc_er_ee_split(gold_premium, flat_er_amount)
+        gold_ee = max(0, gold_family_total - gold_er)
+    else:
+        gold_er, gold_ee = calc_er_ee_split(gold_premium, flat_er_amount)
+        gold_family_total = gold_premium
 
     # Base costs dictionary
     costs = {
@@ -2568,12 +2629,21 @@ def build_employee_example(employee_row: pd.Series, label: str,
             coop_lookup = build_cooperative_rate_lookup(coop_rates_df, iua)
             result = calculate_cooperative_family_rate(employee_row, family_status, coop_lookup, dependents_df, return_breakdown=True)
             if isinstance(result, dict):
-                coop_rate = result.get('total_rate', 0)
+                coop_family_total = result.get('total_rate', 0)
+                coop_ee_rate = result.get('ee_rate', 0) or coop_family_total
                 member_breakdowns[f"HAS ${iua}"] = result
             else:
-                coop_rate = result
-            coop_premium = coop_rate if coop_rate > 0 else (ichra_premium * cooperative_ratio if ichra_premium > 0 else 0)
-            coop_er, coop_ee = calc_er_ee_split(coop_premium, flat_er_amount)
+                coop_family_total = result
+                coop_ee_rate = result
+            coop_premium = coop_family_total if coop_family_total > 0 else (ichra_premium * cooperative_ratio if ichra_premium > 0 else 0)
+
+            # Apply toggle logic: ER based on ee-only or family rate
+            if use_ee_rate_only and coop_family_total > 0 and coop_ee_rate != coop_family_total:
+                # Toggle OFF: ER based on employee-only rate
+                coop_er, _ = calc_er_ee_split(coop_ee_rate, flat_er_amount)
+                coop_ee = max(0, coop_family_total - coop_er)
+            else:
+                coop_er, coop_ee = calc_er_ee_split(coop_premium, flat_er_amount)
             # Key format: "HAS $1k", "HAS $2.5k", etc.
             costs[f"HAS ${iua}"] = {"employer": round(coop_er, 0), "employee": round(coop_ee, 0)}
 
@@ -2585,16 +2655,23 @@ def build_employee_example(employee_row: pd.Series, label: str,
         for iua in sorted_sedera_iuas:
             sedera_lookup = build_sedera_rate_lookup(sedera_rates_df, iua)
             result = calculate_sedera_family_rate(employee_row, family_status, sedera_lookup, dependents_df, return_breakdown=True)
+            iua_display = iua if int(iua) < 1000 else f"{int(iua)//1000}k" if int(iua) % 1000 == 0 else f"{int(iua)/1000}k"
             if isinstance(result, dict):
-                sedera_rate = result.get('total_rate', 0)
-                # Key format: "Sedera $500", "Sedera $1k", "Sedera $2.5k", etc.
-                iua_display = iua if int(iua) < 1000 else f"{int(iua)//1000}k" if int(iua) % 1000 == 0 else f"{int(iua)/1000}k"
+                sedera_family_total = result.get('total_rate', 0)
+                sedera_ee_rate = result.get('ee_rate', 0) or sedera_family_total
                 member_breakdowns[f"Sedera ${iua_display}"] = result
             else:
-                sedera_rate = result
-                iua_display = iua if int(iua) < 1000 else f"{int(iua)//1000}k" if int(iua) % 1000 == 0 else f"{int(iua)/1000}k"
-            sedera_premium = sedera_rate if sedera_rate > 0 else 0
-            sedera_er, sedera_ee = calc_er_ee_split(sedera_premium, flat_er_amount)
+                sedera_family_total = result
+                sedera_ee_rate = result
+            sedera_premium = sedera_family_total if sedera_family_total > 0 else 0
+
+            # Apply toggle logic: ER based on ee-only or family rate
+            if use_ee_rate_only and sedera_family_total > 0 and sedera_ee_rate != sedera_family_total:
+                # Toggle OFF: ER based on employee-only rate
+                sedera_er, _ = calc_er_ee_split(sedera_ee_rate, flat_er_amount)
+                sedera_ee = max(0, sedera_family_total - sedera_er)
+            else:
+                sedera_er, sedera_ee = calc_er_ee_split(sedera_premium, flat_er_amount)
             costs[f"Sedera ${iua_display}"] = {"employer": round(sedera_er, 0), "employee": round(sedera_ee, 0)}
 
     # Determine winner (lowest total cost for employee)
@@ -3034,48 +3111,21 @@ def generate_employee_examples_csv(employee_examples: List[Dict]) -> pd.DataFram
 # =============================================================================
 
 def render_header(data: DashboardData):
-    col1, col2 = st.columns([1, 1])
-
-    # Calculate projected savings
-    renewal = data.company_totals.get('Renewal 2026', data.renewal_premium)
-    coop = data.company_totals.get('Cooperative', 0)
-    projected_savings = renewal - coop if renewal > 0 and coop > 0 else 0
-    savings_pct = round((projected_savings / renewal) * 100, 0) if renewal > 0 else 0
-
-    with col1:
-        st.markdown(f"""
-        <p class="client-name">{data.client_name}</p>
-        <p class="client-meta">
-            {data.employee_count} employees
-            <span class="client-meta-divider">|</span>
-            Avg age {data.avg_age:.0f}
-            <span class="client-meta-divider">|</span>
-            {data.location}
-        </p>
-        <p style="color: #364153; font-size: 14px;">
-            Renewal: <span style="font-family: Inter;">${data.current_premium:,.0f}</span> →
-            <span style="font-family: Inter;">${data.renewal_premium:,.0f}/month</span>
-            <span class="increase-badge">+{data.increase_pct:.0f}% increase</span>
-        </p>
-        """, unsafe_allow_html=True)
-
-    with col2:
-        st.markdown(f"""
-        <div style="display: flex; justify-content: flex-end;">
-            <div class="recommendation-banner">
-                <span style="color: #00a63e; font-size: 18px;">✓</span>
-                <span style="color: #00a63e; font-size: 18px;">✓</span>
-                <span class="recommendation-text">ICHRA + Cooperative Recommended</span>
-            </div>
-        </div>
-        <p style="text-align: right; margin-top: 8px;">
-            Projected savings: <span class="savings-amount">${projected_savings:,.0f}/month</span>
-            <span style="color: #4a5565;">({savings_pct:.0f}%)</span>
-        </p>
-        <p style="text-align: right; color: #6a7282; font-size: 14px;">
-            with 70% cooperative adoption
-        </p>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <p class="client-name">{data.client_name}</p>
+    <p class="client-meta">
+        {data.employee_count} employees
+        <span class="client-meta-divider">|</span>
+        Avg age {data.avg_age:.0f}
+        <span class="client-meta-divider">|</span>
+        {data.location}
+    </p>
+    <p style="color: #364153; font-size: 14px;">
+        Renewal: <span style="font-family: Inter;">${data.current_premium:,.0f}</span> →
+        <span style="font-family: Inter;">${data.renewal_premium:,.0f}/month</span>
+        <span class="increase-badge">+{data.increase_pct:.0f}% increase</span>
+    </p>
+    """, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -3094,10 +3144,20 @@ def render_contribution_input_card():
     # Ensure contribution_settings is initialized
     if 'contribution_settings' not in st.session_state:
         st.session_state.contribution_settings = {
+            'strategy_type': 'percentage',  # percentage, flat_amount, base_age_curve, percentage_lcsp, fixed_age_tiers
             'default_percentage': 75,
             'by_class': {},
-            'input_mode': 'percentage',
-            'flat_amounts': {'EE': None, 'ES': None, 'EC': None, 'F': None}
+            'input_mode': 'percentage',  # Keep for backwards compat
+            'flat_amounts': {'EE': None, 'ES': None, 'EC': None, 'F': None},
+            'exclude_dependent_ichra': False,  # Toggle: when True, ER only covers employee rate
+            'show_ichra_metals': True,  # Toggle for showing ICHRA metal plans in rate breakdown
+            # Base age curve params
+            'base_age': 21,
+            'base_contribution': 400.0,
+            # % of LCSP params
+            'lcsp_percentage': 75,
+            # Fixed age tiers params
+            'tier_amounts': {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900}
         }
 
     st.markdown('<p class="card-title">Employer contribution (optional)</p>', unsafe_allow_html=True)
@@ -3109,26 +3169,51 @@ def render_contribution_input_card():
 
     # Get current settings
     settings = st.session_state.get('contribution_settings', {})
-    current_mode = settings.get('input_mode', 'percentage')
+    current_strategy = settings.get('strategy_type', 'percentage')
     current_pct = settings.get('default_percentage', 75)
     flat_amounts = settings.get('flat_amounts', {})
 
-    # Mode selector
-    mode = st.radio(
-        "Contribution type",
-        options=['percentage', 'flat_amount'],
-        format_func=lambda x: "Percentage of premium" if x == 'percentage' else "Flat amount by tier",
-        index=0 if current_mode == 'percentage' else 1,
+    # Employer ICHRA contribution scope toggle (default: include dependents, opt-in to exclude)
+    exclude_deps = st.checkbox(
+        "Exclude individual dependents from employer ICHRA contribution strategy",
+        value=settings.get('exclude_dependent_ichra', False),
+        help="When checked, employer ICHRA allowance is calculated on the employee's individual rate only. Dependent premiums become the employee's responsibility.",
+        key="exclude_dependent_ichra_checkbox"
+    )
+    st.session_state.contribution_settings['exclude_dependent_ichra'] = exclude_deps
+    if exclude_deps:
+        st.caption("Dependent premiums fall to employee")
+
+    # Strategy selector (expanded from 2 to 5 options)
+    STRATEGY_OPTIONS = {
+        'percentage': 'Percentage of premium',
+        'flat_amount': 'Flat amount by tier',
+        'base_age_curve': 'Base age + ACA 3:1 curve',
+        'percentage_lcsp': '% of LCSP',
+        'fixed_age_tiers': 'Fixed age tiers'
+    }
+
+    # Determine current index
+    strategy_keys = list(STRATEGY_OPTIONS.keys())
+    current_index = strategy_keys.index(current_strategy) if current_strategy in strategy_keys else 0
+
+    strategy_type = st.radio(
+        "Contribution strategy",
+        options=strategy_keys,
+        format_func=lambda x: STRATEGY_OPTIONS[x],
+        index=current_index,
         horizontal=True,
-        key="contribution_mode_radio",
+        key="contribution_strategy_radio",
         label_visibility="collapsed"
     )
 
-    # Update mode in session state
-    if mode != current_mode:
-        st.session_state.contribution_settings['input_mode'] = mode
+    # Update strategy type in session state
+    if strategy_type != current_strategy:
+        st.session_state.contribution_settings['strategy_type'] = strategy_type
+        # Keep input_mode in sync for backwards compat
+        st.session_state.contribution_settings['input_mode'] = strategy_type
 
-    if mode == 'percentage':
+    if strategy_type == 'percentage':
         # Percentage slider
         pct = st.slider(
             "Employer contribution",
@@ -3160,7 +3245,7 @@ def render_contribution_input_card():
         </div>
         """, unsafe_allow_html=True)
 
-    else:
+    elif strategy_type == 'flat_amount':
         # Flat amount inputs by tier
         st.markdown("""
         <p style="font-size: 13px; color: #6b7280; margin-bottom: 8px;">
@@ -3213,6 +3298,109 @@ def render_contribution_input_card():
             </div>
             """, unsafe_allow_html=True)
 
+    elif strategy_type == 'base_age_curve':
+        # Base age + ACA 3:1 curve
+        st.markdown("""
+        <p style="font-size: 13px; color: #6b7280; margin-bottom: 8px;">
+            Set a base contribution at a reference age. The system scales contributions using the ACA 3:1 age curve.
+        </p>
+        """, unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            base_age_options = [21, 25, 30, 35, 40]
+            current_base_age = settings.get('base_age', 21)
+            base_age_idx = base_age_options.index(current_base_age) if current_base_age in base_age_options else 0
+            base_age = st.selectbox(
+                "Base age",
+                options=base_age_options,
+                index=base_age_idx,
+                key="base_age_select",
+                help="Reference age for contribution calculation"
+            )
+        with col2:
+            base_contribution = st.number_input(
+                "Base contribution ($/month)",
+                min_value=0.0,
+                max_value=5000.0,
+                value=float(settings.get('base_contribution', 400.0)),
+                step=25.0,
+                key="base_contribution_input",
+                help="Monthly contribution for the base age"
+            )
+
+        st.session_state.contribution_settings['base_age'] = base_age
+        st.session_state.contribution_settings['base_contribution'] = base_contribution
+
+        # Show preview table
+        from constants import ACA_AGE_CURVE
+        base_ratio = ACA_AGE_CURVE.get(base_age, 1.0)
+        preview_ages = [21, 30, 40, 50, 64]
+        preview_data = []
+        for age in preview_ages:
+            ratio = ACA_AGE_CURVE.get(age, 1.0)
+            amount = base_contribution * (ratio / base_ratio)
+            preview_data.append({"Age": age, "Contribution": f"${amount:,.0f}"})
+
+        st.markdown("<p style='font-size: 12px; color: #6b7280; margin-top: 8px;'>Preview by age:</p>", unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame(preview_data), hide_index=True, use_container_width=True)
+
+    elif strategy_type == 'percentage_lcsp':
+        # Percentage of LCSP
+        st.markdown("""
+        <p style="font-size: 13px; color: #6b7280; margin-bottom: 8px;">
+            Each employee receives X% of their individual LCSP (Lowest Cost Silver Plan) premium.
+        </p>
+        """, unsafe_allow_html=True)
+
+        lcsp_pct = st.slider(
+            "Percentage of LCSP",
+            min_value=50,
+            max_value=100,
+            value=settings.get('lcsp_percentage', 75),
+            step=5,
+            format="%d%%",
+            key="lcsp_pct_slider",
+            help="Percentage of each employee's LCSP premium covered by employer"
+        )
+        st.session_state.contribution_settings['lcsp_percentage'] = lcsp_pct
+
+        ee_pct = 100 - lcsp_pct
+        st.markdown(f"""
+        <div style="margin-top: 8px; padding: 12px; background: #eff6ff; border-radius: 8px; font-size: 13px; color: #1e40af;">
+            At <strong>{lcsp_pct}%</strong>: Employees pay {ee_pct}% of their individual LCSP premium.
+            Higher-cost employees get proportionally larger contributions.
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif strategy_type == 'fixed_age_tiers':
+        # Fixed age tiers
+        st.markdown("""
+        <p style="font-size: 13px; color: #6b7280; margin-bottom: 8px;">
+            Set fixed dollar amounts for each age tier. Employees are assigned based on their age.
+        </p>
+        """, unsafe_allow_html=True)
+
+        tier_labels = ['21', '18-25', '26-35', '36-45', '46-55', '56-63', '64+']
+        current_tier_amounts = settings.get('tier_amounts', {})
+
+        tier_cols = st.columns(4)
+        updated_tier_amounts = {}
+        for i, tier in enumerate(tier_labels):
+            with tier_cols[i % 4]:
+                default_val = current_tier_amounts.get(tier, 400)
+                updated_tier_amounts[tier] = st.number_input(
+                    f"Age {tier}",
+                    min_value=0.0,
+                    max_value=5000.0,
+                    value=float(default_val),
+                    step=25.0,
+                    key=f"age_tier_{tier}",
+                    help=f"Monthly contribution for age {tier}"
+                )
+
+        st.session_state.contribution_settings['tier_amounts'] = updated_tier_amounts
+
 
 # =============================================================================
 # WORKFORCE COMPOSITION
@@ -3263,78 +3451,58 @@ def render_workforce_composition(data: DashboardData):
 
 
 # =============================================================================
-# CURRENT PLAN PROBLEMS
+# CONTRIBUTION PATTERN CARD
 # =============================================================================
 
-def render_plan_problems(data: DashboardData):
-    st.markdown('<p class="card-title">Current plan problems</p>', unsafe_allow_html=True)
+def render_contribution_pattern_card():
+    """Render contribution pattern as a card (moved from left nav expander)."""
+    contribution_pattern = st.session_state.get('detected_contribution_pattern')
 
-    # Get employee cost share percentage from actual census data
-    ee_pct = round(data.ee_contribution_pct * 100) if data.ee_contribution_pct > 0 else 35
-
-    # Use display placeholders from constants (could be made dynamic in future)
-    deductible = DISPLAY_PLACEHOLDERS['typical_deductible']
-
-    # Calculate actual employee annual cost from census data
-    # Employee pays: (EE monthly contribution * 12) + deductible
-    if data.ee_contribution_pct > 0 and data.current_premium > 0:
-        ee_monthly = data.current_premium * data.ee_contribution_pct
-        cost_min = int(ee_monthly * 12)  # Just premiums
-        cost_max = int(ee_monthly * 12 + deductible)  # Premiums + deductible
-    else:
-        cost_min = DISPLAY_PLACEHOLDERS['employee_annual_cost_min']
-        cost_max = DISPLAY_PLACEHOLDERS['employee_annual_cost_max']
-
-    # Problem 1
-    st.markdown(f"""
-    <div class="error-box">
-        <p class="error-title">Employees pay {ee_pct}% of premium + ${deductible:,} deductible</p>
-        <p class="error-subtitle">
-            Total employee cost: <strong style="font-family: Inter;">${cost_min:,}-${cost_max:,}/year</strong> before coverage kicks in
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Problem 2 - Affordability failures
-    affordability_pct = AFFORDABILITY_THRESHOLD_2026 * 100
-    if data.affordability_failures > 0:
-        st.markdown(f"""
-        <div class="error-box">
-            <p style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                <span style="color: #e7000b;">❌</span>
-                <span class="error-title" style="margin: 0;">{data.affordability_failures} employees fail affordability test</span>
-            </p>
-            <p class="error-subtitle" style="margin-left: 26px;">({affordability_pct:.2f}% income threshold for {RENEWAL_PLAN_YEAR})</p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
+    if not contribution_pattern:
+        st.markdown('<p class="card-title">Contribution Pattern</p>', unsafe_allow_html=True)
         st.markdown("""
-        <div class="info-box">
-            <p style="display: flex; align-items: center; gap: 8px;">
-                <span style="color: #155dfc;">ℹ</span>
-                <span style="color: #1c398e; font-weight: 500;">Affordability analysis available after contribution evaluation</span>
-            </p>
-        </div>
+        <p style="color: #6b7280; font-size: 14px;">
+            Upload census data to detect contribution patterns
+        </p>
         """, unsafe_allow_html=True)
+        return
 
-    # Consequence
-    st.markdown("""
-    <div class="info-box" style="margin-top: 16px;">
-        <p style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-            <span style="color: #155dfc; font-weight: 700;">→</span>
-            <span style="color: #101828; font-weight: 500;">Employees can't actually afford to use this coverage</span>
-        </p>
-        <p style="color: #364153; font-size: 14px; margin-left: 26px;">
-            High premiums + high deductibles = unusable benefits
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    from contribution_pattern_detector import get_pattern_summary
+    summary = get_pattern_summary(contribution_pattern)
 
-    st.markdown("""
-    <p style="font-style: italic; color: #4a5565; font-size: 14px; margin-top: 16px;">
-        💡 ICHRA + Cooperative eliminates deductibles and makes care truly accessible
+    # Card title with overall pattern as description
+    pattern_type = summary['overall_type'].replace('_', ' ').title()
+    st.markdown(f'<p class="card-title">Contribution Pattern</p>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <p style="color: #4a5565; font-size: 14px; margin-bottom: 16px;">
+        {pattern_type}
     </p>
     """, unsafe_allow_html=True)
+
+    # Show warning if review needed
+    if contribution_pattern.needs_any_review():
+        st.warning("Some tiers have high variance and may need review")
+
+    # Tier breakdown table
+    pattern_data = []
+    for tier in summary['tiers']:
+        row = {
+            'Tier': tier['label'],
+            'Pattern': tier['pattern_type'].replace('_', ' ').title(),
+            'ER%': tier['er_percentage_display'] if tier['pattern_type'] == 'percentage' else '-',
+            'Count': tier['sample_size']
+        }
+        if contribution_pattern.needs_any_review():
+            row['Status'] = '⚠️' if tier['needs_review'] else '✓'
+        pattern_data.append(row)
+
+    import pandas as pd
+    st.dataframe(pd.DataFrame(pattern_data), use_container_width=True, hide_index=True)
+
+    # Show any warnings
+    if summary.get('warnings'):
+        for warning in summary['warnings']:
+            st.caption(f"⚠️ {warning}")
 
 
 # =============================================================================
@@ -4590,43 +4758,13 @@ def render_employee_card(employee):
     # Get plan configurator settings to determine which columns to show
     config = st.session_state.get('plan_configurator', {})
 
-    # Get current contribution percentage from session state (for dynamic recalculation)
-    contribution_settings = st.session_state.get('contribution_settings', {})
-    contribution_pct = contribution_settings.get('default_percentage', 65) / 100.0
-    flat_amounts = contribution_settings.get('flat_amounts', {})
-    input_mode = contribution_settings.get('input_mode', 'percentage')
-    family_status = employee.get('family_status', 'EE')
-
-    # Get flat amount for this employee's tier if in flat mode
-    flat_er_amount = None
-    if input_mode == 'flat_amount' and family_status in flat_amounts:
-        flat_er_amount = flat_amounts.get(family_status)
-
-    # Get original costs data
-    original_costs = employee['costs']
-
-    # Recalculate ER/EE split for ICHRA, HAS, and Sedera using current contribution settings
-    # Current and Renewal remain unchanged (they come from census data)
-    costs = {}
-    for scenario, cost_data in original_costs.items():
-        if scenario in ['Current', 'Renewal']:
-            # Keep original values for Current and Renewal
-            costs[scenario] = cost_data
-        else:
-            # Recalculate ER/EE split for ICHRA, HAS, and Sedera
-            total = cost_data.get('employer', 0) + cost_data.get('employee', 0)
-            if total > 0:
-                if flat_er_amount is not None and flat_er_amount > 0:
-                    # Flat amount mode
-                    er = min(flat_er_amount, total)
-                    ee = max(0, total - er)
-                else:
-                    # Percentage mode
-                    er = total * contribution_pct
-                    ee = total - er
-                costs[scenario] = {'employer': round(er, 0), 'employee': round(ee, 0)}
-            else:
-                costs[scenario] = cost_data
+    # Get costs data - use original costs calculated in build_employee_example
+    # The ER/EE split is calculated correctly there, accounting for the dependent toggle:
+    # - Toggle OFF: ER based on employee-only rate, EE = family_total - ER
+    # - Toggle ON: Standard split on family rate
+    # Since build_employee_example is called on every page rerun with current settings,
+    # we should use those values directly rather than recalculating incorrectly here.
+    costs = employee['costs']
 
     # Build column definitions dynamically
     # Each column: (header_text, header_class, scenario_key)
@@ -4904,21 +5042,27 @@ def render_employee_card(employee):
                 st.caption(f"Lowest cost plan at each metal level. Annual Cost = {rate_type} × 12.")
 
                 # Member Rate Breakdown Table
+                # Always show for non-EE employees - rates are always visible
+                # The "Include dependent ICHRA" toggle controls ER/EE cost split, not rate visibility
                 member_breakdowns = employee.get('member_breakdowns', {})
                 family_status = employee.get('family_status', 'EE')
 
-                # Only show member breakdown for non-EE employees with breakdown data
                 if family_status != 'EE' and member_breakdowns:
                     st.markdown("<p style='font-weight: 600; margin-top: 20px; margin-bottom: 8px; color: #101828;'>Member Rate Breakdown</p>",
                                 unsafe_allow_html=True)
 
+                    # Get toggle value for showing ICHRA metal plans
+                    show_ichra_metals = st.session_state.get('contribution_settings', {}).get('show_ichra_metals', True)
+
                     # Collect all plan types that have breakdowns
                     plan_types = []
-                    for key in ['Bronze', 'Silver', 'Gold']:
-                        if key in member_breakdowns and member_breakdowns[key]:
-                            plan_types.append((key, key.lower()))
+                    # Only include ICHRA metal plans if toggle is enabled
+                    if show_ichra_metals:
+                        for key in ['Bronze', 'Silver', 'Gold']:
+                            if key in member_breakdowns and member_breakdowns[key]:
+                                plan_types.append((key, key.lower()))
 
-                    # Add HAS/Sedera from breakdowns
+                    # Add HAS/Sedera from breakdowns (always shown)
                     for key in member_breakdowns:
                         if key.startswith('HAS ') and member_breakdowns[key]:
                             plan_types.append((key, 'coop'))
@@ -5024,6 +5168,15 @@ def render_employee_examples(data: DashboardData):
             help="Add scannable QR codes linking to detailed rate breakdown pages (links expire after 7 days)",
             key="employee_examples_qr_links"
         )
+        # Toggle for showing ICHRA metal plans in Member Rate Breakdown
+        show_ichra_metals = st.checkbox(
+            "Show ICHRA metals",
+            value=st.session_state.get('contribution_settings', {}).get('show_ichra_metals', True),
+            help="Show Bronze/Silver/Gold rates in Member Rate Breakdown. Disable if you don't sell ICHRA.",
+            key="show_ichra_metals_checkbox"
+        )
+        st.session_state.contribution_settings['show_ichra_metals'] = show_ichra_metals
+
         if st.button("📊 Export to PPT", key="export_employee_examples_pptx"):
             # Get current contribution settings for recalculating ER/EE split
             contribution_settings = st.session_state.get('contribution_settings', {})
@@ -5350,55 +5503,40 @@ with st.sidebar:
         )
         st.session_state.dashboard_config['cooperative_ratio'] = coop_ratio_pct / 100
 
-    # Contribution Pattern Review (if detected and needs review)
-    contribution_pattern = st.session_state.get('detected_contribution_pattern')
-    if contribution_pattern and contribution_pattern.needs_any_review():
-        with st.expander("⚠️ Contribution Pattern Review", expanded=True):
-            st.markdown("**Detected EE/ER contribution patterns by tier:**")
-            st.caption("Some tiers have high variance and need review")
+# Initialize contribution_settings BEFORE loading data (to ensure toggle value is available)
+if 'contribution_settings' not in st.session_state:
+    st.session_state.contribution_settings = {
+        'strategy_type': 'percentage',
+        'default_percentage': 75,
+        'by_class': {},
+        'input_mode': 'percentage',
+        'flat_amounts': {'EE': None, 'ES': None, 'EC': None, 'F': None},
+        'exclude_dependent_ichra': False,  # Toggle: when True, ER only covers employee rate
+        'show_ichra_metals': True,  # Toggle for showing ICHRA metals in Member Rate Breakdown
+        'base_age': 21,
+        'base_contribution': 400.0,
+        'lcsp_percentage': 75,
+        'tier_amounts': {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900}
+    }
 
-            from contribution_pattern_detector import get_pattern_summary, TIER_LABELS
-            summary = get_pattern_summary(contribution_pattern)
-
-            # Show pattern table
-            pattern_data = []
-            for tier in summary['tiers']:
-                pattern_data.append({
-                    'Tier': tier['label'],
-                    'Pattern': tier['pattern_type'].replace('_', ' ').title(),
-                    'ER%': tier['er_percentage_display'] if tier['pattern_type'] == 'percentage' else '-',
-                    'Flat $': tier['flat_amount_display'] if tier['pattern_type'] == 'flat_rate' else '-',
-                    'Count': tier['sample_size'],
-                    'Status': '⚠️ Review' if tier['needs_review'] else '✓'
-                })
-
-            import pandas as pd
-            st.dataframe(pd.DataFrame(pattern_data), width='stretch', hide_index=True)
-
-            # Show warnings
-            if summary['warnings']:
-                for warning in summary['warnings']:
-                    st.warning(warning)
-    elif contribution_pattern:
-        # Pattern detected but no review needed - show summary
-        with st.expander("📊 Contribution Pattern", expanded=False):
-            from contribution_pattern_detector import get_pattern_summary
-            summary = get_pattern_summary(contribution_pattern)
-
-            pattern_type = summary['overall_type'].replace('_', ' ').title()
-            st.markdown(f"**Overall pattern:** {pattern_type}")
-
-            pattern_data = []
-            for tier in summary['tiers']:
-                pattern_data.append({
-                    'Tier': tier['label'],
-                    'Pattern': tier['pattern_type'].replace('_', ' ').title(),
-                    'ER%': tier['er_percentage_display'],
-                    'Count': tier['sample_size']
-                })
-
-            import pandas as pd
-            st.dataframe(pd.DataFrame(pattern_data), width='stretch', hide_index=True)
+# Sync widget keys with contribution_settings (widgets update their keys on change)
+# This ensures load_dashboard_data gets the latest values from widget interactions
+if 'exclude_dependent_ichra_checkbox' in st.session_state:
+    st.session_state.contribution_settings['exclude_dependent_ichra'] = st.session_state.exclude_dependent_ichra_checkbox
+if 'contribution_strategy_radio' in st.session_state:
+    st.session_state.contribution_settings['strategy_type'] = st.session_state.contribution_strategy_radio
+    st.session_state.contribution_settings['input_mode'] = st.session_state.contribution_strategy_radio
+# Sync percentage slider
+if 'contribution_pct_slider' in st.session_state:
+    st.session_state.contribution_settings['default_percentage'] = st.session_state.contribution_pct_slider
+# Sync base age curve settings
+if 'base_age_select' in st.session_state:
+    st.session_state.contribution_settings['base_age'] = st.session_state.base_age_select
+if 'base_contribution_input' in st.session_state:
+    st.session_state.contribution_settings['base_contribution'] = st.session_state.base_contribution_input
+# Sync LCSP percentage
+if 'lcsp_pct_slider' in st.session_state:
+    st.session_state.contribution_settings['lcsp_percentage'] = st.session_state.lcsp_pct_slider
 
 # Load all dashboard data from session state
 data = load_dashboard_data(
@@ -5467,7 +5605,7 @@ with col1:
 
 with col2:
     with st.container(border=True):
-        render_plan_problems(data)
+        render_contribution_pattern_card()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
