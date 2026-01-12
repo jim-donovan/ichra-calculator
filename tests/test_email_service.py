@@ -178,7 +178,7 @@ class TestEmailConfig(unittest.TestCase):
         with patch.dict('os.environ', {}, clear=True):
             config = EmailConfig.from_environment()
             self.assertEqual(config.sender_email, 'noreply@glovesolutions.com')
-            self.assertEqual(config.sender_name, 'GLOVE Benefits')
+            self.assertEqual(config.sender_name, 'Glove Benefits')
 
     def test_config_validation_missing_key(self):
         """AC: Missing API key fails validation with clear error"""
@@ -607,7 +607,7 @@ class TestEmailContent(unittest.TestCase):
         # Check plain text
         self.assertIn("ABC Company", plain_text)
         self.assertIn("ICHRA", plain_text)
-        self.assertIn("GLOVE Benefits", plain_text)
+        self.assertIn("Glove Benefits", plain_text)
 
         # Check HTML
         self.assertIn("ABC Company", html_body)

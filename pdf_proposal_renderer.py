@@ -1,8 +1,8 @@
 """
 PDF Proposal Renderer for ICHRA Calculator
 
-Renders GLOVE proposal slides as PDF using ReportLab.
-Matches the GLOVE brand design from glove-ppld-template.pdf
+Renders Glove proposal slides as PDF using ReportLab.
+Matches the Glove brand design from glove-ppld-template.pdf
 """
 
 from reportlab.lib.pagesizes import landscape, letter
@@ -21,7 +21,7 @@ from pptx_generator import ProposalData
 
 
 # =============================================================================
-# GLOVE Brand Colors (from template)
+# Glove Brand Colors (from template)
 # =============================================================================
 COLORS = {
     # Backgrounds
@@ -54,7 +54,7 @@ COLORS = {
 
 
 class PDFProposalRenderer:
-    """Render GLOVE proposal slides as PDF using ReportLab"""
+    """Render Glove proposal slides as PDF using ReportLab"""
 
     PAGE_WIDTH = 11 * inch
     PAGE_HEIGHT = 8.5 * inch
@@ -377,7 +377,7 @@ class PDFProposalRenderer:
     # =========================================================================
 
     def _draw_slide_3_fit_score(self):
-        """GIFT - GLOVE ICHRA Fit Total"""
+        """GIFT - Glove ICHRA Fit Total"""
         self._new_page('cream_bg')
 
         # Section header
@@ -387,7 +387,7 @@ class PDFProposalRenderer:
         self.c.setFont('Helvetica-Bold', 42)
         self.c.setFillColor(HexColor(COLORS['teal_text']))
         self.c.drawCentredString(self.PAGE_WIDTH / 2, self.PAGE_HEIGHT - 1.3 * inch,
-                                "YOUR GLOVE ICHRA FIT TOTAL")
+                                "YOUR Glove ICHRA FIT TOTAL")
 
         # Center donut chart
         cx = self.PAGE_WIDTH / 2

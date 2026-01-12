@@ -1,6 +1,6 @@
 """
 Page 7: Proposal Generator
-Generate branded GLOVE PowerPoint proposals from ICHRA analysis
+Generate branded Glove PowerPoint proposals from ICHRA analysis
 Includes email delivery via SendGrid
 """
 
@@ -122,7 +122,7 @@ if 'send_email_enabled' not in st.session_state:
 st.markdown("""
 <div class="hero-section">
     <div class="hero-title">📑 Proposal Generator</div>
-    <p class="hero-subtitle">Generate a branded GLOVE ICHRA proposal PowerPoint presentation</p>
+    <p class="hero-subtitle">Generate a branded Glove ICHRA proposal PowerPoint presentation</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -197,7 +197,7 @@ with col2:
 # SECTION 2: FIT SCORE CALCULATION
 # =============================================================================
 st.markdown("---")
-st.subheader("🎯 GLOVE ICHRA fit score")
+st.subheader("🎯 Glove ICHRA fit score")
 
 # Calculate Fit Score
 calculator = FitScoreCalculator(
@@ -688,7 +688,7 @@ with generate_col1:
                     renderer = PDFProposalRenderer(proposal_data)
                     output_buffer = renderer.generate()
                     st.session_state.proposal_buffer = output_buffer
-                    st.session_state.proposal_filename = f"GLOVE_Proposal_{client_name_safe}_{timestamp}.pdf"
+                    st.session_state.proposal_filename = f"Glove_Proposal_{client_name_safe}_{timestamp}.pdf"
                     st.session_state.proposal_mime = "application/pdf"
                 else:
                     # Generate PowerPoint using template filler
@@ -696,7 +696,7 @@ with generate_col1:
                     filler = PPTXTemplateFiller(proposal_data)
                     output_buffer = filler.generate()
                     st.session_state.proposal_buffer = output_buffer
-                    st.session_state.proposal_filename = f"GLOVE_Proposal_{client_name_safe}_{timestamp}.pptx"
+                    st.session_state.proposal_filename = f"Glove_Proposal_{client_name_safe}_{timestamp}.pptx"
                     st.session_state.proposal_mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
                 st.success("✅ Proposal generated successfully!")

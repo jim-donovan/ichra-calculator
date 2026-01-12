@@ -93,7 +93,7 @@ def generate_state_distribution_chart(
         labels={'x': 'State', 'y': 'Number of Employees'}
     )
 
-    fig.update_traces(marker_color='#0D7377')  # GLOVE teal
+    fig.update_traces(marker_color='#0D7377')  # Glove teal
     fig.update_layout(showlegend=False, height=400)
     fig.update_xaxes(title='State')
     fig.update_yaxes(title='Number of Employees')

@@ -476,7 +476,7 @@ COLOR_SCHEME = {
 PPTX_TEMPLATE_DIR = Path(__file__).parent / 'templates'
 PPTX_TEMPLATE_PATH = PPTX_TEMPLATE_DIR / 'glove_template.pptx'
 
-# GLOVE ICHRA Fit Score category weights (must sum to 100)
+# Glove ICHRA Fit Score category weights (must sum to 100)
 FIT_SCORE_WEIGHTS = {
     'cost_advantage': 25,        # Savings vs current/renewal costs
     'market_readiness': 20,      # Marketplace plan availability

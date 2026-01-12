@@ -395,7 +395,7 @@ def generate_member_breakdown_html(
                 <span class="expiry-notice">Link expires {expiry_date.strftime('%B %d, %Y')}</span>
             </div>
             <div class="branding" style="margin-top: 8px;">
-                ICHRA Plan Calculator by GLOVE Benefits
+                ICHRA Plan Calculator by Glove Benefits
             </div>
         </div>
     </div>

@@ -3023,87 +3023,120 @@ def generate_marketplace_rates_csv(census_df: pd.DataFrame,
     return df
 
 
-def generate_employee_examples_csv(employee_examples: List[Dict]) -> pd.DataFrame:
+def generate_employee_examples_csv(employee_examples: List[Dict], plan_config: Dict = None) -> pd.DataFrame:
     """
-    Generate CSV data from employee examples with cost breakdowns.
+    Generate CSV data from employee examples matching the UI table format.
 
-    Output is transposed: employees as columns, metrics as rows.
-
-    Includes:
-    - Employee metadata (name, age, tier, location, family status, dependent count)
-    - Age band for cooperative rate lookup
-    - Costs for each plan type (Current, Renewal, ICHRA Bronze/Silver/Gold, HAS, Sedera)
-    - Both employer and employee cost splits
+    Format matches the UI exactly:
+    - One section per employee with header row showing employee info
+    - Columns: Plan names (Current, Renewal, Bronze, Silver, Gold, HAS, Sedera)
+    - Rows: Employee cost, Employer cost, Total
 
     Args:
         employee_examples: List of employee example dicts from build_employee_example()
+        plan_config: Plan configurator settings to determine which columns to show
 
     Returns:
-        DataFrame ready for CSV export (transposed with employees as columns)
+        DataFrame ready for CSV export
     """
     if not employee_examples:
         return pd.DataFrame()
 
-    # Build rows as an ordered list, then transpose
-    # Each employee becomes a column, metrics become rows
-    rows = []
-    employee_names = []
+    plan_config = plan_config or {}
+    all_rows = []
 
-    for idx, emp in enumerate(employee_examples):
-        name = emp.get('name', f'Employee_{idx+1}')
+    # Get contribution strategy description
+    strategy_desc = get_contribution_strategy_description()
+
+    for emp in employee_examples:
+        name = emp.get('name', '')
         label = emp.get('label', '')
         age = emp.get('age', 0)
         tier = emp.get('tier', '')
         location = emp.get('location', '')
-        family_status = emp.get('family_status', 'EE')
-        family_ages = emp.get('family_ages', [])
         costs = emp.get('costs', {})
-        winner = emp.get('winner', '')
 
-        # Calculate age band for cooperative rates
-        age_band = _get_age_band(age) if age > 0 else ''
+        # Build column list matching UI (only enabled plans)
+        plan_columns = ['Current', 'Renewal', 'ICHRA Bronze', 'ICHRA Silver', 'ICHRA Gold']
 
-        # Count dependents from family_ages list
-        dependent_count = len(family_ages)
+        # Add HAS columns for each enabled IUA level
+        if plan_config.get('hap_enabled') and plan_config.get('hap_iuas'):
+            sorted_hap_iuas = sorted(plan_config['hap_iuas'], key=lambda x: float(x.replace('k', '')))
+            for iua in sorted_hap_iuas:
+                key = f"HAS ${iua}"
+                if key in costs:
+                    plan_columns.append(key)
 
-        # Build ordered list of (metric_name, value) tuples
-        row_data = [
-            ('label', label),
-            ('age', age),
-            ('age_band', age_band),
-            ('tier', tier),
-            ('family_status', family_status),
-            ('dependent_count', dependent_count),
-            ('location', location),
-            ('winner', winner),
-        ]
+        # Add Sedera columns for each enabled IUA level
+        if plan_config.get('sedera_enabled') and plan_config.get('sedera_iuas'):
+            sorted_sedera_iuas = sorted(plan_config['sedera_iuas'], key=lambda x: int(x))
+            for iua in sorted_sedera_iuas:
+                iua_display = iua if int(iua) < 1000 else f"{int(iua)//1000}k" if int(iua) % 1000 == 0 else f"{int(iua)/1000}k"
+                key = f"Sedera ${iua_display}"
+                if key in costs:
+                    plan_columns.append(key)
 
-        # Add costs for each plan type (ER, EE, total) - maintain order
-        for plan_name, plan_costs in costs.items():
-            # Sanitize plan name for row names (e.g., "ICHRA Bronze" -> "ichra_bronze")
-            row_prefix = plan_name.lower().replace(' ', '_').replace('$', '').replace('.', '_')
-            row_data.append((f'{row_prefix}_er', int(plan_costs.get('employer', 0))))
-            row_data.append((f'{row_prefix}_ee', int(plan_costs.get('employee', 0))))
-            row_data.append((f'{row_prefix}_total', int(plan_costs.get('employer', 0) + plan_costs.get('employee', 0))))
+        # Header row with employee info
+        header_row = {'': f"{label}: {name} | Age {age} | {tier} | {location}"}
+        for col in plan_columns:
+            header_row[col] = ''
+        all_rows.append(header_row)
 
-        employee_names.append(name)
-        rows.append(row_data)
+        # Strategy row
+        strategy_row = {'': strategy_desc}
+        for col in plan_columns:
+            strategy_row[col] = ''
+        all_rows.append(strategy_row)
 
-    if not rows:
-        return pd.DataFrame()
+        # Employee (EE) cost row
+        ee_row = {'': 'Employee'}
+        for col in plan_columns:
+            ee_row[col] = f"${costs.get(col, {}).get('employee', 0):,.0f}"
+        all_rows.append(ee_row)
 
-    # Get metric names from first employee (all should have same metrics)
-    metric_names = [r[0] for r in rows[0]]
+        # Employer (ER) cost row
+        er_row = {'': 'Employer'}
+        for col in plan_columns:
+            er_row[col] = f"${costs.get(col, {}).get('employer', 0):,.0f}"
+        all_rows.append(er_row)
 
-    # Build transposed data: metric column + one column per employee
-    data = {'metric': metric_names}
-    for idx, name in enumerate(employee_names):
-        # Extract values in order for this employee
-        data[name] = [r[1] for r in rows[idx]]
+        # Total row
+        total_row = {'': 'Total'}
+        for col in plan_columns:
+            ee_val = costs.get(col, {}).get('employee', 0)
+            er_val = costs.get(col, {}).get('employer', 0)
+            total_row[col] = f"${ee_val + er_val:,.0f}"
+        all_rows.append(total_row)
 
-    df = pd.DataFrame(data)
+        # Empty row between employees
+        empty_row = {'': ''}
+        for col in plan_columns:
+            empty_row[col] = ''
+        all_rows.append(empty_row)
 
-    return df
+    # Build DataFrame with consistent columns
+    if all_rows:
+        # Get all unique columns from first employee's data
+        first_emp_costs = employee_examples[0].get('costs', {})
+        base_columns = ['Current', 'Renewal', 'ICHRA Bronze', 'ICHRA Silver', 'ICHRA Gold']
+
+        if plan_config.get('hap_enabled') and plan_config.get('hap_iuas'):
+            for iua in sorted(plan_config['hap_iuas'], key=lambda x: float(x.replace('k', ''))):
+                key = f"HAS ${iua}"
+                if key in first_emp_costs:
+                    base_columns.append(key)
+
+        if plan_config.get('sedera_enabled') and plan_config.get('sedera_iuas'):
+            for iua in sorted(plan_config['sedera_iuas'], key=lambda x: int(x)):
+                iua_display = iua if int(iua) < 1000 else f"{int(iua)//1000}k" if int(iua) % 1000 == 0 else f"{int(iua)/1000}k"
+                key = f"Sedera ${iua_display}"
+                if key in first_emp_costs:
+                    base_columns.append(key)
+
+        df = pd.DataFrame(all_rows, columns=[''] + base_columns)
+        return df
+
+    return pd.DataFrame()
 
 
 # =============================================================================
@@ -3160,7 +3193,7 @@ def render_contribution_input_card():
             'tier_amounts': {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900}
         }
 
-    st.markdown('<p class="card-title">Employer contribution (optional)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="card-title">Employer contribution configurator</p>', unsafe_allow_html=True)
     st.markdown("""
     <p style="font-size: 14px; color: #6b7280; margin-bottom: 16px;">
         Set how employer contribution is calculated for ICHRA plan comparisons
@@ -3990,7 +4023,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     if has_admin_fees:
         admin_fee_cells = ""
         for col in plan_columns:
-            admin_fee_cells += f'<td>{fmt(admin_fee_totals.get(col["key"], 0))}<br><span class="rate-range">${col["admin_fee"]:.2f} PEPM</span></td>'
+            admin_fee_cells += f'<td>{fmt(admin_fee_totals.get(col["key"], 0))}<br><span class="rate-range">${col["admin_fee"]:.2f} × {total_employees} PEPM</span></td>'
         admin_fee_row = f'<tr><td>Admin Fee</td><td></td><td></td>{admin_fee_cells}</tr>'
 
     # Build preventive care row (only if enabled)
@@ -4313,9 +4346,9 @@ def render_age_bracket_table(data: DashboardData, db: DatabaseConnection = None,
             return ("", "#6b7280")
         diff = renewal_total - scenario_total
         if diff > 0:
-            return (f"-${diff:,.0f}", "#00a63e")  # Savings (green)
+            return (f"${diff:,.0f}", "#00a63e")  # Savings (green)
         elif diff < 0:
-            return (f"+${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
+            return (f"-${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
         else:
             return ("—", "#6b7280")
 
@@ -4488,9 +4521,9 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
             return ("—", "#6b7280")
         diff = renewal_monthly - metal_monthly
         if diff > 0:
-            return (f"-${diff:,.0f}", "#00a63e")  # Savings (green)
+            return (f"${diff:,.0f}", "#00a63e")  # Savings (green)
         elif diff < 0:
-            return (f"+${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
+            return (f"-${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
         else:
             return ("—", "#6b7280")
 
@@ -4724,6 +4757,61 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
 # EMPLOYEE CARDS
 # =============================================================================
 
+def get_contribution_strategy_description() -> str:
+    """Generate a human-readable description of the current contribution strategy.
+
+    Clarifies that amounts shown are Employer (ER) contributions.
+    Family status tier codes: EE=Single, ES=+Spouse, EC=+Child, F=Family
+    """
+    settings = st.session_state.get('contribution_settings', {})
+    strategy_type = settings.get('strategy_type', 'percentage')
+    exclude_deps = settings.get('exclude_dependent_ichra', False)
+
+    # Map tier codes to readable labels
+    tier_labels = {'EE': 'Single', 'ES': '+Spouse', 'EC': '+Child', 'F': 'Family'}
+
+    # Build base description - prefix with "ER:" to clarify employer contribution
+    if strategy_type == 'percentage':
+        pct = settings.get('default_percentage', 75)
+        desc = f"ER: {pct}% of premium"
+    elif strategy_type == 'flat_amount':
+        flat_amounts = settings.get('flat_amounts', {})
+        # Show non-null amounts with readable tier labels
+        parts = []
+        for tier in ['EE', 'ES', 'EC', 'F']:
+            amt = flat_amounts.get(tier)
+            if amt is not None and amt > 0:
+                label = tier_labels.get(tier, tier)
+                parts.append(f"{label}: ${amt:,.0f}")
+        if parts:
+            desc = f"ER flat amount ({', '.join(parts)})"
+        else:
+            desc = "ER flat amount by tier"
+    elif strategy_type == 'base_age_curve':
+        base_age = settings.get('base_age', 21)
+        base_contrib = settings.get('base_contribution', 400)
+        desc = f"ER: ACA 3:1 curve from ${base_contrib:,.0f} at age {base_age}"
+    elif strategy_type == 'percentage_lcsp':
+        lcsp_pct = settings.get('lcsp_percentage', 75)
+        desc = f"ER: {lcsp_pct}% of LCSP"
+    elif strategy_type == 'fixed_age_tiers':
+        tier_amounts = settings.get('tier_amounts', {})
+        if tier_amounts:
+            min_amt = min(v for v in tier_amounts.values() if v > 0) if any(v > 0 for v in tier_amounts.values()) else 0
+            max_amt = max(tier_amounts.values()) if tier_amounts else 0
+            desc = f"ER: Fixed age tiers (${min_amt:,.0f}-${max_amt:,.0f}/mo)"
+        else:
+            desc = "ER: Fixed age tiers"
+    else:
+        desc = "Default ER contribution"
+
+    # Add dependent exclusion note if applicable
+    if exclude_deps:
+        desc += " • Dependents excluded"
+
+    return desc
+
+
 def render_employee_card(employee):
     # Build family ages string if available
     family_ages_str = ""
@@ -4744,6 +4832,9 @@ def render_employee_card(employee):
         if age_parts:
             family_ages_str = f"<br><span style='font-size: 13px; color: #6b7280;'>{' | '.join(age_parts)}</span>"
 
+    # Get contribution strategy description
+    strategy_desc = get_contribution_strategy_description()
+
     # Card header
     st.markdown(f"""
     <div style="border-bottom: 2px solid #e5e7eb; padding-bottom: 16px; margin-bottom: 16px;">
@@ -4751,7 +4842,8 @@ def render_employee_card(employee):
         <p style="font-size: 14px; color: #4a5565; margin-bottom: 2px;">
             <strong>Age {employee['age']}</strong> | {employee['tier']}{family_ages_str}
         </p>
-        <p style="font-size: 14px; color: #4a5565;">{employee['location']}</p>
+        <p style="font-size: 14px; color: #4a5565; margin-bottom: 2px;">{employee['location']}</p>
+        <p style="font-family: 'Poppins', sans-serif; font-size: 13px; color: #6b7280; margin-bottom: 0;">{strategy_desc}</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -4822,6 +4914,13 @@ def render_employee_card(employee):
         er_val = costs.get(scenario_key, {}).get('employer', 0)
         total_cells.append(f'<td>${ee_val + er_val:,.0f}</td>')
 
+    # Build Annual cells
+    annual_total_cells = ['<td>Annual</td>']
+    for _, _, scenario_key in columns[1:]:
+        ee_val = costs.get(scenario_key, {}).get('employee', 0)
+        er_val = costs.get(scenario_key, {}).get('employer', 0)
+        annual_total_cells.append(f'<td>${(ee_val + er_val) * 12:,.0f}</td>')
+
     # Build complete HTML table as single string (avoids f-string interpolation issues with HTML tags)
     table_html = """
     <style>
@@ -4868,6 +4967,7 @@ def render_employee_card(employee):
             <tr>""" + ''.join(ee_cells) + """</tr>
             <tr>""" + ''.join(er_cells) + """</tr>
             <tr style="border-top: 1px solid #e5e7eb; font-weight: 600;">""" + ''.join(total_cells) + """</tr>
+            <tr style="font-weight: 600; color: #6b7280; font-size: 12px;">""" + ''.join(annual_total_cells) + """</tr>
         </tbody>
     </table>
     """
@@ -4897,39 +4997,35 @@ def render_employee_card(employee):
                     return "--"
                 return f"${val:,.0f}"
 
-            # Helper to format variance with color
-            def fmt_variance(val):
-                if val is None:
-                    return ("--", "#6b7280")
-                elif val > 0:
-                    return (f"+${val:,.0f}", "#dc2626")  # Red for higher cost
-                elif val < 0:
-                    return (f"-${abs(val):,.0f}", "#00a63e")  # Green for savings
-                else:
-                    return ("$0", "#6b7280")
-
-            # Build data for each metal
+            # Build data for each metal (monthly values)
+            # Use costs dict for premium totals - it has the correct ER+EE values matching the main table
+            costs = employee.get('costs', {})
             plan_data = {}
             for metal in ['Bronze', 'Silver', 'Gold']:
                 details = metal_plan_details.get(metal, {})
                 if details:
-                    if use_ee_rate_only:
-                        tier_premium = details.get('ee_rate', 0) or 0
-                    else:
-                        # Use aggregate_family_premium (actual summed rates), fall back to estimated_tier_premium
-                        tier_premium = details.get('aggregate_family_premium', 0) or details.get('estimated_tier_premium', 0) or 0
+                    # Get premium from costs dict (employer + employee = total)
+                    # This matches the "Total" row in the main table above
+                    cost_key = f"ICHRA {metal}"
+                    metal_costs = costs.get(cost_key, {})
+                    family_premium = metal_costs.get('employer', 0) + metal_costs.get('employee', 0)
 
-                    variance_current = (tier_premium - current_total) * 12 if current_total > 0 else None
-                    variance_renewal = (tier_premium - renewal_total) * 12 if renewal_total > 0 else None
+                    monthly_cost = family_premium if family_premium > 0 else None
+                    # Calculate monthly savings (positive = savings, negative = increase)
+                    monthly_savings = (renewal_total - family_premium) if renewal_total > 0 and monthly_cost else None
+                    savings_pct = (monthly_savings / renewal_total * 100) if monthly_savings and renewal_total > 0 else None
 
                     plan_data[metal] = {
                         'plan_name': details.get('plan_name') or 'N/A',
                         'deductible': details.get('deductible'),
                         'moop': details.get('moop'),
-                        'annual_cost': tier_premium * 12 if tier_premium else None,
-                        'variance_current': variance_current,
-                        'variance_renewal': variance_renewal,
+                        'monthly_cost': monthly_cost,
+                        'monthly_savings': monthly_savings,
+                        'savings_pct': savings_pct,
                     }
+
+            # Renewal monthly for comparison
+            renewal_monthly = renewal_total if renewal_total > 0 else None
 
             if plan_data:
                 # Get plan names (allow wrapping)
@@ -4942,13 +5038,21 @@ def render_employee_card(employee):
                 silver = plan_data.get('Silver', {})
                 gold = plan_data.get('Gold', {})
 
-                # Format variance cells
-                bronze_vs_current = fmt_variance(bronze.get('variance_current'))
-                bronze_vs_renewal = fmt_variance(bronze.get('variance_renewal'))
-                silver_vs_current = fmt_variance(silver.get('variance_current'))
-                silver_vs_renewal = fmt_variance(silver.get('variance_renewal'))
-                gold_vs_current = fmt_variance(gold.get('variance_current'))
-                gold_vs_renewal = fmt_variance(gold.get('variance_renewal'))
+                # Format savings values
+                def fmt_savings(val):
+                    if val is None:
+                        return "--"
+                    elif val > 0:
+                        return f"${val:,.0f}"
+                    elif val < 0:
+                        return f"-${abs(val):,.0f}"
+                    else:
+                        return "$0"
+
+                def fmt_pct(val):
+                    if val is None:
+                        return "--"
+                    return f"{abs(val):.0f}%"
 
                 st.markdown(f"""
                 <style>
@@ -4957,6 +5061,7 @@ def render_employee_card(employee):
                         border-collapse: collapse;
                         font-family: 'Poppins', sans-serif;
                         margin-bottom: 8px;
+                        table-layout: fixed;
                     }}
                     .plan-details-table th {{
                         padding: 10px 12px;
@@ -4964,6 +5069,14 @@ def render_employee_card(employee):
                         font-weight: 600;
                         font-size: 13px;
                         border-bottom: 2px solid #e5e7eb;
+                        word-wrap: break-word;
+                        overflow-wrap: break-word;
+                    }}
+                    .plan-details-table th:first-child {{
+                        width: 20%;
+                    }}
+                    .plan-details-table th:not(:first-child) {{
+                        width: 26.67%;
                     }}
                     .plan-details-table td {{
                         padding: 8px 12px;
@@ -4982,7 +5095,7 @@ def render_employee_card(employee):
                     .pd-header-bronze {{ background: #FEF3E2; color: #92400e; }}
                     .pd-header-silver {{ background: #E8F1FD; color: #003d91; }}
                     .pd-header-gold {{ background: #FEF9C3; color: #854d0e; }}
-                    .pd-plan-name {{ font-size: 11px; font-weight: 400; color: #6b7280; margin-top: 4px; line-height: 1.3; }}
+                    .pd-plan-name {{ font-size: 11px; font-weight: 400; color: #6b7280; margin-top: 4px; line-height: 1.3; word-wrap: break-word; overflow-wrap: break-word; }}
                 </style>
 
                 <table class="plan-details-table">
@@ -5017,29 +5130,31 @@ def render_employee_card(employee):
                             <td>{fmt_currency(gold.get('moop'))}</td>
                         </tr>
                         <tr>
-                            <td>Annual Cost</td>
-                            <td>{fmt_currency(bronze.get('annual_cost'))}</td>
-                            <td>{fmt_currency(silver.get('annual_cost'))}</td>
-                            <td>{fmt_currency(gold.get('annual_cost'))}</td>
+                            <td>Monthly premium</td>
+                            <td>{fmt_currency(bronze.get('monthly_cost'))}</td>
+                            <td>{fmt_currency(silver.get('monthly_cost'))}</td>
+                            <td>{fmt_currency(gold.get('monthly_cost'))}</td>
                         </tr>
                         <tr>
-                            <td>vs Current</td>
-                            <td style="color: {bronze_vs_current[1]};">{bronze_vs_current[0]}</td>
-                            <td style="color: {silver_vs_current[1]};">{silver_vs_current[0]}</td>
-                            <td style="color: {gold_vs_current[1]};">{gold_vs_current[0]}</td>
+                            <td colspan="4" style="background: #E8F1FD; text-align: center; font-style: italic; color: #364153; padding: 10px;">vs {fmt_currency(renewal_monthly)}/mo renewal</td>
                         </tr>
                         <tr>
-                            <td>vs Renewal</td>
-                            <td style="color: {bronze_vs_renewal[1]};">{bronze_vs_renewal[0]}</td>
-                            <td style="color: {silver_vs_renewal[1]};">{silver_vs_renewal[0]}</td>
-                            <td style="color: {gold_vs_renewal[1]};">{gold_vs_renewal[0]}</td>
+                            <td>Monthly Savings</td>
+                            <td style="color: #00a63e; font-weight: 600;">{fmt_savings(bronze.get('monthly_savings'))}</td>
+                            <td style="color: #00a63e; font-weight: 600;">{fmt_savings(silver.get('monthly_savings'))}</td>
+                            <td style="color: #00a63e; font-weight: 600;">{fmt_savings(gold.get('monthly_savings'))}</td>
+                        </tr>
+                        <tr>
+                            <td>Savings %</td>
+                            <td style="color: #00a63e; font-weight: 600;">{fmt_pct(bronze.get('savings_pct'))}</td>
+                            <td style="color: #00a63e; font-weight: 600;">{fmt_pct(silver.get('savings_pct'))}</td>
+                            <td style="color: #00a63e; font-weight: 600;">{fmt_pct(gold.get('savings_pct'))}</td>
                         </tr>
                     </tbody>
                 </table>
                 """, unsafe_allow_html=True)
 
-                rate_type = "individual (EE) rate" if use_ee_rate_only else "tier premium"
-                st.caption(f"Lowest cost plan at each metal level. Annual Cost = {rate_type} × 12.")
+                st.caption("Lowest cost plan at each metal level. Monthly premium = total family premium.")
 
                 # Member Rate Breakdown Table
                 # Always show for non-EE employees - rates are always visible
@@ -5178,53 +5293,24 @@ def render_employee_examples(data: DashboardData):
         st.session_state.contribution_settings['show_ichra_metals'] = show_ichra_metals
 
         if st.button("📊 Export to PPT", key="export_employee_examples_pptx"):
-            # Get current contribution settings for recalculating ER/EE split
-            contribution_settings = st.session_state.get('contribution_settings', {})
-            contribution_pct = contribution_settings.get('default_percentage', 65) / 100.0
-            flat_amounts = contribution_settings.get('flat_amounts', {})
-            input_mode = contribution_settings.get('input_mode', 'percentage')
-
             # Transform data for PPTX generator
+            # Use costs directly from employee examples - they are already calculated correctly
+            # by build_employee_example with the current contribution settings and toggles
             pptx_data = []
             for emp in data.employee_examples:
-                family_status = emp.get('family_status', 'EE')
-
-                # Get flat amount for this employee's tier if in flat mode
-                flat_er_amount = None
-                if input_mode == 'flat_amount' and family_status in flat_amounts:
-                    flat_er_amount = flat_amounts.get(family_status)
-
-                # Recalculate costs with current contribution settings
-                original_costs = emp.get('costs', {})
-                recalc_costs = {}
-                for scenario, cost_data in original_costs.items():
-                    if scenario in ['Current', 'Renewal']:
-                        recalc_costs[scenario] = cost_data
-                    else:
-                        total = cost_data.get('employer', 0) + cost_data.get('employee', 0)
-                        if total > 0:
-                            if flat_er_amount is not None and flat_er_amount > 0:
-                                er = min(flat_er_amount, total)
-                                ee = max(0, total - er)
-                            else:
-                                er = total * contribution_pct
-                                ee = total - er
-                            recalc_costs[scenario] = {'employer': round(er, 0), 'employee': round(ee, 0)}
-                        else:
-                            recalc_costs[scenario] = cost_data
+                use_ee_rate = emp.get('use_ee_rate_only', False)
 
                 # Transform metal_plan_details to match PPTX generator format
+                # Use costs dict for premium - it has correct ER+EE matching the main table
+                costs = emp.get('costs', {})
                 metal_details = {}
-                use_ee_rate = emp.get('use_ee_rate_only', False)
                 for metal in ['Bronze', 'Silver', 'Gold']:
                     orig = emp.get('metal_plan_details', {}).get(metal, {})
                     if orig:
-                        # Use ee_rate if use_ee_rate_only, otherwise use aggregate_family_premium
-                        if use_ee_rate:
-                            premium = orig.get('ee_rate', 0) or 0
-                        else:
-                            # Use aggregate_family_premium (actual summed rates), fall back to estimated_tier_premium
-                            premium = orig.get('aggregate_family_premium', 0) or orig.get('estimated_tier_premium', 0) or orig.get('ee_rate', 0) or 0
+                        # Get premium from costs dict (employer + employee = total)
+                        cost_key = f"ICHRA {metal}"
+                        metal_costs = costs.get(cost_key, {})
+                        premium = metal_costs.get('employer', 0) + metal_costs.get('employee', 0)
                         metal_details[metal] = {
                             'plan_name': orig.get('plan_name', '—'),
                             'premium': premium,
@@ -5239,7 +5325,7 @@ def render_employee_examples(data: DashboardData):
                     'location': emp.get('location', ''),
                     'family_ages': emp.get('family_ages', []),
                     'family_status': emp.get('family_status', 'EE'),
-                    'costs': recalc_costs,  # Use recalculated costs
+                    'costs': emp.get('costs', {}),  # Use original costs - already correctly calculated
                     'winner': emp.get('winner', ''),
                     'insight': emp.get('insight', ''),
                     'metal_plan_details': metal_details,
@@ -5247,6 +5333,7 @@ def render_employee_examples(data: DashboardData):
                     'current_total_monthly': emp.get('current_total_monthly', 0),
                     'renewal_total_monthly': emp.get('renewal_total_monthly', 0),
                     'use_ee_rate_only': use_ee_rate,
+                    'contribution_strategy': get_contribution_strategy_description(),
                 })
 
             # Generate PPTX with plan configurator settings for dynamic columns
@@ -5272,7 +5359,10 @@ def render_employee_examples(data: DashboardData):
 
         # CSV Export button
         if st.button("📋 Export to CSV", key="export_employee_examples_csv"):
-            csv_df = generate_employee_examples_csv(data.employee_examples)
+            csv_df = generate_employee_examples_csv(
+                data.employee_examples,
+                plan_config=st.session_state.get('plan_configurator', {})
+            )
             if csv_df is not None and not csv_df.empty:
                 csv_data = csv_df.to_csv(index=False)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

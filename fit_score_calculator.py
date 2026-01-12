@@ -1,5 +1,5 @@
 """
-GLOVE ICHRA Fit Score Calculator
+Glove ICHRA Fit Score Calculator
 
 Calculates a 0-100 score across 6 categories to determine
 how well-suited a company is for ICHRA adoption.
@@ -31,7 +31,7 @@ FIT_SCORE_WEIGHTS = {
 
 
 class FitScoreCalculator:
-    """Calculate GLOVE ICHRA Fit Score from census and analysis data"""
+    """Calculate Glove ICHRA Fit Score from census and analysis data"""
 
     def __init__(
         self,
@@ -405,7 +405,7 @@ def calculate_fit_score(
     db: Optional[DatabaseConnection] = None
 ) -> Tuple[int, Dict[str, int]]:
     """
-    Convenience function to calculate GLOVE ICHRA Fit Score.
+    Convenience function to calculate Glove ICHRA Fit Score.
 
     Args:
         census_df: Employee census DataFrame
@@ -440,7 +440,7 @@ if __name__ == "__main__":
 
     score, categories = calculate_fit_score(sample_census)
 
-    print("GLOVE ICHRA Fit Score Calculator - Test")
+    print("Glove ICHRA Fit Score Calculator - Test")
     print("=" * 50)
     print(f"\nOverall Score: {score}/100")
     print("\nCategory Breakdown:")

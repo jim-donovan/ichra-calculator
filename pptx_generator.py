@@ -1,7 +1,7 @@
 """
 PowerPoint Proposal Generator for ICHRA Calculator
 
-Uses python-pptx to populate a GLOVE template with census data,
+Uses python-pptx to populate a Glove template with census data,
 financial analysis, and Fit Score calculations.
 """
 
@@ -376,7 +376,7 @@ class ProposalData:
 
 
 class ProposalGenerator:
-    """Generate GLOVE ICHRA proposals from PowerPoint template"""
+    """Generate Glove ICHRA proposals from PowerPoint template"""
 
     # Template placeholder patterns for each slide
     # Maps slide index (0-based) to {placeholder_pattern: data_field}
@@ -416,7 +416,7 @@ class ProposalGenerator:
         Initialize with template PowerPoint file.
 
         Args:
-            template_path: Path to GLOVE template .pptx file
+            template_path: Path to Glove template .pptx file
         """
         self.template_path = Path(template_path)
         self.prs: Optional[Presentation] = None

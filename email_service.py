@@ -45,7 +45,7 @@ class EmailConfig:
     sendgrid_api_key: str = ""
     monitoring_email: str = ""
     sender_email: str = "noreply@glovesolutions.com"
-    sender_name: str = "GLOVE Benefits"
+    sender_name: str = "Glove Benefits"
 
     @classmethod
     def from_environment(cls) -> "EmailConfig":
@@ -54,7 +54,7 @@ class EmailConfig:
             sendgrid_api_key=os.getenv("SENDGRID_API_KEY", ""),
             monitoring_email=os.getenv("MONITORING_EMAIL", ""),
             sender_email=os.getenv("SENDER_EMAIL", "noreply@glovesolutions.com"),
-            sender_name=os.getenv("SENDER_NAME", "GLOVE Benefits"),
+            sender_name=os.getenv("SENDER_NAME", "Glove Benefits"),
         )
 
     def validate(self) -> Tuple[bool, str]:
@@ -199,7 +199,7 @@ class EmailService:
         subject = f"ICHRA Proposal for {client_name}"
 
         plain_text = f"""
-GLOVE Benefits - ICHRA Proposal
+Glove Benefits - ICHRA Proposal
 
 Dear {client_name},
 
@@ -210,7 +210,7 @@ This proposal outlines the potential benefits and cost savings of transitioning 
 If you have any questions about this proposal, please don't hesitate to reach out.
 
 Best regards,
-GLOVE Benefits Team
+Glove Benefits Team
 
 ---
 This is an automated message. Please do not reply to this email.
@@ -235,7 +235,7 @@ This is an automated message. Please do not reply to this email.
 <body>
     <div class="container">
         <div class="header">
-            <h1>GLOVE Benefits</h1>
+            <h1>Glove Benefits</h1>
             <p>ICHRA Proposal</p>
         </div>
         <div class="content">
@@ -243,7 +243,7 @@ This is an automated message. Please do not reply to this email.
             <p>Please find attached your <strong>ICHRA (Individual Coverage Health Reimbursement Arrangement) proposal</strong>.</p>
             <p>This proposal outlines the potential benefits and cost savings of transitioning to an ICHRA for your organization.</p>
             <p>If you have any questions about this proposal, please don't hesitate to reach out.</p>
-            <p>Best regards,<br><strong>GLOVE Benefits Team</strong></p>
+            <p>Best regards,<br><strong>Glove Benefits Team</strong></p>
         </div>
         <div class="footer">
             <p>This is an automated message. Please do not reply to this email.</p>
@@ -289,7 +289,7 @@ Error Details:
 Please investigate and manually send the proposal if needed.
 
 ---
-GLOVE Benefits Monitoring System
+Glove Benefits Monitoring System
 """
 
         # Escape user-provided values for HTML context
@@ -334,7 +334,7 @@ GLOVE Benefits Monitoring System
             <p>Please investigate and manually send the proposal if needed.</p>
         </div>
         <div class="footer">
-            <p>GLOVE Benefits Monitoring System</p>
+            <p>Glove Benefits Monitoring System</p>
         </div>
     </div>
 </body>
