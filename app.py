@@ -1,6 +1,6 @@
 """
-ICHRA Plan Calculator - Main Application
-Streamlit app for ICHRA benefits consultants to calculate and compare Individual marketplace plans
+Canopy - Main Application
+Streamlit app for benefits consultants to design and evaluate ICHRA strategies
 """
 
 import sys
@@ -48,6 +48,13 @@ st.set_page_config(
     layout=APP_CONFIG['layout'],
     initial_sidebar_state=APP_CONFIG['initial_sidebar_state']
 )
+
+# Ruttl feedback widget
+import streamlit.components.v1 as components
+components.html("""
+<ruttl-poetry id="atwA7I0ONbXhe3w45XMl"></ruttl-poetry>
+<script src="https://web.ruttl.com/poetry.js"></script>
+""", height=0)
 
 
 def initialize_session_state():
@@ -308,8 +315,8 @@ def show_home_page():
     # Hero section
     st.markdown("""
     <div class="hero-section">
-        <div class="hero-title">ICHRA Plan Calculator</div>
-        <p class="hero-subtitle">Model ICHRA contributions and compare against marketplace plans using 2026 CMS data.</p>
+        <div class="hero-title">Canopy</div>
+        <p class="hero-subtitle">Design and evaluate ICHRA strategies with comprehensive marketplace analysis using 2026 CMS data.</p>
     </div>
     """, unsafe_allow_html=True)
 

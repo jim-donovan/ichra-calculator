@@ -1,5 +1,5 @@
 """
-Email Service for ICHRA Calculator
+Email Service for Canopy
 Handles sending PowerPoint proposals via SendGrid with attachment support.
 
 Features:
@@ -548,7 +548,7 @@ def get_email_service() -> EmailService:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Email Service for ICHRA Calculator")
+    parser = argparse.ArgumentParser(description="Email Service for Canopy")
     parser.add_argument(
         "--test",
         metavar="EMAIL",
@@ -556,7 +556,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    print("Email Service - ICHRA Calculator")
+    print("Email Service - Canopy")
     print("=" * 50)
 
     # Check configuration
@@ -608,7 +608,7 @@ if __name__ == "__main__":
 
         # Create a simple test attachment (small text file as PDF simulation)
         test_content = f"""
-ICHRA Calculator - Email Service Test
+Canopy - Email Service Test
 
 This is a test email sent at: {datetime.now().isoformat()}
 

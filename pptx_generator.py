@@ -1,5 +1,5 @@
 """
-PowerPoint Proposal Generator for ICHRA Calculator
+PowerPoint Proposal Generator for Canopy
 
 Uses python-pptx to populate a Glove template with census data,
 financial analysis, and Fit Score calculations.

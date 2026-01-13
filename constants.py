@@ -325,6 +325,7 @@ NEW_CENSUS_OPTIONAL_COLUMNS = [
     'Monthly Income',  # Optional: Monthly household income for ACA affordability (e.g., $5000 or 5000)
     'Current EE Monthly',  # Optional: Employee's current monthly group plan contribution (e.g., $250 or 250)
     'Current ER Monthly',  # Optional: Employer's current monthly contribution for this employee
+    'Current Plan Name',   # Optional: Plan name for matching to extracted plans (e.g., 'Gold PPO', 'Silver HMO')
     '2026 Premium',    # Optional: Projected 2026 renewal premium for this employee (from rate table)
     'Gap Insurance',   # Optional: Current employer gap insurance monthly cost (added to ER costs)
 ]
@@ -366,8 +367,8 @@ DEPENDENT_CONTRIBUTION_STRATEGIES = [
 
 # Application configuration
 APP_CONFIG = {
-    'title': 'ICHRA plan calculator',
-    'icon': '📊',
+    'title': 'Canopy',
+    'icon': '🌿',
     'layout': 'wide',
     'initial_sidebar_state': 'expanded'
 }
@@ -476,7 +477,7 @@ COLOR_SCHEME = {
 PPTX_TEMPLATE_DIR = Path(__file__).parent / 'templates'
 PPTX_TEMPLATE_PATH = PPTX_TEMPLATE_DIR / 'glove_template.pptx'
 
-# Glove ICHRA Fit Score category weights (must sum to 100)
+# ICHRA Fit Score category weights (must sum to 100)
 FIT_SCORE_WEIGHTS = {
     'cost_advantage': 25,        # Savings vs current/renewal costs
     'market_readiness': 20,      # Marketplace plan availability

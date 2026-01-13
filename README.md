@@ -1,16 +1,19 @@
-# ICHRA Plan Calculator
+# Canopy
 
-A Streamlit web application for benefits consultants to calculate and compare Individual marketplace plans for ICHRA (Individual Coverage Health Reimbursement Arrangement) implementations.
+A Streamlit web application for benefits consultants to design and evaluate ICHRA (Individual Coverage Health Reimbursement Arrangement) strategies by analyzing individual marketplace coverage options and costs for their clients' workforces.
 
 ## Features
 
-- **Employee Census Management**: Upload CSV with employee/dependent data, automatic ZIP-to-rating-area resolution
-- **AI Contribution Evaluation**: Claude-powered cost comparison analysis
-- **Financial Summary**: Multi-state ICHRA comparison with LCSP calculations and heatmaps
-- **Employer Summary**: Aggregate costs, current vs proposed ICHRA comparison
-- **Individual Analysis**: Per-employee marketplace options and contribution analysis
-- **Professional Exports**: PDF proposals, CSV data exports, PowerPoint presentations
-- **Approved Class Support**: Set different contribution levels by employee class
+- **Census Management**: Upload employee/dependent CSV data with AI-powered column mapping and automatic ZIP-to-rating-area resolution
+- **Plan Extraction**: AI-powered extraction of current group plan rates from benefits PDFs
+- **ICHRA Dashboard**: Multi-metal marketplace comparison with Cooperative Health alternatives
+- **AI Cost Analysis**: Claude-powered contribution evaluation and cost comparison
+- **LCSP Analysis**: Multi-state Lowest Cost Silver Plan calculations with interactive heatmaps
+- **Financial Summaries**: Aggregate employer costs with current vs. proposed ICHRA comparison
+- **Individual Analysis**: Per-employee marketplace options and detailed contribution breakdowns
+- **Professional Exports**: PDF census analysis, CSV data exports, PowerPoint proposals with email delivery
+- **Plan Comparison**: Side-by-side benefit comparison of current group plan vs. marketplace alternatives
+- **Flexible Contributions**: Support for percentage-based, flat dollar, age-banded, and LCSP percentage strategies
 
 ## Data Source
 
@@ -39,50 +42,39 @@ cd ichra-calculator
 ```bash
 pip install -r requirements.txt
 ```
-## Usage Workflow
+## Application Workflow
+
+Canopy follows a 10-page sequential workflow for ICHRA analysis and proposal generation:
 
 ### Page 1: Census Input
+Upload employee census CSV with automatic AI-powered column mapping. The system resolves ZIP codes to rating areas and validates all required data fields. Generates PDF census analysis with demographics, geographic distribution, and plan availability reports.
 
-Upload a CSV file with employee data. Required columns:
-- `Employee Number`, `Last Name`, `First Name`
-- `Home Zip`, `Home State`
-- `Family Status` (EE, ES, EC, or F)
-- `EE DOB`
+**Required:** Employee Number, Name, ZIP/State, Family Status, Date of Birth
+**Optional:** Dependent DOBs, Current EE/ER Monthly Premiums, Monthly Income
 
-Optional columns:
-- `Spouse DOB`, `Dep 2 DOB` through `Dep 6 DOB`
-- `Monthly Income`, `Current EE Monthly`, `Current ER Monthly`
+### Page 2: Plan Extractor (Standalone)
+AI-powered extraction of current group plan rates from benefits PDF documents. Automatically identifies plan tiers, rates, and calculates employee/employer contribution splits. Useful for understanding current plan costs before ICHRA modeling.
 
-### Page 2: Contribution Evaluation
+### Page 3: ICHRA Dashboard
+Interactive broker presentation view showing multi-metal marketplace comparison (Bronze, Silver, Gold) with representative employee examples. Includes Cooperative Health alternatives (Health Access + DPC) and flexible contribution strategy configuration.
 
-AI-powered cost comparison using Claude to analyze current contributions vs marketplace options.
+### Page 4: Contribution Evaluation
+AI-powered cost comparison using Claude to analyze current contributions vs. marketplace options for each employee. Provides intelligent recommendations and cost-saving insights.
 
-### Page 3: Financial Summary
+### Page 5: LCSP Analysis
+Multi-state Lowest Cost Silver Plan calculations with interactive heatmaps showing premium variations by rating area. Critical for IRS affordability safe harbor compliance (9.96% threshold for 2026).
 
-Multi-state ICHRA comparison with:
-- LCSP (Lowest Cost Silver Plan) calculations
-- Premium heatmaps by state/rating area
-- Workforce cost projections
+### Page 6: Employer Summary
+Aggregate financial analysis showing total employer costs across workforce. Compares current group plan spending vs. proposed ICHRA costs with detailed savings breakdowns by state and metal level.
 
-### Page 4: Employer Summary
+### Page 7: Individual Analysis
+Per-employee marketplace plan options with detailed contribution analysis. Shows available plans, out-of-pocket projections, and affordability calculations for each family unit.
 
-- Aggregate costs across all employees
-- Current group plan vs proposed ICHRA comparison
-- Savings analysis
+### Page 8: Export Results
+Generate PDF census reports and export detailed CSV data files for further analysis or record-keeping.
 
-### Page 5: Individual Analysis
+### Page 9: Proposal Generator
+Create professional PowerPoint proposals with customizable templates. Includes email delivery via SendGrid with 25MB attachment support. Generates QR codes for shareable proposal links (7-day expiry via Cloudflare R2).
 
-Per-employee breakdown of:
-- Available marketplace plans
-- Contribution allocations
-- Out-of-pocket projections
-
-### Page 6: Export Results
-
-- Generate PDF proposals
-- Download CSV data exports
-
-### Page 7: Proposal Generator
-
-- Generate PowerPoint presentations
-- Customizable proposal templates
+### Page 10: Plan Comparison (Standalone)
+Side-by-side benefit comparison tool for evaluating current employer group plan vs. marketplace alternatives. Upload SBC PDFs for automatic benefit extraction, then filter and compare marketplace plans by metal level, plan type, HSA eligibility, and deductible ranges.
