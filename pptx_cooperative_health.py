@@ -694,7 +694,8 @@ class CooperativeHealthSlideGenerator:
 
             if plan_col.savings_amount != 0:
                 # Dollar amount first - bold (matches UI)
-                self._set_cell_text(cell, self._format_currency(plan_col.savings_amount),
+                # Use absolute value for display - color indicates savings/cost increase
+                self._set_cell_text(cell, self._format_currency(abs(plan_col.savings_amount)),
                                    savings_color, font_size=12, bold=True)
                 # Percentage on second line - smaller (matches UI format)
                 self._add_cell_line(cell, f"({plan_col.savings_pct:.0f}%)",
@@ -798,7 +799,7 @@ class CooperativeHealthSlideGenerator:
         # Add "annually" or savings amount subtitle
         subtitle_box = slide.shapes.add_textbox(hero_left, hero_top + Inches(1.05), hero_width, Inches(0.3))
         subtitle_tf = subtitle_box.text_frame
-        subtitle_tf.paragraphs[0].text = f"({self._format_currency(best_plan.savings_amount)}/year)"
+        subtitle_tf.paragraphs[0].text = f"({self._format_currency(abs(best_plan.savings_amount))}/year)"
         subtitle_tf.paragraphs[0].alignment = PP_ALIGN.CENTER
         subtitle_tf.paragraphs[0].font.name = 'Poppins'
         subtitle_tf.paragraphs[0].font.size = Pt(11)

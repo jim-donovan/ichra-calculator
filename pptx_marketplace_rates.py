@@ -257,7 +257,7 @@ class MarketplaceRatesSlideGenerator:
         if diff > 0:
             return (f"-${diff:,.0f}", COLORS['savings_green'])
         elif diff < 0:
-            return (f"+${abs(diff):,.0f}", COLORS['cost_red'])
+            return (f"${abs(diff):,.0f}", COLORS['cost_red'])  # No sign needed, red color indicates cost increase
         return ("--", COLORS['secondary_text'])
 
     def _calc_savings_pct(self, metal_monthly: float, renewal_monthly: float) -> tuple:

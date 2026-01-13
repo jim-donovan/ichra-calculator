@@ -37,6 +37,13 @@ from constants import (
     TIER_LABELS,
 )
 
+# Ruttl feedback widget
+import streamlit.components.v1 as components
+components.html("""
+<ruttl-poetry id="atwA7I0ONbXhe3w45XMl"></ruttl-poetry>
+<script src="https://web.ruttl.com/poetry.js"></script>
+""", height=0)
+
 # Custom CSS to match Figma design
 st.markdown("""
 <style>
@@ -2370,11 +2377,11 @@ def build_employee_example(employee_row: pd.Series, label: str,
                 for emp_detail in metal_details:
                     if emp_detail.get('employee_id') == emp_id:
                         plan_id = emp_detail.get('lcp_plan_id')
-                        # Calculate aggregate family premium for non-EE statuses
-                        # Always calculate breakdown for display (regardless of toggle)
-                        # The toggle only affects ER/EE split, not rate visibility
+                        # Calculate aggregate family premium and breakdown
                         aggregate_premium = 0
                         breakdown = None
+
+                        # Always calculate breakdown for non-EE families (for display purposes)
                         if family_status in ['ES', 'EC', 'F'] and rating_area and db and plan_id:
                             result = calculate_aggregate_family_premium(
                                 employee_row, plan_id, rating_area, db, dependents_df, return_breakdown=True
@@ -2384,8 +2391,13 @@ def build_employee_example(employee_row: pd.Series, label: str,
                                 breakdown = result
                             else:
                                 aggregate_premium = result
+
+                            # Use EE rate for cost calc if flag is set, otherwise use aggregate
+                            if use_ee_rate_only:
+                                aggregate_premium = emp_detail.get('lcp_ee_rate', 0)
                         else:
-                            aggregate_premium = emp_detail.get('estimated_tier_premium', 0)
+                            # EE-only or missing required data
+                            aggregate_premium = emp_detail.get('estimated_tier_premium', 0) or emp_detail.get('lcp_ee_rate', 0)
                             # For EE-only, create a basic breakdown
                             if family_status == 'EE':
                                 breakdown = {
@@ -4348,7 +4360,7 @@ def render_age_bracket_table(data: DashboardData, db: DatabaseConnection = None,
         if diff > 0:
             return (f"${diff:,.0f}", "#00a63e")  # Savings (green)
         elif diff < 0:
-            return (f"-${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
+            return (f"${abs(diff):,.0f}", "#dc2626")  # Cost increase (red) - no sign needed, red indicates increase
         else:
             return ("—", "#6b7280")
 
@@ -4523,7 +4535,7 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
         if diff > 0:
             return (f"${diff:,.0f}", "#00a63e")  # Savings (green)
         elif diff < 0:
-            return (f"-${abs(diff):,.0f}", "#dc2626")  # Cost increase (red)
+            return (f"${abs(diff):,.0f}", "#dc2626")  # Cost increase (red) - no sign needed, red indicates increase
         else:
             return ("—", "#6b7280")
 
@@ -4986,8 +4998,9 @@ def render_employee_card(employee):
 
     with st.expander("+ Show Plan Details"):
         metal_plan_details = employee.get('metal_plan_details', {})
-        current_total = employee.get('current_total_monthly', 0)
-        renewal_total = employee.get('renewal_total_monthly', 0)
+        # Convert to float to avoid decimal.Decimal arithmetic errors
+        current_total = float(employee.get('current_total_monthly', 0) or 0)
+        renewal_total = float(employee.get('renewal_total_monthly', 0) or 0)
         use_ee_rate_only = employee.get('use_ee_rate_only', False)
 
         if metal_plan_details:
@@ -5724,7 +5737,7 @@ render_employee_examples(data)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Row 4: Key Messages + Expected Adoption
+# Row 5: Key Messages + Expected Adoption
 col1, col2 = st.columns([2, 1])
 
 with col1:
