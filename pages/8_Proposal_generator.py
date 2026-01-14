@@ -122,7 +122,7 @@ if 'send_email_enabled' not in st.session_state:
 st.markdown("""
 <div class="hero-section">
     <div class="hero-title">📑 Proposal Generator</div>
-    <p class="hero-subtitle">Generate a branded Glove ICHRA proposal PowerPoint presentation</p>
+    <p class="hero-subtitle">Generate a branded ICHRA proposal PowerPoint presentation</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -197,7 +197,7 @@ with col2:
 # SECTION 2: FIT SCORE CALCULATION
 # =============================================================================
 st.markdown("---")
-st.subheader("🎯 Glove ICHRA fit score")
+st.subheader("🎯 ICHRA fit score")
 
 # Calculate Fit Score
 calculator = FitScoreCalculator(
