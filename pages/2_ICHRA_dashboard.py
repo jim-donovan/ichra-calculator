@@ -39,8 +39,6 @@ from constants import (
     TIER_LABELS,
 )
 
-# Ruttl feedback widget injected via Dockerfile (production only)
-
 # Custom CSS to match Figma design
 st.markdown("""
 <style>

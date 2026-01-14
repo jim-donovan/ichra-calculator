@@ -34,10 +34,6 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Inject Ruttl feedback widget into Streamlit's index.html before </body> (no iframe, runs in main document)
-RUN STREAMLIT_INDEX=$(python -c "import streamlit; print(streamlit.__file__.replace('__init__.py', 'static/index.html'))") && \
-    sed -i '/<\/body>/i <ruttl-poetry id="atwA7I0ONbXhe3w45XMl"><\/ruttl-poetry><script src="https:\/\/web.ruttl.com\/poetry.js"><\/script>' "$STREAMLIT_INDEX"
-
 # Install Playwright Chromium browser
 RUN playwright install chromium
 

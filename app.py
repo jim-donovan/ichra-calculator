@@ -49,9 +49,6 @@ st.set_page_config(
     initial_sidebar_state=APP_CONFIG['initial_sidebar_state']
 )
 
-# Ruttl feedback widget injected via Dockerfile into Streamlit's index.html (production only)
-
-
 def initialize_session_state():
     """Initialize session state variables"""
 
