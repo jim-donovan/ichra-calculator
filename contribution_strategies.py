@@ -223,7 +223,20 @@ class ContributionStrategyCalculator:
             # Get LCSP data for reference
             lcsp_data = employee_lcsps.get(emp_id, {})
 
+            # Get employee name (Last Name, First Name format)
+            first_name = str(emp.get('first_name') or emp.get('First Name') or '').strip()
+            last_name = str(emp.get('last_name') or emp.get('Last Name') or '').strip()
+            if last_name and first_name:
+                emp_name = f"{last_name}, {first_name}"
+            elif last_name:
+                emp_name = last_name
+            elif first_name:
+                emp_name = first_name
+            else:
+                emp_name = emp_id
+
             employee_contributions[emp_id] = {
+                'name': emp_name,
                 'age': emp_age,
                 'state': state,
                 'family_status': family_status,
@@ -311,7 +324,20 @@ class ContributionStrategyCalculator:
             # Apply family multiplier
             final_amount = base_amount * multipliers.get(family_status, 1.0)
 
+            # Get employee name (Last Name, First Name format)
+            first_name = str(emp.get('first_name') or emp.get('First Name') or '').strip()
+            last_name = str(emp.get('last_name') or emp.get('Last Name') or '').strip()
+            if last_name and first_name:
+                emp_name = f"{last_name}, {first_name}"
+            elif last_name:
+                emp_name = last_name
+            elif first_name:
+                emp_name = first_name
+            else:
+                emp_name = emp_id
+
             employee_contributions[emp_id] = {
+                'name': emp_name,
                 'age': emp_age,
                 'state': state,
                 'family_status': family_status,
@@ -439,7 +465,20 @@ class ContributionStrategyCalculator:
             # Apply family multiplier
             final_amount = base_amount * multipliers.get(family_status, 1.0)
 
+            # Get employee name (Last Name, First Name format)
+            first_name = str(emp.get('first_name') or emp.get('First Name') or '').strip()
+            last_name = str(emp.get('last_name') or emp.get('Last Name') or '').strip()
+            if last_name and first_name:
+                emp_name = f"{last_name}, {first_name}"
+            elif last_name:
+                emp_name = last_name
+            elif first_name:
+                emp_name = first_name
+            else:
+                emp_name = emp_id
+
             employee_contributions[emp_id] = {
+                'name': emp_name,
                 'age': emp_age,
                 'state': state,
                 'family_status': family_status,

@@ -66,10 +66,6 @@ SLIDE_HEIGHT = Inches(7.5)
 # Banner image path
 BANNER_IMAGE = Path("/Users/jimdonovan/Desktop/GLOVE/PPT_header.png")
 
-# Decorative image paths
-DECORATIVES_DIR = Path(__file__).parent / "decoratives"
-CORNER_IMAGE = DECORATIVES_DIR / "glove-tile-corner.png"
-
 
 @dataclass
 class EmployeeExampleData:
@@ -95,7 +91,6 @@ class EmployeeExampleData:
     current_total_monthly: float = 0.0
     renewal_total_monthly: float = 0.0
     use_ee_rate_only: bool = False
-    contribution_strategy: str = ""  # Description of contribution strategy applied
 
 
 class EmployeeExamplesSlideGenerator:
@@ -150,18 +145,6 @@ class EmployeeExamplesSlideGenerator:
                 top=Inches(0),
                 width=SLIDE_WIDTH,
                 height=Inches(0.25)  # Compact banner height
-            )
-
-    def _add_decorative_corner(self, slide) -> None:
-        """Add decorative corner image to bottom right of slide"""
-        if CORNER_IMAGE.exists():
-            corner_size = Inches(1.5)
-            slide.shapes.add_picture(
-                str(CORNER_IMAGE),
-                left=SLIDE_WIDTH - corner_size,
-                top=SLIDE_HEIGHT - corner_size,
-                width=corner_size,
-                height=corner_size
             )
 
     def _build_family_string(self, family_ages: List[Dict]) -> str:
@@ -240,18 +223,6 @@ class EmployeeExamplesSlideGenerator:
         p.font.size = Pt(12)
         p.font.color.rgb = COLORS['secondary']
 
-        # Contribution strategy description (if provided)
-        if employee.contribution_strategy:
-            strategy_box = slide.shapes.add_textbox(
-                Inches(0.5), Inches(1.0) + banner_offset, Inches(12), Inches(0.25)
-            )
-            strategy_tf = strategy_box.text_frame
-            p = strategy_tf.paragraphs[0]
-            p.text = employee.contribution_strategy
-            p.font.name = 'Poppins'
-            p.font.size = Pt(11)
-            p.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)  # Gray color matching UI
-
         # --- COST COMPARISON TABLE ---
         # Build dynamic column list based on plan_config
 
@@ -303,11 +274,11 @@ class EmployeeExamplesSlideGenerator:
         col_widths = [Inches(label_col_width)] + [Inches(data_col_width)] * (num_cols - 1)
         table_width = max_table_width
 
-        # Create table (5 rows: header, employee, employer, total, annual)
+        # Create table (4 rows: header, employee, employer, total)
         table = slide.shapes.add_table(
-            rows=5, cols=num_cols,
+            rows=4, cols=num_cols,
             left=table_left, top=table_top,
-            width=Inches(table_width), height=Inches(2.0)
+            width=Inches(table_width), height=Inches(1.8)
         ).table
 
         # Set column widths
@@ -356,21 +327,39 @@ class EmployeeExamplesSlideGenerator:
                 er = costs.get(col_def['scenario'], {}).get('employer', 0)
                 self._set_cell_text(cell, self._format_currency(ee + er), COLORS['black'], font_size=11, bold=True)
 
-        # Row 4: Annual costs
-        for col, col_def in enumerate(columns):
-            cell = table.cell(4, col)
-            self._set_cell_fill(cell, COLORS['white'])
-            if col == 0:
-                self._set_cell_text(cell, "Annual", COLORS['secondary'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
-            else:
-                ee = costs.get(col_def['scenario'], {}).get('employee', 0)
-                er = costs.get(col_def['scenario'], {}).get('employer', 0)
-                self._set_cell_text(cell, self._format_currency((ee + er) * 12), COLORS['secondary'], font_size=10, bold=True)
+        # --- INSIGHT BOX ---
+        insight_top = Inches(3.3) + banner_offset
+        insight_box = slide.shapes.add_shape(
+            1,  # Rectangle
+            Inches(0.5), insight_top,
+            Inches(12.333), Inches(0.6)
+        )
+        insight_box.fill.solid()
+        insight_box.fill.fore_color.rgb = COLORS['insight_bg']
+        insight_box.line.color.rgb = COLORS['insight_border']
+        insight_box.line.width = Pt(1)
+
+        insight_text_box = slide.shapes.add_textbox(
+            Inches(0.7), insight_top + Inches(0.15),
+            Inches(11.9), Inches(0.4)
+        )
+        insight_tf = insight_text_box.text_frame
+        p = insight_tf.paragraphs[0]
+        p.text = f"💡 {employee.insight}"
+        p.font.name = 'Poppins'
+        p.font.size = Pt(12)
+        p.font.color.rgb = COLORS['insight_text']
 
         # --- PLAN DETAILS TABLE ---
+        import logging
+        logger = logging.getLogger(__name__)
+        has_dependents = employee.family_status in ('ES', 'EC', 'F') or bool(employee.family_ages)
+        will_add_qr = self.include_qr_links and bool(employee.member_breakdowns) and has_dependents
+        logger.info(f"Employee {employee.name}: family_status={employee.family_status}, has_dependents={has_dependents}, will_add_qr={will_add_qr}")
+
         if employee.metal_plan_details:
             details_label = slide.shapes.add_textbox(
-                Inches(0.5), Inches(3.5) + banner_offset, Inches(3), Inches(0.3)
+                Inches(0.5), Inches(4.1) + banner_offset, Inches(3), Inches(0.3)
             )
             details_tf = details_label.text_frame
             p = details_tf.paragraphs[0]
@@ -388,26 +377,17 @@ class EmployeeExamplesSlideGenerator:
         )
         footer_tf = footer_box.text_frame
         p = footer_tf.paragraphs[0]
-        timestamp = datetime.now().strftime("%m.%d.%y")
+        timestamp = datetime.now().strftime("%B %d, %Y")
+        footer_text = f"Generated {timestamp}"
         if self.client_name:
-            footer_text = f"Generated for {self.client_name} by Glove Benefits | {timestamp}"
-        else:
-            footer_text = f"Generated by Glove Benefits | {timestamp}"
+            footer_text = f"{self.client_name} | {footer_text}"
         p.text = footer_text
         p.font.name = 'Poppins'
         p.font.size = Pt(9)
         p.font.color.rgb = COLORS['secondary']
 
-        # Add QR code linking to member breakdown page (if enabled, has breakdown data, and has dependents)
-        has_dependents = employee.family_status in ('ES', 'EC', 'F') or bool(employee.family_ages)
-        if self.include_qr_links and employee.member_breakdowns and has_dependents:
-            self._add_qr_code(slide, employee, banner_offset)
-
-        # Add decorative corner to bottom right
-        self._add_decorative_corner(slide)
-
     def _add_plan_details_table(self, slide, employee: EmployeeExampleData, banner_offset=Inches(0)):
-        """Add the plan details comparison table matching UI layout exactly"""
+        """Add the plan details comparison table"""
         details = employee.metal_plan_details
 
         # Extract plan data for each metal
@@ -417,164 +397,98 @@ class EmployeeExamplesSlideGenerator:
         if not available_metals:
             return
 
-        # Table dimensions - fit within slide width
+        # Table dimensions
         table_left = Inches(0.5)
-        table_top = Inches(3.85) + banner_offset
+        table_top = Inches(4.45) + banner_offset
         num_cols = len(available_metals) + 1  # +1 for row labels
+        col_width = Inches(2.5)
+        table_width = col_width * num_cols
 
-        # Calculate widths to fit slide
-        label_col_width = Inches(1.5)
-        data_col_width = Inches(3.0)
-        table_width = label_col_width + (data_col_width * len(available_metals))
-
-        # Rows: Header, Deductible, OOP Max, Monthly premium, vs Renewal banner, Monthly Savings, Savings %
-        num_rows = 7
+        # Rows: Plan, Premium, vs Renewal, Deductible, MOOP
+        num_rows = 6
         table = slide.shapes.add_table(
             rows=num_rows, cols=num_cols,
             left=table_left, top=table_top,
-            width=table_width, height=Inches(2.3)
+            width=table_width, height=Inches(1.8)
         ).table
 
         # Set column widths
-        table.columns[0].width = label_col_width
-        for i in range(1, num_cols):
-            table.columns[i].width = data_col_width
+        for i in range(num_cols):
+            table.columns[i].width = col_width
 
-        # Metal text colors - WHITE background for all headers
-        metal_text_colors = {
-            'Bronze': RGBColor(0xC2, 0x6A, 0x0A),  # Orange/brown for Bronze
-            'Silver': RGBColor(0x1E, 0x40, 0xAF),  # Dark blue for Silver
-            'Gold': RGBColor(0xA1, 0x6B, 0x07),    # Dark gold for Gold
-        }
-
-        renewal_total = employee.renewal_total_monthly
-
-        # Row 0: Headers - WHITE bg, colored metal name, gray plan name
+        # Header row
         header_cell = table.cell(0, 0)
         self._set_cell_fill(header_cell, COLORS['white'])
         self._set_cell_text(header_cell, "", COLORS['black'])
 
+        metal_colors = {
+            'Bronze': (COLORS['bronze_bg'], COLORS['bronze_text']),
+            'Silver': (COLORS['silver_bg'], COLORS['silver_text']),
+            'Gold': (COLORS['gold_bg'], COLORS['gold_text']),
+        }
+
         for col, metal in enumerate(available_metals, 1):
             cell = table.cell(0, col)
-            self._set_cell_fill(cell, COLORS['white'])  # WHITE background
-            plan_name = details.get(metal, {}).get('plan_name', '')
+            bg, text = metal_colors.get(metal, (COLORS['white'], COLORS['black']))
+            self._set_cell_fill(cell, bg)
+            self._set_cell_text(cell, metal, text, font_size=11, bold=True)
 
-            cell.text_frame.word_wrap = True
-            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        # Data rows
+        row_labels = ["Plan Name", "Monthly Premium", "vs Renewal", "Deductible", "Max Out-of-Pocket"]
+        renewal_total = employee.renewal_total_monthly
 
-            # First paragraph: Metal name in metal color
-            p1 = cell.text_frame.paragraphs[0]
-            p1.text = metal
-            p1.font.name = 'Poppins'
-            p1.font.size = Pt(11)
-            p1.font.bold = True
-            p1.font.color.rgb = metal_text_colors.get(metal, COLORS['black'])
-            p1.alignment = PP_ALIGN.CENTER
+        for row_idx, label in enumerate(row_labels, 1):
+            # Row label
+            label_cell = table.cell(row_idx, 0)
+            self._set_cell_fill(label_cell, COLORS['row_label_bg'])
+            self._set_cell_text(label_cell, label, COLORS['row_label_text'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
 
-            # Second paragraph: Plan name in gray
-            if plan_name:
-                p2 = cell.text_frame.add_paragraph()
-                p2.text = plan_name
-                p2.font.name = 'Poppins'
-                p2.font.size = Pt(8)
-                p2.font.bold = False
-                p2.font.color.rgb = COLORS['secondary']  # Gray text
-                p2.alignment = PP_ALIGN.CENTER
+            # Values for each metal
+            for col, metal in enumerate(available_metals, 1):
+                cell = table.cell(row_idx, col)
+                self._set_cell_fill(cell, COLORS['white'])
 
-        # Row 1: Deductible
-        self._set_cell_fill(table.cell(1, 0), COLORS['white'])
-        self._set_cell_text(table.cell(1, 0), "Deductible", COLORS['black'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
-        for col, metal in enumerate(available_metals, 1):
-            cell = table.cell(1, col)
-            self._set_cell_fill(cell, COLORS['white'])
-            ded = details.get(metal, {}).get('deductible')
-            self._set_cell_text(cell, self._format_currency(ded), COLORS['black'], font_size=10)
+                metal_data = details.get(metal, {})
 
-        # Row 2: OOP Max
-        self._set_cell_fill(table.cell(2, 0), COLORS['white'])
-        self._set_cell_text(table.cell(2, 0), "OOP Max", COLORS['black'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
-        for col, metal in enumerate(available_metals, 1):
-            cell = table.cell(2, col)
-            self._set_cell_fill(cell, COLORS['white'])
-            moop = details.get(metal, {}).get('moop')
-            self._set_cell_text(cell, self._format_currency(moop), COLORS['black'], font_size=10)
+                if label == "Plan Name":
+                    plan_name = metal_data.get('plan_name', '—')
+                    # Enable word wrap for long plan names
+                    cell.text_frame.word_wrap = True
+                    self._set_cell_text(cell, plan_name, COLORS['black'], font_size=9)
 
-        # Row 3: Monthly premium
-        self._set_cell_fill(table.cell(3, 0), COLORS['white'])
-        self._set_cell_text(table.cell(3, 0), "Monthly premium", COLORS['black'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
-        for col, metal in enumerate(available_metals, 1):
-            cell = table.cell(3, col)
-            self._set_cell_fill(cell, COLORS['white'])
-            metal_data = details.get(metal, {})
-            premium = metal_data.get('premium') or metal_data.get('aggregate_family_premium') or metal_data.get('estimated_tier_premium') or metal_data.get('ee_rate') or 0
-            self._set_cell_text(cell, self._format_currency(premium), COLORS['black'], font_size=10)
+                elif label == "Monthly Premium":
+                    premium = metal_data.get('premium', 0)
+                    self._set_cell_text(cell, self._format_currency(premium), COLORS['black'], font_size=10)
 
-        # Row 4: Savings header row - merge all cells and center text
-        savings_header_bg = RGBColor(0xF1, 0xF5, 0xF9)  # Light gray-blue
-        savings_header_text = RGBColor(0x4B, 0x55, 0x63)  # Gray text
-        renewal_text = f"vs Renewal ({self._format_currency(renewal_total)}/mo)" if renewal_total else "vs Renewal"
+                elif label == "vs Renewal":
+                    premium = metal_data.get('premium', 0)
+                    if renewal_total and renewal_total > 0:
+                        diff = premium - renewal_total
+                        if diff < 0:
+                            text = f"-${abs(diff):,.0f}"
+                            color = COLORS['savings_green']
+                        elif diff > 0:
+                            text = f"+${diff:,.0f}"
+                            color = COLORS['cost_red']
+                        else:
+                            text = "$0"
+                            color = COLORS['secondary']
+                        self._set_cell_text(cell, text, color, font_size=10, bold=True)
+                    else:
+                        self._set_cell_text(cell, "—", COLORS['secondary'], font_size=10)
 
-        # Merge all cells in row 4
-        first_cell = table.cell(4, 0)
-        last_cell = table.cell(4, num_cols - 1)
-        first_cell.merge(last_cell)
+                elif label == "Deductible":
+                    ded = metal_data.get('deductible')
+                    self._set_cell_text(cell, self._format_currency(ded), COLORS['black'], font_size=10)
 
-        # Style the merged cell
-        self._set_cell_fill(first_cell, savings_header_bg)
-        first_cell.text_frame.paragraphs[0].text = renewal_text
-        first_cell.text_frame.paragraphs[0].font.name = 'Poppins'
-        first_cell.text_frame.paragraphs[0].font.size = Pt(10)
-        first_cell.text_frame.paragraphs[0].font.italic = True
-        first_cell.text_frame.paragraphs[0].font.color.rgb = savings_header_text
-        first_cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
-        first_cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                elif label == "Max Out-of-Pocket":
+                    moop = metal_data.get('moop')
+                    self._set_cell_text(cell, self._format_currency(moop), COLORS['black'], font_size=10)
 
-        # Row 5: Monthly Savings (green values)
-        self._set_cell_fill(table.cell(5, 0), COLORS['white'])
-        self._set_cell_text(table.cell(5, 0), "Monthly Savings", COLORS['black'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
-        for col, metal in enumerate(available_metals, 1):
-            cell = table.cell(5, col)
-            self._set_cell_fill(cell, COLORS['white'])
-            metal_data = details.get(metal, {})
-            premium = metal_data.get('premium') or metal_data.get('aggregate_family_premium') or metal_data.get('estimated_tier_premium') or metal_data.get('ee_rate') or 0
-            if renewal_total and renewal_total > 0:
-                savings = renewal_total - premium
-                if savings > 0:
-                    text = f"${savings:,.0f}"
-                    color = COLORS['savings_green']
-                elif savings < 0:
-                    text = f"-${abs(savings):,.0f}"
-                    color = COLORS['cost_red']
-                else:
-                    text = "$0"
-                    color = COLORS['secondary']
-                self._set_cell_text(cell, text, color, font_size=10, bold=True)
-            else:
-                self._set_cell_text(cell, "—", COLORS['secondary'], font_size=10)
-
-        # Row 6: Savings % (green values)
-        self._set_cell_fill(table.cell(6, 0), COLORS['white'])
-        self._set_cell_text(table.cell(6, 0), "Savings %", COLORS['black'], font_size=10, bold=True, align=PP_ALIGN.LEFT)
-        for col, metal in enumerate(available_metals, 1):
-            cell = table.cell(6, col)
-            self._set_cell_fill(cell, COLORS['white'])
-            metal_data = details.get(metal, {})
-            premium = metal_data.get('premium') or metal_data.get('aggregate_family_premium') or metal_data.get('estimated_tier_premium') or metal_data.get('ee_rate') or 0
-            if renewal_total and renewal_total > 0:
-                savings = renewal_total - premium
-                savings_pct = (savings / renewal_total) * 100
-                if savings_pct > 0:
-                    text = f"{savings_pct:.0f}%"
-                    color = COLORS['savings_green']
-                elif savings_pct < 0:
-                    text = f"{savings_pct:.0f}%"
-                    color = COLORS['cost_red']
-                else:
-                    text = "0%"
-                    color = COLORS['secondary']
-                self._set_cell_text(cell, text, color, font_size=10, bold=True)
-            else:
-                self._set_cell_text(cell, "—", COLORS['secondary'], font_size=10)
+        # Add QR code linking to member breakdown page (if enabled, has breakdown data, and has dependents)
+        has_dependents = employee.family_status in ('ES', 'EC', 'F') or bool(employee.family_ages)
+        if self.include_qr_links and employee.member_breakdowns and has_dependents:
+            self._add_qr_code(slide, employee, banner_offset)
 
     def _add_qr_code(self, slide, employee: EmployeeExampleData, banner_offset=Inches(0)):
         """Add QR code linking to member rate breakdown page."""
@@ -703,7 +617,6 @@ def generate_employee_examples_pptx(
             current_total_monthly=emp.get('current_total_monthly', 0),
             renewal_total_monthly=emp.get('renewal_total_monthly', 0),
             use_ee_rate_only=emp.get('use_ee_rate_only', False),
-            contribution_strategy=emp.get('contribution_strategy', ''),
         ))
 
     generator = EmployeeExamplesSlideGenerator(
