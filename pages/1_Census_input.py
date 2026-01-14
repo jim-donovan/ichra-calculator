@@ -916,16 +916,33 @@ else:
             import csv
             import io
 
-            # Read file content to detect delimiter
+            # Read file content to detect delimiter - try multiple encodings
             logging.info("FILE UPLOAD: Decoding file content...")
-            try:
-                decode_start = time.time()
-                file_content = uploaded_file.getvalue().decode('utf-8')
-                logging.info(f"FILE UPLOAD: Decoded {len(file_content):,} chars in {time.time() - decode_start:.2f}s")
-            except UnicodeDecodeError:
-                logging.error("FILE UPLOAD: UTF-8 decode failed")
-                st.error("❌ File encoding error. Please save the file as UTF-8 encoded CSV.")
+            file_bytes = uploaded_file.getvalue()
+            file_content = None
+            detected_encoding = None
+
+            # Try common encodings in order of likelihood
+            encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+            decode_start = time.time()
+
+            for encoding in encodings_to_try:
+                try:
+                    file_content = file_bytes.decode(encoding)
+                    detected_encoding = encoding
+                    logging.info(f"FILE UPLOAD: Decoded with {encoding} - {len(file_content):,} chars in {time.time() - decode_start:.2f}s")
+                    break
+                except (UnicodeDecodeError, LookupError):
+                    continue
+
+            if file_content is None:
+                logging.error("FILE UPLOAD: All encoding attempts failed")
+                st.error("❌ File encoding error. Could not decode file. Please save as UTF-8 encoded CSV.")
                 st.stop()
+
+            # Show encoding info if not UTF-8
+            if detected_encoding and detected_encoding not in ('utf-8', 'utf-8-sig'):
+                st.info(f"📝 File encoding detected: {detected_encoding} (converted to UTF-8)")
 
             # Use csv.Sniffer to detect delimiter
             try:
