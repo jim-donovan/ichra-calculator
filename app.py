@@ -49,12 +49,7 @@ st.set_page_config(
     initial_sidebar_state=APP_CONFIG['initial_sidebar_state']
 )
 
-# Ruttl feedback widget
-import streamlit.components.v1 as components
-components.html("""
-<ruttl-poetry id="atwA7I0ONbXhe3w45XMl"></ruttl-poetry>
-<script src="https://web.ruttl.com/poetry.js"></script>
-""", height=0)
+# Ruttl feedback widget injected via Dockerfile into Streamlit's index.html (production only)
 
 
 def initialize_session_state():

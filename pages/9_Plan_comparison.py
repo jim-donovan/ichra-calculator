@@ -317,6 +317,12 @@ def init_session_state():
                     generic_rx_coinsurance=plan.generic_rx_coinsurance,
                     preferred_rx_coinsurance=plan.preferred_rx_coinsurance,
                     specialty_rx_coinsurance=plan.specialty_rx_coinsurance,
+                    pcp_after_deductible=plan.pcp_after_deductible,
+                    specialist_after_deductible=plan.specialist_after_deductible,
+                    er_after_deductible=plan.er_after_deductible,
+                    generic_rx_after_deductible=plan.generic_rx_after_deductible,
+                    preferred_rx_after_deductible=plan.preferred_rx_after_deductible,
+                    specialty_rx_after_deductible=plan.specialty_rx_after_deductible,
                 )
                 # Clear premium widget keys so they refresh with new values
                 for key in ['current_premium_input', 'renewal_premium_input']:
@@ -387,9 +393,19 @@ def render_stage_1_current_plan():
                 if not content.strip():
                     st.info("File appears empty. Please re-upload the SBC file.")
                 else:
-                    parsed = parse_sbc_markdown(content)
-                    # Cache parsed data for use after button click
-                    st.session_state.pending_sbc_data = parsed
+                    # Cache parsing result to avoid re-parsing on every widget change
+                    # Use file name + size as cache key to detect new uploads
+                    cache_key = f"{uploaded_sbc.name}_{uploaded_sbc.size}"
+
+                    if 'sbc_parse_cache_key' not in st.session_state or st.session_state.sbc_parse_cache_key != cache_key:
+                        # New file or first parse - call AI
+                        parsed = parse_sbc_markdown(content)
+                        # Cache both the result and the key
+                        st.session_state.pending_sbc_data = parsed
+                        st.session_state.sbc_parse_cache_key = cache_key
+                    else:
+                        # Already parsed this file - use cached result
+                        parsed = st.session_state.pending_sbc_data
 
                     if parsed.get("plan_name"):
                         st.success(f"Extracted: **{parsed['plan_name']}**")
@@ -562,13 +578,16 @@ def render_stage_1_current_plan():
             key="carrier_input"
         )
 
+        # Initialize session state if not set
+        if 'metal_tier_select' not in st.session_state:
+            if plan.metal_tier in ["Bronze", "Silver", "Gold", "Platinum"]:
+                st.session_state['metal_tier_select'] = plan.metal_tier
+            else:
+                st.session_state['metal_tier_select'] = "N/A"
+
         metal_tier = st.selectbox(
             "Metal Tier (if applicable)",
             options=["N/A", "Bronze", "Silver", "Gold", "Platinum"],
-            index=0 if plan.metal_tier is None else (
-                ["N/A", "Bronze", "Silver", "Gold", "Platinum"].index(plan.metal_tier)
-                if plan.metal_tier in ["Bronze", "Silver", "Gold", "Platinum"] else 0
-            ),
             help="Metal tier if known (most group plans don't have one)",
             key="metal_tier_select"
         )
@@ -620,21 +639,28 @@ def render_stage_1_current_plan():
 
     with col1:
         st.markdown("**Individual (Single Coverage)**")
+
+        # Initialize session state if not set
+        if 'individual_deductible_input' not in st.session_state:
+            st.session_state['individual_deductible_input'] = int(plan.individual_deductible)
+
         individual_deductible = st.number_input(
             "Individual Deductible *",
             min_value=0,
             max_value=20000,
-            value=int(plan.individual_deductible),
             step=100,
             help="Annual deductible for single coverage",
             key="individual_deductible_input"
         )
 
+        # Initialize session state if not set
+        if 'individual_oop_max_input' not in st.session_state:
+            st.session_state['individual_oop_max_input'] = int(plan.individual_oop_max)
+
         individual_oop_max = st.number_input(
             "Individual Out-of-Pocket Maximum *",
             min_value=0,
             max_value=20000,
-            value=int(plan.individual_oop_max),
             step=100,
             help="Maximum annual out-of-pocket for single coverage",
             key="individual_oop_max_input"
@@ -642,21 +668,28 @@ def render_stage_1_current_plan():
 
     with col2:
         st.markdown("**Family Coverage**")
+
+        # Initialize session state if not set
+        if 'family_deductible_input' not in st.session_state:
+            st.session_state['family_deductible_input'] = int(plan.family_deductible or 0)
+
         family_deductible = st.number_input(
             "Family Deductible",
             min_value=0,
             max_value=40000,
-            value=int(plan.family_deductible or 0),
             step=100,
             help="Annual deductible for family coverage (leave 0 if N/A)",
             key="family_deductible_input"
         )
 
+        # Initialize session state if not set
+        if 'family_oop_max_input' not in st.session_state:
+            st.session_state['family_oop_max_input'] = int(plan.family_oop_max or 0)
+
         family_oop_max = st.number_input(
             "Family Out-of-Pocket Maximum",
             min_value=0,
             max_value=40000,
-            value=int(plan.family_oop_max or 0),
             step=100,
             help="Maximum annual out-of-pocket for family (leave 0 if N/A)",
             key="family_oop_max_input"
@@ -668,9 +701,9 @@ def render_stage_1_current_plan():
     coinsurance_pct = st.slider(
         "Coinsurance % (Employee pays after deductible)",
         min_value=0,
-        max_value=80,
+        max_value=100,
         step=5,
-        help="After meeting deductible, employee pays this % of costs (e.g., 20% = 80/20 plan)",
+        help="After meeting deductible, employee pays this % of costs (e.g., 20% = 80/20 plan, 100% = no coverage after deductible)",
         key="coinsurance_slider"
     )
 
@@ -715,21 +748,30 @@ def render_stage_1_current_plan():
                 key="pcp_copay_input"
             )
             pcp_coinsurance = None
+            pcp_after_deductible = False
         elif pcp_type == "Ded + Coinsurance":
             pcp_copay = None
             pcp_coinsurance = st.slider(
                 "PCP Coinsurance %",
-                min_value=0, max_value=50,
+                min_value=0, max_value=100,
                 value=int(plan.pcp_coinsurance if plan.pcp_coinsurance is not None else coinsurance_pct),
                 step=5, key="pcp_coins_slider"
+            )
+            pcp_after_deductible = st.checkbox(
+                "After deductible",
+                value=plan.pcp_after_deductible,
+                help="Check if coinsurance applies only after the deductible is met",
+                key="pcp_after_ded_checkbox"
             )
         elif pcp_type == "N/A":
             pcp_copay = -1
             pcp_coinsurance = None
+            pcp_after_deductible = False
             st.info("N/A")
         else:  # Not Covered
             pcp_copay = -2
             pcp_coinsurance = None
+            pcp_after_deductible = False
             st.warning("Not Covered")
 
         # Specialist Copay
@@ -749,21 +791,30 @@ def render_stage_1_current_plan():
                 key="specialist_copay_input"
             )
             specialist_coinsurance = None
+            specialist_after_deductible = False
         elif specialist_type == "Ded + Coinsurance":
             specialist_copay = None
             specialist_coinsurance = st.slider(
                 "Specialist Coinsurance %",
-                min_value=0, max_value=50,
+                min_value=0, max_value=100,
                 value=int(plan.specialist_coinsurance if plan.specialist_coinsurance is not None else coinsurance_pct),
                 step=5, key="specialist_coins_slider"
+            )
+            specialist_after_deductible = st.checkbox(
+                "After deductible",
+                value=plan.specialist_after_deductible,
+                help="Check if coinsurance applies only after the deductible is met",
+                key="specialist_after_ded_checkbox"
             )
         elif specialist_type == "N/A":
             specialist_copay = -1
             specialist_coinsurance = None
+            specialist_after_deductible = False
             st.info("N/A")
         else:  # Not Covered
             specialist_copay = -2
             specialist_coinsurance = None
+            specialist_after_deductible = False
             st.warning("Not Covered")
 
     with col2:
@@ -786,21 +837,30 @@ def render_stage_1_current_plan():
                 key="er_copay_input"
             )
             er_coinsurance = None
+            er_after_deductible = False
         elif er_type == "Ded + Coinsurance":
             er_copay = None
             er_coinsurance = st.slider(
                 "ER Coinsurance %",
-                min_value=0, max_value=50,
+                min_value=0, max_value=100,
                 value=int(plan.er_coinsurance if plan.er_coinsurance is not None else coinsurance_pct),
                 step=5, key="er_coins_slider"
+            )
+            er_after_deductible = st.checkbox(
+                "After deductible",
+                value=plan.er_after_deductible,
+                help="Check if coinsurance applies only after the deductible is met",
+                key="er_after_ded_checkbox"
             )
         elif er_type == "N/A":
             er_copay = -1
             er_coinsurance = None
+            er_after_deductible = False
             st.info("N/A")
         else:  # Not Covered
             er_copay = -2
             er_coinsurance = None
+            er_after_deductible = False
             st.warning("Not Covered")
 
     with col3:
@@ -823,21 +883,30 @@ def render_stage_1_current_plan():
                 key="generic_copay_input"
             )
             generic_rx_coinsurance = None
+            generic_rx_after_deductible = False
         elif generic_type == "Ded + Coinsurance":
             generic_rx_copay = None
             generic_rx_coinsurance = st.slider(
                 "Generic Rx Coinsurance %",
-                min_value=0, max_value=50,
+                min_value=0, max_value=100,
                 value=int(plan.generic_rx_coinsurance if plan.generic_rx_coinsurance is not None else coinsurance_pct),
                 step=5, key="generic_coins_slider"
+            )
+            generic_rx_after_deductible = st.checkbox(
+                "After deductible",
+                value=plan.generic_rx_after_deductible,
+                help="Check if coinsurance applies only after the deductible is met",
+                key="generic_rx_after_ded_checkbox"
             )
         elif generic_type == "N/A":
             generic_rx_copay = -1
             generic_rx_coinsurance = None
+            generic_rx_after_deductible = False
             st.info("N/A")
         else:  # Not Covered
             generic_rx_copay = -2
             generic_rx_coinsurance = None
+            generic_rx_after_deductible = False
             st.warning("Not Covered")
 
         # Preferred Brand Rx Copay
@@ -857,21 +926,30 @@ def render_stage_1_current_plan():
                 key="preferred_copay_input"
             )
             preferred_rx_coinsurance = None
+            preferred_rx_after_deductible = False
         elif preferred_type == "Ded + Coinsurance":
             preferred_rx_copay = None
             preferred_rx_coinsurance = st.slider(
                 "Preferred Rx Coinsurance %",
-                min_value=0, max_value=50,
+                min_value=0, max_value=100,
                 value=int(plan.preferred_rx_coinsurance if plan.preferred_rx_coinsurance is not None else coinsurance_pct),
                 step=5, key="preferred_coins_slider"
+            )
+            preferred_rx_after_deductible = st.checkbox(
+                "After deductible",
+                value=plan.preferred_rx_after_deductible,
+                help="Check if coinsurance applies only after the deductible is met",
+                key="preferred_rx_after_ded_checkbox"
             )
         elif preferred_type == "N/A":
             preferred_rx_copay = -1
             preferred_rx_coinsurance = None
+            preferred_rx_after_deductible = False
             st.info("N/A")
         else:  # Not Covered
             preferred_rx_copay = -2
             preferred_rx_coinsurance = None
+            preferred_rx_after_deductible = False
             st.warning("Not Covered")
 
         # Specialty Rx Copay
@@ -891,21 +969,30 @@ def render_stage_1_current_plan():
                 key="specialty_copay_input"
             )
             specialty_rx_coinsurance = None
+            specialty_rx_after_deductible = False
         elif specialty_type == "Ded + Coinsurance":
             specialty_rx_copay = None
             specialty_rx_coinsurance = st.slider(
                 "Specialty Rx Coinsurance %",
-                min_value=0, max_value=50,
+                min_value=0, max_value=100,
                 value=int(plan.specialty_rx_coinsurance if plan.specialty_rx_coinsurance is not None else coinsurance_pct),
                 step=5, key="specialty_coins_slider"
+            )
+            specialty_rx_after_deductible = st.checkbox(
+                "After deductible",
+                value=plan.specialty_rx_after_deductible,
+                help="Check if coinsurance applies only after the deductible is met",
+                key="specialty_rx_after_ded_checkbox"
             )
         elif specialty_type == "N/A":
             specialty_rx_copay = -1
             specialty_rx_coinsurance = None
+            specialty_rx_after_deductible = False
             st.info("N/A")
         else:  # Not Covered
             specialty_rx_copay = -2
             specialty_rx_coinsurance = None
+            specialty_rx_after_deductible = False
             st.warning("Not Covered")
 
     # Update session state with form values
@@ -936,6 +1023,13 @@ def render_stage_1_current_plan():
         generic_rx_coinsurance=generic_rx_coinsurance,
         preferred_rx_coinsurance=preferred_rx_coinsurance,
         specialty_rx_coinsurance=specialty_rx_coinsurance,
+        # Per-service "after deductible" flags
+        pcp_after_deductible=pcp_after_deductible,
+        specialist_after_deductible=specialist_after_deductible,
+        er_after_deductible=er_after_deductible,
+        generic_rx_after_deductible=generic_rx_after_deductible,
+        preferred_rx_after_deductible=preferred_rx_after_deductible,
+        specialty_rx_after_deductible=specialty_rx_after_deductible,
     )
 
     # Validation and navigation
@@ -1584,22 +1678,29 @@ def render_stage_2_marketplace_selection():
                 col1, col2, col3, col4, col5 = st.columns([0.5, 3, 1.5, 1.5, 1])
 
                 with col1:
-                    # Checkbox for selection (use index in key to avoid duplicates)
+                    # Checkbox for selection
                     is_selected = mp.hios_plan_id in selected
                     can_select = len(selected) < MAX_COMPARISON_PLANS or is_selected
 
-                    if st.checkbox(
+                    # Use only plan ID in key (not index) to maintain state across pagination/filtering
+                    checkbox_key = f"select_plan_{mp.hios_plan_id}"
+
+                    # Initialize checkbox state if not present
+                    if checkbox_key not in st.session_state:
+                        st.session_state[checkbox_key] = is_selected
+
+                    checkbox_value = st.checkbox(
                         f"Select {mp.plan_name}",
-                        value=is_selected,
-                        key=f"select_{actual_idx}_{mp.hios_plan_id}",
+                        key=checkbox_key,
                         disabled=not can_select,
                         label_visibility="collapsed"
-                    ):
-                        if mp.hios_plan_id not in selected:
-                            selected.add(mp.hios_plan_id)
+                    )
+
+                    # Update selected set based on checkbox state
+                    if checkbox_value:
+                        selected.add(mp.hios_plan_id)
                     else:
-                        if mp.hios_plan_id in selected:
-                            selected.discard(mp.hios_plan_id)
+                        selected.discard(mp.hios_plan_id)
 
                 with col2:
                     st.write(f"**{mp.plan_name}**")
@@ -2713,6 +2814,12 @@ def render_stage_3_comparison_table():
             st.session_state.comparison_stage = 1
             st.session_state.selected_comparison_plans = []
             st.session_state.search_results = []
+
+            # Clear all plan selection checkbox states
+            keys_to_remove = [key for key in st.session_state.keys() if key.startswith('select_plan_')]
+            for key in keys_to_remove:
+                del st.session_state[key]
+
             st.rerun()
 
 

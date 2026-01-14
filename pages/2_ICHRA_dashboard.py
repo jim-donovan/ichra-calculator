@@ -6,6 +6,8 @@ Data-driven: All values calculated from census upload
 
 import streamlit as st
 import pandas as pd
+# Opt-in to future pandas behavior for fillna (avoids FutureWarning)
+pd.set_option('future.no_silent_downcasting', True)
 import plotly.express as px
 import plotly.graph_objects as go
 import sys
@@ -37,12 +39,7 @@ from constants import (
     TIER_LABELS,
 )
 
-# Ruttl feedback widget
-import streamlit.components.v1 as components
-components.html("""
-<ruttl-poetry id="atwA7I0ONbXhe3w45XMl"></ruttl-poetry>
-<script src="https://web.ruttl.com/poetry.js"></script>
-""", height=0)
+# Ruttl feedback widget injected via Dockerfile (production only)
 
 # Custom CSS to match Figma design
 st.markdown("""
@@ -2626,7 +2623,7 @@ def build_employee_example(employee_row: pd.Series, label: str,
     # Get plan config or use defaults
     if plan_config is None:
         plan_config = {
-            'hap_enabled': True,
+            'hap_enabled': False,
             'hap_iuas': {'1k', '2.5k'},
             'sedera_enabled': False,
             'sedera_iuas': set(),
@@ -2779,7 +2776,7 @@ def generate_scenario_rates_csv(census_df: pd.DataFrame,
     # Get config or use defaults
     if config is None:
         config = {
-            'hap_enabled': True,
+            'hap_enabled': False,
             'hap_iuas': {'1k', '2.5k'},
             'sedera_enabled': False,
             'sedera_iuas': set(),
@@ -3195,7 +3192,7 @@ def render_contribution_input_card():
             'input_mode': 'percentage',  # Keep for backwards compat
             'flat_amounts': {'EE': None, 'ES': None, 'EC': None, 'F': None},
             'exclude_dependent_ichra': False,  # Toggle: when True, ER only covers employee rate
-            'show_ichra_metals': True,  # Toggle for showing ICHRA metal plans in rate breakdown
+            'show_ichra_metals': False,  # Toggle for showing ICHRA metal plans in rate breakdown
             # Base age curve params
             'base_age': 21,
             'base_contribution': 400.0,
@@ -3558,7 +3555,7 @@ def init_plan_configurator(total_employees: int = 0):
     """Initialize plan configurator session state with defaults."""
     if 'plan_configurator' not in st.session_state:
         st.session_state.plan_configurator = {
-            'hap_enabled': True,
+            'hap_enabled': False,
             'hap_iuas': {'1k', '2.5k'},  # Set of selected IUAs
             'hap_admin_fee': 0.0,
             'sedera_enabled': False,
@@ -5179,7 +5176,7 @@ def render_employee_card(employee):
                     st.markdown("<p style='font-weight: 600; margin-top: 20px; margin-bottom: 8px; color: #101828;'>Member Rate Breakdown</p>",
                                 unsafe_allow_html=True)
 
-                    # Get toggle value for showing ICHRA metal plans
+                    # Get toggle value for showing ICHRA metal plans (default True)
                     show_ichra_metals = st.session_state.get('contribution_settings', {}).get('show_ichra_metals', True)
 
                     # Collect all plan types that have breakdowns
@@ -5298,9 +5295,9 @@ def render_employee_examples(data: DashboardData):
         )
         # Toggle for showing ICHRA metal plans in Member Rate Breakdown
         show_ichra_metals = st.checkbox(
-            "Show ICHRA metals",
-            value=st.session_state.get('contribution_settings', {}).get('show_ichra_metals', True),
-            help="Show Bronze/Silver/Gold rates in Member Rate Breakdown. Disable if you don't sell ICHRA.",
+            "Show Alternative plans",
+            value=st.session_state.get('contribution_settings', {}).get('show_ichra_metals', False),
+            help="Select if you want to show alternative plans",
             key="show_ichra_metals_checkbox"
         )
         st.session_state.contribution_settings['show_ichra_metals'] = show_ichra_metals
@@ -5481,7 +5478,7 @@ def render_expected_adoption(data: DashboardData):
 
     # Export button
     st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("📄 Export proposal to PDF", type="primary", width="stretch"):
+    if st.button("📄 Export proposal to PDF", type="primary", use_container_width=True):
         st.toast("PDF export coming soon!", icon="📄")
 
 
@@ -5621,6 +5618,10 @@ if 'contribution_settings' not in st.session_state:
         'lcsp_percentage': 75,
         'tier_amounts': {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900}
     }
+
+# Ensure show_ichra_metals exists in older sessions (key was added later)
+if 'show_ichra_metals' not in st.session_state.contribution_settings:
+    st.session_state.contribution_settings['show_ichra_metals'] = True
 
 # Sync widget keys with contribution_settings (widgets update their keys on change)
 # This ensures load_dashboard_data gets the latest values from widget interactions
