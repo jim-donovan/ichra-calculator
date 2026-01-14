@@ -352,6 +352,10 @@ def init_session_state():
     if 'comparison_stage' not in st.session_state:
         st.session_state.comparison_stage = 1
 
+    # Comparison mode: "Compare to Current" or "Marketplace Only"
+    if 'comparison_mode' not in st.session_state:
+        st.session_state.comparison_mode = "Compare to Current"
+
     if 'parsed_sbc_data' not in st.session_state:
         st.session_state.parsed_sbc_data = None
 
@@ -1177,10 +1181,13 @@ def pivot_copay_data(copay_df: pd.DataFrame) -> Dict[str, Dict]:
 
 
 def search_marketplace_plans(db: DatabaseConnection, state: str, rating_area_id: int,
-                              filters: ComparisonFilters, current_plan: CurrentEmployerPlan) -> List[Dict]:
+                              filters: ComparisonFilters, current_plan: Optional[CurrentEmployerPlan] = None) -> List[Dict]:
     """
     Search for marketplace plans and calculate match scores.
     Returns list of plan dictionaries with match scores.
+
+    If current_plan is None (Marketplace Only mode), plans are sorted by
+    premium (lowest first) instead of match score.
     """
     try:
         # Get plans with full details (includes deductible and OOPM)
@@ -1319,12 +1326,18 @@ def search_marketplace_plans(db: DatabaseConnection, state: str, rating_area_id:
                 actuarial_value=av_value,
             )
 
-            # Calculate match score
-            score = calculate_match_score(current_plan, mp)
-            mp.match_score = score
+            # Calculate match score (only if current_plan provided)
+            if current_plan is not None:
+                score = calculate_match_score(current_plan, mp)
+                mp.match_score = score
 
-            # Calculate enhanced ranking (includes cost consideration)
-            ranking_score, tier = calculate_enhanced_ranking_score(current_plan, mp, score)
+                # Calculate enhanced ranking (includes cost consideration)
+                ranking_score, tier = calculate_enhanced_ranking_score(current_plan, mp, score)
+            else:
+                # Marketplace Only mode: no match score, rank by premium
+                score = None
+                ranking_score = None
+                tier = None
 
             results.append({
                 'plan': mp,
@@ -1334,8 +1347,17 @@ def search_marketplace_plans(db: DatabaseConnection, state: str, rating_area_id:
                 'tier': tier,
             })
 
-        # Sort by RANKING score (includes cost consideration), not just match score
-        results.sort(key=lambda x: x['ranking_score'], reverse=True)
+        # Sort results
+        if current_plan is not None:
+            # Sort by RANKING score (includes cost consideration), not just match score
+            results.sort(key=lambda x: x['ranking_score'], reverse=True)
+        else:
+            # Marketplace Only: sort by premium (lowest first), then AV (highest first)
+            def sort_key(x):
+                premium = x['plan'].age_21_premium or float('inf')
+                av = x['plan'].actuarial_value or 0
+                return (premium, -av)
+            results.sort(key=sort_key)
         return results
 
     except Exception as e:
@@ -1347,10 +1369,20 @@ def search_marketplace_plans(db: DatabaseConnection, state: str, rating_area_id:
 
 def render_stage_2_marketplace_selection():
     """Render marketplace plan filtering and selection."""
-    st.markdown('''
+    is_marketplace_only = st.session_state.comparison_mode == "Marketplace Only"
+
+    # Adjust header based on mode
+    if is_marketplace_only:
+        stage_title = "Stage 1: Select Marketplace Plans"
+        stage_desc = "Filter and select up to 5 marketplace plans to compare against each other."
+    else:
+        stage_title = "Stage 2: Select Marketplace Plans"
+        stage_desc = "Filter and select up to 5 marketplace plans to compare against your current plan."
+
+    st.markdown(f'''
     <div class="stage-header">
-        <p class="stage-title">Stage 2: Select Marketplace Plans</p>
-        <p class="stage-description">Filter and select up to 5 marketplace plans to compare against your current plan.</p>
+        <p class="stage-title">{stage_title}</p>
+        <p class="stage-description">{stage_desc}</p>
     </div>
     ''', unsafe_allow_html=True)
 
@@ -1358,22 +1390,23 @@ def render_stage_2_marketplace_selection():
     if 'search_results' not in st.session_state:
         st.session_state.search_results = []
 
-    # Show current plan summary
-    plan = st.session_state.current_employer_plan
-    with st.expander("Current Plan Summary", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.write(f"**{plan.plan_name}**")
-            st.write(f"Type: {plan.plan_type}")
-            st.write(f"HSA: {'Yes' if plan.hsa_eligible else 'No'}")
-        with col2:
-            st.write(f"Deductible: ${plan.individual_deductible:,.0f}")
-            st.write(f"OOP Max: ${plan.individual_oop_max:,.0f}")
-            st.write(f"Coinsurance: {plan.coinsurance_pct}%")
-        with col3:
-            st.write(f"PCP Copay: {plan.format_copay(plan.pcp_copay)}")
-            st.write(f"Specialist: {plan.format_copay(plan.specialist_copay)}")
-            st.write(f"Generic Rx: {plan.format_copay(plan.generic_rx_copay)}")
+    # Show current plan summary (only in Compare to Current mode)
+    if not is_marketplace_only:
+        plan = st.session_state.current_employer_plan
+        with st.expander("Current Plan Summary", expanded=False):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write(f"**{plan.plan_name}**")
+                st.write(f"Type: {plan.plan_type}")
+                st.write(f"HSA: {'Yes' if plan.hsa_eligible else 'No'}")
+            with col2:
+                st.write(f"Deductible: ${plan.individual_deductible:,.0f}")
+                st.write(f"OOP Max: ${plan.individual_oop_max:,.0f}")
+                st.write(f"Coinsurance: {plan.coinsurance_pct}%")
+            with col3:
+                st.write(f"PCP Copay: {plan.format_copay(plan.pcp_copay)}")
+                st.write(f"Specialist: {plan.format_copay(plan.specialist_copay)}")
+                st.write(f"Generic Rx: {plan.format_copay(plan.generic_rx_copay)}")
 
     # Location Input
     st.markdown('<p class="section-header">Location</p>', unsafe_allow_html=True)
@@ -1520,12 +1553,14 @@ def render_stage_2_marketplace_selection():
             with st.spinner("Searching for plans..."):
                 db = get_database_connection()
                 if db:
+                    # In Marketplace Only mode, don't pass current plan (sort by premium instead)
+                    current_plan_for_search = None if is_marketplace_only else st.session_state.current_employer_plan
                     results = search_marketplace_plans(
                         db=db,
                         state=state,
                         rating_area_id=rating_area_id,
                         filters=st.session_state.comparison_filters,
-                        current_plan=st.session_state.current_employer_plan
+                        current_plan=current_plan_for_search
                     )
                     st.session_state.search_results = results
                     if results:
@@ -2042,15 +2077,24 @@ def get_cell_bg_color(comparison: str) -> str:
 
 def render_stage_3_comparison_table():
     """Render the side-by-side benefit comparison table."""
-    st.markdown('''
+    is_marketplace_only = st.session_state.comparison_mode == "Marketplace Only"
+
+    # Adjust header based on mode
+    if is_marketplace_only:
+        stage_title = "Stage 2: Benefit Comparison"
+        stage_desc = "Side-by-side comparison of selected marketplace plans. First plan selected is used as baseline."
+    else:
+        stage_title = "Stage 3: Benefit Comparison"
+        stage_desc = "Side-by-side comparison of your current plan with selected marketplace alternatives."
+
+    st.markdown(f'''
     <div class="stage-header">
-        <p class="stage-title">Stage 3: Benefit Comparison</p>
-        <p class="stage-description">Side-by-side comparison of your current plan with selected marketplace alternatives.</p>
+        <p class="stage-title">{stage_title}</p>
+        <p class="stage-description">{stage_desc}</p>
     </div>
     ''', unsafe_allow_html=True)
 
-    # Get current plan and selected marketplace plans
-    current_plan = st.session_state.current_employer_plan
+    # Get selected marketplace plans
     selected_plan_ids = st.session_state.selected_comparison_plans
 
     # Find the selected plans from search results
@@ -2061,11 +2105,49 @@ def render_stage_3_comparison_table():
                 selected_plans.append(result['plan'])
 
     if not selected_plans:
-        st.warning("No plans selected for comparison. Go back to Stage 2 to select plans.")
-        if st.button("Back to Stage 2"):
+        st.warning("No plans selected for comparison. Go back to select plans.")
+        if st.button("Back to Select Plans"):
             st.session_state.comparison_stage = 2
             st.rerun()
         return
+
+    # In Marketplace Only mode, use first selected plan as baseline
+    if is_marketplace_only:
+        if len(selected_plans) < 2:
+            st.warning("Select at least 2 plans to compare in Marketplace Only mode.")
+            if st.button("Back to Select Plans"):
+                st.session_state.comparison_stage = 2
+                st.rerun()
+            return
+
+        baseline_mp = selected_plans[0]  # First plan is baseline
+        comparison_plans = selected_plans[1:]  # Rest are compared against baseline
+
+        # Create a "fake" CurrentEmployerPlan from the baseline marketplace plan
+        current_plan = CurrentEmployerPlan(
+            plan_name=baseline_mp.plan_name,
+            carrier=baseline_mp.issuer_name,
+            plan_type=baseline_mp.plan_type,
+            hsa_eligible=baseline_mp.hsa_eligible,
+            current_premium=baseline_mp.age_21_premium,
+            renewal_premium=baseline_mp.age_21_premium,
+            individual_deductible=baseline_mp.individual_deductible,
+            family_deductible=baseline_mp.family_deductible,
+            individual_oop_max=baseline_mp.individual_oop_max,
+            family_oop_max=baseline_mp.family_oop_max,
+            coinsurance_pct=baseline_mp.coinsurance_pct,
+            pcp_copay=baseline_mp.pcp_copay,
+            specialist_copay=baseline_mp.specialist_copay,
+            er_copay=baseline_mp.er_copay,
+            generic_rx_copay=baseline_mp.generic_rx_copay,
+            preferred_rx_copay=baseline_mp.preferred_rx_copay,
+            specialty_rx_copay=baseline_mp.specialty_rx_copay,
+        )
+        selected_plans = comparison_plans
+        baseline_label = "Baseline"
+    else:
+        current_plan = st.session_state.current_employer_plan
+        baseline_label = "Current plan"
 
     num_plans = len(selected_plans)
     current_coinsurance = current_plan.coinsurance_pct
@@ -2231,12 +2313,12 @@ def render_stage_3_comparison_table():
     # Build header row HTML - use single lines to avoid Streamlit HTML parsing issues
     header_html = '<tr><th></th>'
 
-    # Current plan header - plan name, carrier, "Current plan" note, chip with plan type
-    current_name = current_plan.plan_name or 'Current Plan'
+    # Baseline/Current plan header - plan name, carrier, label, chip with plan type
+    current_name = current_plan.plan_name or ('Baseline Plan' if is_marketplace_only else 'Current Plan')
     current_carrier = current_plan.carrier or ''
-    current_type = current_plan.plan_type or 'Group'
+    current_type = current_plan.plan_type or ('Marketplace' if is_marketplace_only else 'Group')
     carrier_html = f'<div class="plan-issuer">{current_carrier}</div>' if current_carrier else ''
-    header_html += f'<th class="current-plan"><div class="plan-header"><div class="plan-name" style="font-weight: 600; font-size: 14px;">{current_name}</div>{carrier_html}<div class="plan-issuer">Current plan</div><span class="plan-chip" style="background: #374151;">{current_type}</span></div></th>'
+    header_html += f'<th class="current-plan"><div class="plan-header"><div class="plan-name" style="font-weight: 600; font-size: 14px;">{current_name}</div>{carrier_html}<div class="plan-issuer">{baseline_label}</div><span class="plan-chip" style="background: #374151;">{current_type}</span></div></th>'
 
     # Marketplace plan headers - plan name, issuer, plan ID, AV%, chip with metal level + HSA
     for mp in selected_plans:
@@ -2853,23 +2935,68 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Progress indicator
-    stages = ["1. Current Plan", "2. Select Plans", "3. Compare"]
-    current_stage = st.session_state.comparison_stage
-
-    cols = st.columns(3)
-    for i, (col, stage_name) in enumerate(zip(cols, stages), 1):
-        with col:
-            if i < current_stage:
-                st.markdown(f"**{stage_name}**")
-            elif i == current_stage:
-                st.markdown(f"**{stage_name}**")
+    # Comparison mode toggle
+    mode_col1, mode_col2 = st.columns([2, 3])
+    with mode_col1:
+        comparison_mode = st.radio(
+            "Comparison Mode",
+            ["Compare to Current", "Marketplace Only"],
+            horizontal=True,
+            key="comparison_mode_radio",
+            help="Compare to Current: compare marketplace plans against your current employer plan. Marketplace Only: compare marketplace plans against each other."
+        )
+        # Sync to session state
+        if comparison_mode != st.session_state.comparison_mode:
+            st.session_state.comparison_mode = comparison_mode
+            # Reset to appropriate stage when mode changes
+            if comparison_mode == "Marketplace Only":
+                st.session_state.comparison_stage = 2  # Skip Stage 1
             else:
-                st.markdown(f"<span style='color: #9ca3af'>{stage_name}</span>", unsafe_allow_html=True)
+                st.session_state.comparison_stage = 1  # Start at Stage 1
+            st.rerun()
+
+    is_marketplace_only = st.session_state.comparison_mode == "Marketplace Only"
+
+    # Progress indicator - adjust for mode
+    if is_marketplace_only:
+        stages = ["1. Select Plans", "2. Compare"]
+        # Map internal stage numbers to display
+        current_stage = st.session_state.comparison_stage
+        display_stage = current_stage - 1 if current_stage >= 2 else 1  # Stage 2->1, Stage 3->2
+
+        cols = st.columns(2)
+        for i, (col, stage_name) in enumerate(zip(cols, stages), 1):
+            with col:
+                if i < display_stage:
+                    st.markdown(f"**{stage_name}**")
+                elif i == display_stage:
+                    st.markdown(f"**{stage_name}**")
+                else:
+                    st.markdown(f"<span style='color: #9ca3af'>{stage_name}</span>", unsafe_allow_html=True)
+    else:
+        stages = ["1. Current Plan", "2. Select Plans", "3. Compare"]
+        current_stage = st.session_state.comparison_stage
+
+        cols = st.columns(3)
+        for i, (col, stage_name) in enumerate(zip(cols, stages), 1):
+            with col:
+                if i < current_stage:
+                    st.markdown(f"**{stage_name}**")
+                elif i == current_stage:
+                    st.markdown(f"**{stage_name}**")
+                else:
+                    st.markdown(f"<span style='color: #9ca3af'>{stage_name}</span>", unsafe_allow_html=True)
 
     st.markdown("---")
 
     # Render appropriate stage
+    current_stage = st.session_state.comparison_stage
+
+    # In Marketplace Only mode, skip Stage 1
+    if is_marketplace_only and current_stage == 1:
+        st.session_state.comparison_stage = 2
+        current_stage = 2
+
     if current_stage == 1:
         render_stage_1_current_plan()
     elif current_stage == 2:

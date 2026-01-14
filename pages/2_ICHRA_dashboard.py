@@ -4505,8 +4505,7 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
         dependents_df=dependents_df
     )
 
-    # Get plan counts and renewal for comparison
-    plan_counts = tier_costs.get('plan_counts', {'Bronze': 0, 'Silver': 0, 'Gold': 0})
+    # Get totals for comparison
     totals = tier_costs.get('totals', {})
     tiers_data = tier_costs.get('tiers', {})
 
@@ -4631,14 +4630,6 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
             background: #FEF9C3;
             color: #854d0e;
         }}
-        .plans-available-row {{
-            background: #f9fafb;
-        }}
-        .plans-available-row td {{
-            font-size: 14px;
-            color: #6a7282;
-            padding: 8px 16px;
-        }}
     </style>
 
     <table class="marketplace-rates-table">
@@ -4660,12 +4651,6 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
             </tr>
         </thead>
         <tbody>
-            <tr class="plans-available-row">
-                <td style="text-align: left; font-style: italic;">Plans available</td>
-                <td>{plan_counts.get('Bronze', 0):,}</td>
-                <td>{plan_counts.get('Silver', 0):,}</td>
-                <td>{plan_counts.get('Gold', 0):,}</td>
-            </tr>
             {tier_rows}
             <tr class="total-row">
                 <td style="font-weight: 700;">Total Monthly</td>
