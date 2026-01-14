@@ -197,12 +197,27 @@ Drug tiers in SBCs:
 - "Tier 4" or "Non-Preferred" → can note in notes field
 - "Tier 5" or "Specialty" → specialty_rx_copay (often coinsurance)
 
-### Rule 6: Coinsurance vs Copay
+### Rule 6: Coinsurance vs Copay AND "After Deductible" Detection
 - Copay = flat dollar amount ("$40/Visit") → extract as copay
 - Coinsurance = percentage ("20% coinsurance", "20% after deductible") → copay should be null
 
 If a service uses coinsurance instead of copay, set that copay field to null.
 Set coinsurance_pct to the most common coinsurance percentage mentioned (often for hospital/surgery services).
+
+**IMPORTANT: Per-service "After Deductible" Detection:**
+For EACH service that uses coinsurance, check if it applies "after deductible" or immediately:
+- "20% after deductible" → service_after_deductible = true
+- "20% coinsurance after you meet your deductible" → service_after_deductible = true
+- "20% coinsurance" (no mention of deductible) → service_after_deductible = false
+- "Subject to deductible then 20%" → service_after_deductible = true
+
+Extract these flags for each service:
+- pcp_after_deductible (default: false - only true if explicitly stated)
+- specialist_after_deductible (default: false - only true if explicitly stated)
+- er_after_deductible (default: false - only true if explicitly stated)
+- generic_rx_after_deductible (default: false - only true if explicitly stated)
+- preferred_rx_after_deductible (default: false - only true if explicitly stated)
+- specialty_rx_after_deductible (default: false - only true if explicitly stated)
 
 ### Rule 7: Deductibles and OOP Max
 Look for these patterns:
@@ -254,6 +269,12 @@ Example output:
     "generic_rx_copay": 30,
     "preferred_rx_copay": 125,
     "specialty_rx_copay": null,
+    "pcp_after_deductible": false,
+    "specialist_after_deductible": false,
+    "er_after_deductible": false,
+    "generic_rx_after_deductible": false,
+    "preferred_rx_after_deductible": false,
+    "specialty_rx_after_deductible": false,
     "notes": "Multi-tier network (Tier 1/2/3). Specialty Rx is 50% coinsurance up to $1,000/fill. Rx has separate $500 deductible."
 }"""
 
@@ -276,6 +297,12 @@ EXTRACTION_SCHEMA = {
     "generic_rx_copay": "Generic drug copay in dollars, null if coinsurance",
     "preferred_rx_copay": "Preferred brand drug copay in dollars, null if coinsurance",
     "specialty_rx_copay": "Specialty drug copay in dollars, null if coinsurance",
+    "pcp_after_deductible": "true if PCP coinsurance applies after deductible, false if immediate (default: false)",
+    "specialist_after_deductible": "true if specialist coinsurance applies after deductible, false if immediate (default: false)",
+    "er_after_deductible": "true if ER coinsurance applies after deductible, false if immediate (default: false)",
+    "generic_rx_after_deductible": "true if generic Rx coinsurance applies after deductible, false if immediate (default: false)",
+    "preferred_rx_after_deductible": "true if preferred Rx coinsurance applies after deductible, false if immediate (default: false)",
+    "specialty_rx_after_deductible": "true if specialty Rx coinsurance applies after deductible, false if immediate (default: false)",
     "notes": "Important context about plan structure, tier details, separate Rx deductible, etc.",
 }
 
@@ -451,9 +478,21 @@ def _validate_and_clean(result: Dict[str, Any]) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 result[field] = None
 
-    # Ensure boolean field
+    # Ensure boolean fields
     if 'hsa_eligible' in result:
         result['hsa_eligible'] = bool(result.get('hsa_eligible', False))
+
+    # Validate "after deductible" boolean fields (default to False)
+    after_ded_fields = [
+        'pcp_after_deductible', 'specialist_after_deductible', 'er_after_deductible',
+        'generic_rx_after_deductible', 'preferred_rx_after_deductible', 'specialty_rx_after_deductible'
+    ]
+    for field in after_ded_fields:
+        if field in result and result[field] is not None:
+            result[field] = bool(result[field])
+        else:
+            # Default to False (unchecked)
+            result[field] = False
 
     # Validate plan_type
     valid_plan_types = ['HMO', 'PPO', 'EPO', 'POS']
@@ -500,6 +539,12 @@ def _extract_with_regex(content: str) -> Dict[str, Any]:
         "generic_rx_copay": None,
         "preferred_rx_copay": None,
         "specialty_rx_copay": None,
+        "pcp_after_deductible": False,
+        "specialist_after_deductible": False,
+        "er_after_deductible": False,
+        "generic_rx_after_deductible": False,
+        "preferred_rx_after_deductible": False,
+        "specialty_rx_after_deductible": False,
         "notes": "Extracted with regex fallback - verify values manually",
     }
 

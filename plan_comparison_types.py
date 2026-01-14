@@ -53,6 +53,14 @@ class CurrentEmployerPlan:
     preferred_rx_coinsurance: Optional[int] = None
     specialty_rx_coinsurance: Optional[int] = None
 
+    # Per-service "after deductible" flags (True = coinsurance applies after deductible is met)
+    pcp_after_deductible: bool = False
+    specialist_after_deductible: bool = False
+    er_after_deductible: bool = False
+    generic_rx_after_deductible: bool = False
+    preferred_rx_after_deductible: bool = False
+    specialty_rx_after_deductible: bool = False
+
     def get_service_coinsurance(self, service: str) -> int:
         """Get the coinsurance % for a specific service, falling back to default."""
         override_map = {
@@ -78,7 +86,22 @@ class CurrentEmployerPlan:
         """
         if value is None:
             coins = self.get_service_coinsurance(service) if service else (self.coinsurance_pct or 20)
-            return f"Ded + {coins}%"
+
+            # Check if "after deductible" flag is set for this service
+            after_ded_map = {
+                'pcp': self.pcp_after_deductible,
+                'specialist': self.specialist_after_deductible,
+                'er': self.er_after_deductible,
+                'generic_rx': self.generic_rx_after_deductible,
+                'preferred_rx': self.preferred_rx_after_deductible,
+                'specialty_rx': self.specialty_rx_after_deductible,
+            }
+            after_ded = after_ded_map.get(service, False) if service else False
+
+            if after_ded:
+                return f"{coins}% after deductible"
+            else:
+                return f"{coins}%"
         elif value == -1:
             return "N/A"
         elif value == -2:
