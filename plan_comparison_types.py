@@ -83,6 +83,9 @@ class CurrentEmployerPlan:
         Args:
             value: Copay value (None = Ded+Coinsurance, -1 = N/A, -2 = Not Covered)
             service: Optional service name for per-service coinsurance lookup
+
+        Returns:
+            Formatted string. Supports combined "$X + Y%" when copay AND coinsurance are both set.
         """
         if value is None:
             coins = self.get_service_coinsurance(service) if service else (self.coinsurance_pct or 20)
@@ -109,6 +112,19 @@ class CurrentEmployerPlan:
         elif value == 0:
             return "No charge"
         else:
+            # Check if this service has explicit coinsurance set (combined copay + coinsurance)
+            if service:
+                coinsurance_map = {
+                    'pcp': self.pcp_coinsurance,
+                    'specialist': self.specialist_coinsurance,
+                    'er': self.er_coinsurance,
+                    'generic_rx': self.generic_rx_coinsurance,
+                    'preferred_rx': self.preferred_rx_coinsurance,
+                    'specialty_rx': self.specialty_rx_coinsurance,
+                }
+                explicit_coinsurance = coinsurance_map.get(service)
+                if explicit_coinsurance is not None and explicit_coinsurance > 0:
+                    return f"${value:,.0f} + {explicit_coinsurance}%"
             return f"${value:,.0f}"
 
     def is_complete(self) -> bool:

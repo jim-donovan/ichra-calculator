@@ -713,16 +713,19 @@ def render_stage_1_current_plan():
 
     # Helper to render copay input with type toggle
     # Convention: None = Ded + Coinsurance, -1 = N/A, -2 = Not Covered
-    COPAY_TYPES = ["Flat Copay", "Ded + Coinsurance", "N/A", "Not Covered"]
+    # New: copay > 0 AND coinsurance set = Copay + Coinsurance (e.g., "$50 + 100%")
+    COPAY_TYPES = ["Flat Copay", "Copay + Coinsurance", "Ded + Coinsurance", "N/A", "Not Covered"]
 
-    def get_copay_type_index(copay_value):
-        """Determine selectbox index based on copay value."""
+    def get_copay_type_index(copay_value, coinsurance_value=None):
+        """Determine selectbox index based on copay and coinsurance values."""
         if copay_value == -1:
-            return 2  # N/A
+            return 3  # N/A
         elif copay_value == -2:
-            return 3  # Not Covered
+            return 4  # Not Covered
         elif copay_value is None:
-            return 1  # Ded + Coinsurance
+            return 2  # Ded + Coinsurance
+        elif copay_value is not None and copay_value > 0 and coinsurance_value is not None:
+            return 1  # Copay + Coinsurance
         else:
             return 0  # Flat Copay
 
@@ -735,7 +738,7 @@ def render_stage_1_current_plan():
         pcp_type = st.selectbox(
             "PCP Visit",
             options=COPAY_TYPES,
-            index=get_copay_type_index(plan.pcp_copay),
+            index=get_copay_type_index(plan.pcp_copay, plan.pcp_coinsurance),
             key="pcp_type"
         )
         if pcp_type == "Flat Copay":
@@ -748,6 +751,22 @@ def render_stage_1_current_plan():
                 key="pcp_copay_input"
             )
             pcp_coinsurance = None
+            pcp_after_deductible = False
+        elif pcp_type == "Copay + Coinsurance":
+            pcp_copay = st.number_input(
+                "PCP Copay Amount",
+                min_value=0,
+                max_value=500,
+                value=int(plan.pcp_copay) if plan.pcp_copay and plan.pcp_copay > 0 else 0,
+                step=5,
+                key="pcp_copay_combo_input"
+            )
+            pcp_coinsurance = st.slider(
+                "Plus Coinsurance %",
+                min_value=0, max_value=100,
+                value=int(plan.pcp_coinsurance if plan.pcp_coinsurance is not None else coinsurance_pct),
+                step=5, key="pcp_coins_combo_slider"
+            )
             pcp_after_deductible = False
         elif pcp_type == "Ded + Coinsurance":
             pcp_copay = None
@@ -778,7 +797,7 @@ def render_stage_1_current_plan():
         specialist_type = st.selectbox(
             "Specialist Visit",
             options=COPAY_TYPES,
-            index=get_copay_type_index(plan.specialist_copay),
+            index=get_copay_type_index(plan.specialist_copay, plan.specialist_coinsurance),
             key="specialist_type"
         )
         if specialist_type == "Flat Copay":
@@ -791,6 +810,22 @@ def render_stage_1_current_plan():
                 key="specialist_copay_input"
             )
             specialist_coinsurance = None
+            specialist_after_deductible = False
+        elif specialist_type == "Copay + Coinsurance":
+            specialist_copay = st.number_input(
+                "Specialist Copay Amount",
+                min_value=0,
+                max_value=500,
+                value=int(plan.specialist_copay) if plan.specialist_copay and plan.specialist_copay > 0 else 0,
+                step=5,
+                key="specialist_copay_combo_input"
+            )
+            specialist_coinsurance = st.slider(
+                "Plus Coinsurance %",
+                min_value=0, max_value=100,
+                value=int(plan.specialist_coinsurance if plan.specialist_coinsurance is not None else coinsurance_pct),
+                step=5, key="specialist_coins_combo_slider"
+            )
             specialist_after_deductible = False
         elif specialist_type == "Ded + Coinsurance":
             specialist_copay = None
@@ -824,7 +859,7 @@ def render_stage_1_current_plan():
         er_type = st.selectbox(
             "ER Visit",
             options=COPAY_TYPES,
-            index=get_copay_type_index(plan.er_copay),
+            index=get_copay_type_index(plan.er_copay, plan.er_coinsurance),
             key="er_type"
         )
         if er_type == "Flat Copay":
@@ -837,6 +872,22 @@ def render_stage_1_current_plan():
                 key="er_copay_input"
             )
             er_coinsurance = None
+            er_after_deductible = False
+        elif er_type == "Copay + Coinsurance":
+            er_copay = st.number_input(
+                "ER Copay Amount",
+                min_value=0,
+                max_value=1000,
+                value=int(plan.er_copay) if plan.er_copay and plan.er_copay > 0 else 0,
+                step=25,
+                key="er_copay_combo_input"
+            )
+            er_coinsurance = st.slider(
+                "Plus Coinsurance %",
+                min_value=0, max_value=100,
+                value=int(plan.er_coinsurance if plan.er_coinsurance is not None else coinsurance_pct),
+                step=5, key="er_coins_combo_slider"
+            )
             er_after_deductible = False
         elif er_type == "Ded + Coinsurance":
             er_copay = None
@@ -870,7 +921,7 @@ def render_stage_1_current_plan():
         generic_type = st.selectbox(
             "Generic Rx",
             options=COPAY_TYPES,
-            index=get_copay_type_index(plan.generic_rx_copay),
+            index=get_copay_type_index(plan.generic_rx_copay, plan.generic_rx_coinsurance),
             key="generic_type"
         )
         if generic_type == "Flat Copay":
@@ -883,6 +934,22 @@ def render_stage_1_current_plan():
                 key="generic_copay_input"
             )
             generic_rx_coinsurance = None
+            generic_rx_after_deductible = False
+        elif generic_type == "Copay + Coinsurance":
+            generic_rx_copay = st.number_input(
+                "Generic Rx Copay Amount",
+                min_value=0,
+                max_value=200,
+                value=int(plan.generic_rx_copay) if plan.generic_rx_copay and plan.generic_rx_copay > 0 else 0,
+                step=5,
+                key="generic_copay_combo_input"
+            )
+            generic_rx_coinsurance = st.slider(
+                "Plus Coinsurance %",
+                min_value=0, max_value=100,
+                value=int(plan.generic_rx_coinsurance if plan.generic_rx_coinsurance is not None else coinsurance_pct),
+                step=5, key="generic_coins_combo_slider"
+            )
             generic_rx_after_deductible = False
         elif generic_type == "Ded + Coinsurance":
             generic_rx_copay = None
@@ -913,7 +980,7 @@ def render_stage_1_current_plan():
         preferred_type = st.selectbox(
             "Preferred Brand Rx",
             options=COPAY_TYPES,
-            index=get_copay_type_index(plan.preferred_rx_copay),
+            index=get_copay_type_index(plan.preferred_rx_copay, plan.preferred_rx_coinsurance),
             key="preferred_type"
         )
         if preferred_type == "Flat Copay":
@@ -926,6 +993,22 @@ def render_stage_1_current_plan():
                 key="preferred_copay_input"
             )
             preferred_rx_coinsurance = None
+            preferred_rx_after_deductible = False
+        elif preferred_type == "Copay + Coinsurance":
+            preferred_rx_copay = st.number_input(
+                "Preferred Rx Copay Amount",
+                min_value=0,
+                max_value=500,
+                value=int(plan.preferred_rx_copay) if plan.preferred_rx_copay and plan.preferred_rx_copay > 0 else 0,
+                step=5,
+                key="preferred_copay_combo_input"
+            )
+            preferred_rx_coinsurance = st.slider(
+                "Plus Coinsurance %",
+                min_value=0, max_value=100,
+                value=int(plan.preferred_rx_coinsurance if plan.preferred_rx_coinsurance is not None else coinsurance_pct),
+                step=5, key="preferred_coins_combo_slider"
+            )
             preferred_rx_after_deductible = False
         elif preferred_type == "Ded + Coinsurance":
             preferred_rx_copay = None
@@ -956,7 +1039,7 @@ def render_stage_1_current_plan():
         specialty_type = st.selectbox(
             "Specialty Rx",
             options=COPAY_TYPES,
-            index=get_copay_type_index(plan.specialty_rx_copay),
+            index=get_copay_type_index(plan.specialty_rx_copay, plan.specialty_rx_coinsurance),
             key="specialty_type"
         )
         if specialty_type == "Flat Copay":
@@ -969,6 +1052,22 @@ def render_stage_1_current_plan():
                 key="specialty_copay_input"
             )
             specialty_rx_coinsurance = None
+            specialty_rx_after_deductible = False
+        elif specialty_type == "Copay + Coinsurance":
+            specialty_rx_copay = st.number_input(
+                "Specialty Rx Copay Amount",
+                min_value=0,
+                max_value=1000,
+                value=int(plan.specialty_rx_copay) if plan.specialty_rx_copay and plan.specialty_rx_copay > 0 else 0,
+                step=25,
+                key="specialty_copay_combo_input"
+            )
+            specialty_rx_coinsurance = st.slider(
+                "Plus Coinsurance %",
+                min_value=0, max_value=100,
+                value=int(plan.specialty_rx_coinsurance if plan.specialty_rx_coinsurance is not None else coinsurance_pct),
+                step=5, key="specialty_coins_combo_slider"
+            )
             specialty_rx_after_deductible = False
         elif specialty_type == "Ded + Coinsurance":
             specialty_rx_copay = None
@@ -1787,7 +1886,130 @@ def get_coinsurance_for_attr(plan: CurrentEmployerPlan, attr: str) -> int:
     return override if override is not None else plan.coinsurance_pct
 
 
-def format_value(value, attr: str, coinsurance_pct: int = 20) -> str:
+def is_combined_copay_coinsurance(plan: CurrentEmployerPlan, attr: str) -> bool:
+    """Check if this copay field should display combined format ($X + Y%).
+
+    Combined format applies when:
+    - The copay value is > 0 (not None, -1, -2, or 0)
+    - The per-service coinsurance is explicitly set (not None)
+    """
+    if 'copay' not in attr:
+        return False
+
+    # Get copay value
+    copay_value = get_plan_value(plan, attr)
+    if copay_value is None or copay_value <= 0:
+        return False
+
+    # Check if per-service coinsurance is explicitly set
+    coinsurance_map = {
+        'pcp_copay': plan.pcp_coinsurance,
+        'specialist_copay': plan.specialist_coinsurance,
+        'er_copay': plan.er_coinsurance,
+        'generic_rx_copay': plan.generic_rx_coinsurance,
+        'preferred_rx_copay': plan.preferred_rx_coinsurance,
+        'specialty_rx_copay': plan.specialty_rx_coinsurance,
+    }
+    return coinsurance_map.get(attr) is not None
+
+
+def compare_copay_benefit(
+    current_value: Optional[float],
+    current_coinsurance: int,
+    is_combined: bool,
+    mp_value: Optional[float],
+    mp_coinsurance: int,
+    mp_actuarial_value: Optional[float] = None
+) -> str:
+    """Compare copay benefits with awareness of different cost structures.
+
+    Handles comparisons between:
+    - Flat copay vs Ded+Coinsurance
+    - Copay+Coinsurance vs Ded+Coinsurance
+    - Copay+Coinsurance vs Flat copay
+
+    Returns: 'better', 'similar', 'worse'
+
+    Logic:
+    - 100% coinsurance = no coverage after copay/deductible (very bad)
+    - Lower coinsurance % = better coverage
+    - When structures differ, compare effective coverage levels
+    """
+    # Handle sentinel values - N/A or Not Covered
+    if current_value == -1 or current_value == -2:
+        return 'similar'  # Can't compare N/A or Not Covered
+    if mp_value == -1 or mp_value == -2:
+        return 'similar'
+
+    # Both have same structure - use standard numeric comparison
+    if current_value is not None and mp_value is not None:
+        # Both are flat copays (or copay portion of combined)
+        if current_value == mp_value:
+            # If combined format, also compare coinsurance
+            if is_combined:
+                if current_coinsurance > mp_coinsurance:
+                    return 'better'  # MP has lower coinsurance
+                elif current_coinsurance < mp_coinsurance:
+                    return 'worse'
+            return 'better'  # Equal copays = equivalent
+
+        # Standard copay comparison (lower is better)
+        diff_pct = (mp_value - current_value) / current_value * 100 if current_value > 0 else 0
+        if abs(diff_pct) <= 5:
+            return 'similar'
+        return 'better' if diff_pct < 0 else 'worse'
+
+    # Both use Ded+Coinsurance (both values are None)
+    if current_value is None and mp_value is None:
+        # Compare coinsurance percentages
+        if current_coinsurance == mp_coinsurance:
+            return 'better'  # Equivalent
+        elif mp_coinsurance < current_coinsurance:
+            return 'better'  # MP has lower coinsurance
+        else:
+            return 'worse'
+
+    # STRUCTURE MISMATCH: One has copay, other has Ded+Coinsurance
+
+    # Case 1: Current has copay (or copay+coinsurance), MP has Ded+Coinsurance
+    if current_value is not None and current_value > 0 and mp_value is None:
+        if is_combined:
+            # Current: $X + Y% coinsurance vs MP: Ded + Z% coinsurance
+            # Compare coinsurance levels - this is the key coverage indicator
+            if current_coinsurance >= 100:
+                # 100% coinsurance = member pays everything after copay = terrible
+                # Any marketplace plan with <100% coinsurance is better
+                return 'better' if mp_coinsurance < 100 else 'similar'
+            elif current_coinsurance > mp_coinsurance:
+                # MP has lower coinsurance = better coverage
+                return 'better'
+            elif current_coinsurance < mp_coinsurance:
+                # Current has lower coinsurance, but also has copay
+                # This is ambiguous - depends on service cost
+                return 'similar'
+            else:
+                # Same coinsurance, but current also has copay = MP slightly better
+                return 'better'
+        else:
+            # Current: Flat $X copay vs MP: Ded + Y% coinsurance
+            # Hard to compare directly - depends on service cost and deductible status
+            # Use AV as a quality signal if available
+            if mp_actuarial_value and mp_actuarial_value >= 70:
+                # Good AV plan likely provides better coverage overall
+                return 'similar'  # Conservative - don't assume better
+            return 'similar'
+
+    # Case 2: Current has Ded+Coinsurance, MP has copay
+    if current_value is None and mp_value is not None and mp_value > 0:
+        # MP has flat copay, current has coinsurance
+        # Generally flat copays are predictable but coinsurance can be better for low-cost services
+        return 'similar'  # Can't determine without knowing service costs
+
+    # Default fallback
+    return 'similar'
+
+
+def format_value(value, attr: str, coinsurance_pct: int = 20, combined_format: bool = False) -> str:
     """Format a benefit value for display.
 
     Copay conventions:
@@ -1796,6 +2018,7 @@ def format_value(value, attr: str, coinsurance_pct: int = 20) -> str:
     - -2 = Not Covered (service excluded)
     - 0 = No charge
     - >0 = Dollar amount
+    - combined_format=True = Show "$X + Y%" when copay AND coinsurance both apply
     """
     # Handle None for copay fields = "Ded + Coinsurance"
     if value is None:
@@ -1819,6 +2042,9 @@ def format_value(value, attr: str, coinsurance_pct: int = 20) -> str:
     elif 'deductible' in attr or 'oop_max' in attr or 'copay' in attr:
         if value == 0:
             return "No charge"
+        # Handle combined copay + coinsurance format
+        if combined_format and 'copay' in attr and coinsurance_pct > 0:
+            return f"${value:,.0f} + {coinsurance_pct}%"
         return f"${value:,.0f}"
     else:
         return str(value)
@@ -2001,7 +2227,8 @@ def generate_comparison_csv(current_plan: CurrentEmployerPlan,
     # Add benefit comparison rows
     for attr, label, lower_is_better in COMPARISON_BENEFIT_ROWS:
         attr_coinsurance = get_coinsurance_for_attr(current_plan, attr)
-        row = [label, format_value(get_plan_value(current_plan, attr), attr, attr_coinsurance)]
+        is_combined = is_combined_copay_coinsurance(current_plan, attr)
+        row = [label, format_value(get_plan_value(current_plan, attr), attr, attr_coinsurance, is_combined)]
         for mp in selected_plans:
             mp_coinsurance = mp.coinsurance_pct or 20
             row.append(format_value(get_plan_value(mp, attr), attr, mp_coinsurance))
@@ -2613,7 +2840,8 @@ def render_stage_3_comparison_table():
             # Get current plan value
             current_value = get_plan_value(current_plan, attr)
             attr_coinsurance = get_coinsurance_for_attr(current_plan, attr)
-            current_display = format_value(current_value, attr, attr_coinsurance)
+            is_combined = is_combined_copay_coinsurance(current_plan, attr)
+            current_display = format_value(current_value, attr, attr_coinsurance, is_combined)
 
             body_html += '<tr>'
             body_html += f'<td>{label}</td>'
@@ -2626,9 +2854,19 @@ def render_stage_3_comparison_table():
                 mp_display = format_value(mp_value, attr, mp_coinsurance)
 
                 # Determine comparison color
-                if current_value is not None and mp_value is not None:
+                if 'copay' in attr:
+                    # Use structure-aware copay comparison
+                    comparison = compare_copay_benefit(
+                        current_value=current_value,
+                        current_coinsurance=attr_coinsurance,
+                        is_combined=is_combined,
+                        mp_value=mp_value,
+                        mp_coinsurance=mp_coinsurance,
+                        mp_actuarial_value=mp.actuarial_value
+                    )
+                elif current_value is not None and mp_value is not None:
                     if lower_is_better:
-                        # Numeric comparison (deductibles, copays, etc.)
+                        # Numeric comparison (deductibles, OOPM, etc.)
                         comparison = compare_benefit(current_value, mp_value, lower_is_better)
                     else:
                         # Categorical comparison (HSA, Plan Type) - equivalent = green

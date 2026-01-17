@@ -11,6 +11,7 @@ For Railway deployment, see nixpacks.toml for required apt packages.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
 from io import BytesIO
 from pathlib import Path
@@ -59,6 +60,7 @@ class EmployerSummaryData:
     """Data container for employer summary PDF generation."""
 
     client_name: str = ""
+    report_date: str = ""  # Formatted as MM.DD.YY
 
     # Strategy info
     strategy_name: str = ""
@@ -96,7 +98,7 @@ class EmployerSummaryData:
 
     # ICHRA projected at 70% take rate
     ichra_projected_70: float = 0.0
-    savings_ichra_70_vs_renewal: float = 0.0  # Renewal Total - ICHRA 70%
+    savings_ichra_70_vs_renewal: float = 0.0  # Renewal ER - ICHRA 70%
     savings_ichra_70_vs_renewal_pct: float = 0.0
 
     # Affordability metrics
@@ -240,6 +242,7 @@ def build_employer_summary_data(
         EmployerSummaryData instance
     """
     data = EmployerSummaryData(client_name=client_name)
+    data.report_date = datetime.now().strftime("%m.%d.%y")
 
     # Strategy info
     result = strategy_results.get('result', {})
@@ -333,10 +336,10 @@ def build_employer_summary_data(
     # 5. ICHRA projected at 70% take rate
     data.ichra_projected_70 = data.proposed_ichra_annual * 0.70
 
-    # 6. Savings: ICHRA 70% vs Renewal Total
-    data.savings_ichra_70_vs_renewal = data.renewal_total_annual - data.ichra_projected_70
-    if data.renewal_total_annual > 0:
-        data.savings_ichra_70_vs_renewal_pct = (data.savings_ichra_70_vs_renewal / data.renewal_total_annual) * 100
+    # 6. Savings: ICHRA 70% vs Renewal ER (employer-to-employer comparison)
+    data.savings_ichra_70_vs_renewal = data.projected_er_annual - data.ichra_projected_70
+    if data.projected_er_annual > 0:
+        data.savings_ichra_70_vs_renewal_pct = (data.savings_ichra_70_vs_renewal / data.projected_er_annual) * 100
     else:
         data.savings_ichra_70_vs_renewal_pct = 0
 

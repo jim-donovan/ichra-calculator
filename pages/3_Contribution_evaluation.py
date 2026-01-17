@@ -1455,7 +1455,8 @@ st.markdown("### Strategy configuration")
 # Initialize strategy config in session state
 if 'strategy_config' not in st.session_state:
     st.session_state.strategy_config = {
-        'active_strategy': 'base_age_curve',
+        'active_strategy': 'flat_amount',
+        'flat_amount': 400.0,
         'base_age': 21,
         'base_contribution': 200.0,
         'lcsp_percentage': 75,
@@ -1468,6 +1469,7 @@ if 'strategy_config' not in st.session_state:
 
 # Strategy selection with radio buttons (explicit selection tracking)
 STRATEGY_OPTIONS = {
+    'flat_amount': 'Flat amount',
     'base_age_curve': 'Base age + ACA 3:1 curve',
     'percentage_lcsp': 'Percentage of LCSP',
     'fixed_age_tiers': 'Fixed age tiers'
@@ -1486,7 +1488,31 @@ selected_strategy = st.radio(
 st.session_state.strategy_config['active_strategy'] = selected_strategy
 
 # Show configuration for selected strategy only
-if selected_strategy == 'base_age_curve':
+if selected_strategy == 'flat_amount':
+    st.markdown("""
+    All employees receive the same base contribution.
+    Family multipliers can be applied on top.
+    """)
+
+    flat_amount = st.number_input(
+        "Monthly contribution ($/month)",
+        min_value=0.0,
+        max_value=5000.0,
+        value=float(st.session_state.strategy_config.get('flat_amount', 400.0)),
+        step=25.0,
+        key="flat_amount_input"
+    )
+
+    # Save to session state
+    st.session_state.strategy_config['flat_amount'] = flat_amount
+
+    st.info(f"""
+    **${flat_amount:,.0f}/month** for all employees (before family multipliers).
+    If income data is provided, contributions are automatically adjusted upward
+    for employees who need more to meet the 9.96% affordability threshold.
+    """)
+
+elif selected_strategy == 'base_age_curve':
     st.markdown("""
     Set a base contribution at a reference age. The system scales contributions
     using the ACA 3:1 age curve (age 64 = 3x age 21).
@@ -1703,6 +1729,14 @@ if st.button("Calculate contributions", type="primary", key="calc_strategy_btn")
                     apply_location_adjustment=use_location_adj,
                     location_adjustments=location_adjustments
                 )
+            elif strategy_type == "flat_amount":
+                config = StrategyConfig(
+                    strategy_type=StratType.FLAT_AMOUNT,
+                    flat_amount=cfg.get('flat_amount', 400.0),
+                    apply_family_multipliers=use_family_mult,
+                    apply_location_adjustment=use_location_adj,
+                    location_adjustments=location_adjustments
+                )
             else:  # fixed_age_tiers
                 config = StrategyConfig(
                     strategy_type=StratType.FIXED_AGE_TIERS,
@@ -1738,10 +1772,30 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
     st.markdown("---")
 
     # Strategy header with adjustment indicator
+    adjustment_flags = []
     if result.get('affordability_adjusted'):
+        adjustment_flags.append("Affordability")
+    if result.get('employees_ratio_adjusted', 0) > 0:
+        adjustment_flags.append("3:1 Ratio")
+
+    if adjustment_flags:
         buffer_info = f" (+{result.get('buffer_applied', 0)}% buffer)" if result.get('buffer_applied') else ""
-        st.markdown(f"### Strategy results: {result['strategy_name']} ✓ Affordability adjusted{buffer_info}")
-        st.info("Contributions have been adjusted to meet IRS 9.96% affordability threshold for all employees.")
+        flags_str = " & ".join(adjustment_flags)
+        st.markdown(f"### Strategy results: {result['strategy_name']} ✓ {flags_str} adjusted{buffer_info}")
+
+        if result.get('affordability_adjusted'):
+            st.info("Contributions have been adjusted to meet IRS 9.96% affordability threshold for all employees.")
+
+        if result.get('employees_ratio_adjusted', 0) > 0:
+            ratio_count = result['employees_ratio_adjusted']
+            ratio_details = result.get('ratio_adjustment_details', [])
+            if ratio_details:
+                # Get the required floor (all adjusted employees have same new_base)
+                required_floor = ratio_details[0]['new_base']
+                # The max contribution that triggered this is floor * 3
+                max_contrib = required_floor * 3
+                st.warning(f"⚠️ {ratio_count} employee(s) had contributions raised to maintain ICHRA 3:1 age ratio compliance. "
+                          f"Floor raised to ${required_floor:,.2f}/mo (highest contribution ${max_contrib:,.2f} ÷ 3).")
     else:
         st.markdown(f"### Strategy results: {result['strategy_name']}")
 
@@ -2220,6 +2274,16 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                         row['Adjusted'] = 'No'
                         if has_buffer:
                             row['Buffer %'] = ''
+
+                # Add 3:1 ratio adjustment column
+                if data.get('ratio_adjusted'):
+                    row['Ratio Adjusted'] = 'Yes'
+                    row['Ratio From'] = data.get('ratio_adjustment_from', '')
+                    row['Ratio To'] = data.get('ratio_adjustment_to', '')
+                else:
+                    row['Ratio Adjusted'] = 'No'
+                    row['Ratio From'] = ''
+                    row['Ratio To'] = ''
 
                 export_rows.append(row)
 
