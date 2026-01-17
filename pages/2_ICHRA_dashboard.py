@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Any, Union
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database import get_database_connection, DatabaseConnection
-from utils import ContributionComparison, PremiumCalculator
+from utils import ContributionComparison, PremiumCalculator, render_feedback_sidebar
 from financial_calculator import FinancialSummaryCalculator
 from pptx_cooperative_health import CooperativeHealthData, generate_cooperative_health_slide
 from pptx_employee_examples import generate_employee_examples_pptx
@@ -1785,7 +1785,11 @@ def calculate_tier_marketplace_costs(
 
             if ra_col and state_col in census_df.columns:
                 # Get unique state/rating area combinations
+                # Filter out nulls and string representations of nulls
                 state_ra_pairs = census_df[[state_col, ra_col]].dropna().drop_duplicates()
+                state_ra_pairs = state_ra_pairs[
+                    ~state_ra_pairs[ra_col].astype(str).str.lower().isin(['none', 'nan', '', 'null'])
+                ]
 
                 def parse_rating_area(val):
                     """Parse rating area from various formats: int, 'Rating Area 7', '7', etc."""
@@ -1794,9 +1798,15 @@ def calculate_tier_marketplace_costs(
                     if isinstance(val, (int, float)):
                         return int(val)
                     if isinstance(val, str):
+                        # Handle string representations of None/nan
+                        if val.lower() in ('none', 'nan', '', 'null'):
+                            return None
                         if val.startswith('Rating Area '):
                             return int(val.replace('Rating Area ', ''))
-                        return int(val)
+                        try:
+                            return int(val)
+                        except ValueError:
+                            return None
                     return None
 
                 state_rating_areas = [
@@ -1806,7 +1816,9 @@ def calculate_tier_marketplace_costs(
                 ]
                 if state_rating_areas:
                     result['plan_counts'] = PlanQueries.get_plan_counts_by_metal_for_census(db, state_rating_areas)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to get plan counts: {e}")
             pass  # Keep default zeros
 
     if census_df is None or census_df.empty or not multi_metal_results:
@@ -4576,6 +4588,9 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
     silver_monthly = totals.get('Silver', {}).get('monthly', 0)
     gold_monthly = totals.get('Gold', {}).get('monthly', 0)
 
+    # Get plan counts for column headers
+    plan_counts = tier_costs.get('plan_counts', {'Bronze': 0, 'Silver': 0, 'Gold': 0})
+
     # Build tier rows
     tier_order = ['Employee Only', 'Employee + Spouse', 'Employee + Children', 'Family']
     tier_rows = ""
@@ -4664,15 +4679,15 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
                 <th style="text-align: left; background: white;">Coverage Type</th>
                 <th class="col-header-bronze">
                     Bronze<br>
-                    <span style="font-size: 12px; font-weight: 400; color: #b45309;">{data.metal_av.get('Bronze', 60):.0f}% AV</span>
+                    <span style="font-size: 12px; font-weight: 400; color: #b45309;">{data.metal_av.get('Bronze', 60):.0f}% AV · {plan_counts.get('Bronze', 0)} plans</span>
                 </th>
                 <th class="col-header-silver">
                     Silver<br>
-                    <span style="font-size: 12px; font-weight: 400; color: #6b7280;">{data.metal_av.get('Silver', 70):.0f}% AV</span>
+                    <span style="font-size: 12px; font-weight: 400; color: #6b7280;">{data.metal_av.get('Silver', 70):.0f}% AV · {plan_counts.get('Silver', 0)} plans</span>
                 </th>
                 <th class="col-header-gold">
                     Gold<br>
-                    <span style="font-size: 12px; font-weight: 400; color: #a16207;">{data.metal_av.get('Gold', 80):.0f}% AV</span>
+                    <span style="font-size: 12px; font-weight: 400; color: #a16207;">{data.metal_av.get('Gold', 80):.0f}% AV · {plan_counts.get('Gold', 0)} plans</span>
                 </th>
             </tr>
         </thead>
@@ -4738,7 +4753,7 @@ def render_marketplace_rates_table(data: DashboardData, db: DatabaseConnection =
     with footer_col3:
         # PowerPoint export button
         if census_df is not None and not census_df.empty and tier_costs:
-            if st.button("📊 Export PPTX", key="marketplace_rates_pptx", help="Download as PowerPoint slide"):
+            if st.button("📊 Download slide", key="marketplace_rates_pptx", help="Download as PowerPoint slide"):
                 try:
                     from pptx_marketplace_rates import MarketplaceRatesData, generate_marketplace_rates_slide
 
@@ -5284,36 +5299,63 @@ def render_employee_card(employee):
 
 
 def render_employee_examples(data: DashboardData):
-    # Header with export button
-    header_col, export_col = st.columns([4, 1])
-    with header_col:
-        st.markdown("""
-        <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">How this affects your employees</p>
-        <p style="font-size: 16px; color: #4a5565; margin-bottom: 24px;">Three representative examples showing employer vs. employee costs</p>
-        """, unsafe_allow_html=True)
+    # Section header
+    st.markdown("""
+    <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">How this affects your employees</p>
+    <p style="font-size: 16px; color: #4a5565; margin-bottom: 16px;">Configure employer contributions and see representative examples</p>
+    """, unsafe_allow_html=True)
+
+    # Contribution configurator (collapsible)
+    with st.expander("Contribution Configurator", expanded=False):
+        render_contribution_input_card()
 
     if not data.employee_examples:
         st.info("Employee examples will be available after census upload and contribution analysis")
         return
 
-    # Export options
-    with export_col:
+    # Options row: checkboxes and export buttons in a horizontal layout
+    opt_col1, opt_col2, opt_col3, opt_col4 = st.columns([1, 1, 1, 1])
+
+    with opt_col1:
         include_qr_links = st.checkbox(
             "Include QR links",
             value=False,
             help="Add scannable QR codes linking to detailed rate breakdown pages (links expire after 7 days)",
             key="employee_examples_qr_links"
         )
+
+    with opt_col2:
         # Toggle for showing ICHRA metal plans in Member Rate Breakdown
         show_ichra_metals = st.checkbox(
-            "Show Alternative plans",
+            "Show alternative plans",
             value=st.session_state.get('contribution_settings', {}).get('show_ichra_metals', False),
             help="Select if you want to show alternative plans",
             key="show_ichra_metals_checkbox"
         )
         st.session_state.contribution_settings['show_ichra_metals'] = show_ichra_metals
 
-        if st.button("📊 Export to PPT", key="export_employee_examples_pptx"):
+    with opt_col3:
+        # CSV Export button
+        if st.button("📋 Export to CSV", key="export_employee_examples_csv"):
+            csv_df = generate_employee_examples_csv(
+                data.employee_examples,
+                plan_config=st.session_state.get('plan_configurator', {})
+            )
+            if csv_df is not None and not csv_df.empty:
+                csv_data = csv_df.to_csv(index=False)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                client_slug = (data.client_name or 'client').replace(' ', '_').lower()
+                csv_filename = f"{client_slug}_employee_examples_{timestamp}.csv"
+                st.download_button(
+                    label="⬇️ Download CSV",
+                    data=csv_data,
+                    file_name=csv_filename,
+                    mime="text/csv",
+                    key="download_employee_examples_csv"
+                )
+
+    with opt_col4:
+        if st.button("📊 Download slide", key="export_employee_examples_pptx"):
             # Transform data for PPTX generator
             # Use costs directly from employee examples - they are already calculated correctly
             # by build_employee_example with the current contribution settings and toggles
@@ -5371,31 +5413,14 @@ def render_employee_examples(data: DashboardData):
             filename = f"{client_slug}_employee_examples_{timestamp}.pptx"
 
             st.download_button(
-                label="⬇️ Download PPT",
+                label="⬇️ Download slide",
                 data=pptx_buffer,
                 file_name=filename,
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 key="download_employee_examples_pptx"
             )
 
-        # CSV Export button
-        if st.button("📋 Export to CSV", key="export_employee_examples_csv"):
-            csv_df = generate_employee_examples_csv(
-                data.employee_examples,
-                plan_config=st.session_state.get('plan_configurator', {})
-            )
-            if csv_df is not None and not csv_df.empty:
-                csv_data = csv_df.to_csv(index=False)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                client_slug = (data.client_name or 'client').replace(' ', '_').lower()
-                csv_filename = f"{client_slug}_employee_examples_{timestamp}.csv"
-                st.download_button(
-                    label="⬇️ Download CSV",
-                    data=csv_data,
-                    file_name=csv_filename,
-                    mime="text/csv",
-                    key="download_employee_examples_csv"
-                )
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # Each employee example gets its own full-width row
     for employee in data.employee_examples:
@@ -5547,22 +5572,9 @@ if db_health_issues:
                 st.markdown(f"- {issue}")
 
 # =============================================================================
-# SIDEBAR: Client Name & Scenario Settings
+# SIDEBAR: Scenario Settings
 # =============================================================================
 with st.sidebar:
-    # Client name input for export filenames
-    st.markdown("**📋 Client Name**")
-    if 'client_name' not in st.session_state:
-        st.session_state.client_name = ''
-    st.text_input(
-        "Client name",
-        placeholder="Enter client name",
-        key="client_name",
-        help="Used in export filenames and proposal headers",
-        label_visibility="collapsed"
-    )
-    st.markdown("---")
-
     with st.expander("⚙️ Scenario Settings", expanded=False):
         st.markdown("**Adoption Rate Assumptions**")
         st.caption("Estimate how employees will choose their coverage")
@@ -5709,6 +5721,18 @@ if data.diagnostic_errors:
 # Header
 render_header(data)
 
+# Client name input (for export filenames)
+if 'client_name' not in st.session_state:
+    st.session_state.client_name = ''
+client_name_col, _ = st.columns([2, 3])
+with client_name_col:
+    st.text_input(
+        "Client name",
+        placeholder="Enter client name",
+        key="client_name",
+        help="Used in export filenames and proposal headers"
+    )
+
 st.markdown("<br>", unsafe_allow_html=True)
 
 # Row 1: Workforce Composition + Current Plan Problems
@@ -5721,12 +5745,6 @@ with col1:
 with col2:
     with st.container(border=True):
         render_contribution_pattern_card()
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# Row 1.5: Employer Contribution Input (optional)
-with st.container(border=True):
-    render_contribution_input_card()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -5759,3 +5777,6 @@ with col1:
 with col2:
     with st.container(border=True):
         render_expected_adoption(data)
+
+# Feedback button in sidebar
+render_feedback_sidebar()

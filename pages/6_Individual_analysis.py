@@ -10,6 +10,7 @@ import logging
 from database import get_database_connection
 from constants import FAMILY_STATUS_CODES
 from queries import MarketplaceQueries
+from utils import render_feedback_sidebar
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -769,3 +770,6 @@ if '_quick_analysis_result' in st.session_state and st.session_state['_quick_ana
         st.session_state.pop('_quick_analysis_lcsp', None)
         st.session_state.pop('_quick_analysis_equiv', None)
         st.rerun()
+
+# Feedback button in sidebar
+render_feedback_sidebar()

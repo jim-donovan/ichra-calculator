@@ -11,7 +11,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils import DataFormatter, ContributionComparison
+from utils import DataFormatter, ContributionComparison, render_feedback_sidebar
 from database import get_database_connection
 
 
@@ -693,3 +693,6 @@ else:
 st.markdown("---")
 st.success("✅ Summary complete! Ready to **Export results** →")
 st.markdown("Click **4️⃣ Export results** in the sidebar to generate reports and exports")
+
+# Feedback button in sidebar
+render_feedback_sidebar()

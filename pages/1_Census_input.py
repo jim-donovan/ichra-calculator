@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 
 from database import get_database_connection
-from utils import CensusProcessor, ContributionComparison
+from utils import CensusProcessor, ContributionComparison, render_feedback_sidebar
 from constants import FAMILY_STATUS_CODES
 # PDF renderer imported lazily when needed (requires playwright)
 
@@ -64,9 +64,15 @@ def _generate_charts_cached(_emp_hash, _dep_hash):
 
 
 @st.cache_data(show_spinner=False)
-def _get_plan_availability_cached(_ra_hash, _db_available):
-    """Cache plan availability query separately from client_name."""
-    emp_df = st.session_state.get('census_df', pd.DataFrame())
+def _get_plan_availability_cached(ra_hash, _db_available, ra_data_json: str):
+    """Cache plan availability query separately from client_name.
+
+    Note: ra_hash is used as cache key (no underscore prefix).
+    ra_data_json contains the actual rating area data to query.
+    """
+    import json
+    ra_data = json.loads(ra_data_json)
+    emp_df = pd.DataFrame(ra_data)
     db = st.session_state.get('db')
 
     if emp_df is None or emp_df.empty or 'rating_area_id' not in emp_df.columns or db is None:
@@ -116,6 +122,19 @@ def _get_plan_availability_cached(_ra_hash, _db_available):
     return pd.DataFrame()
 
 
+def _get_ra_data_json() -> str:
+    """Get rating area data as JSON for cache key purposes."""
+    import json
+    emp_df = st.session_state.get('census_df', pd.DataFrame())
+    if emp_df is None or emp_df.empty:
+        return "[]"
+    cols = ['state', 'county', 'rating_area_id']
+    available_cols = [c for c in cols if c in emp_df.columns]
+    if not available_cols or 'rating_area_id' not in available_cols:
+        return "[]"
+    return emp_df[available_cols].dropna().to_json(orient='records')
+
+
 def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_name, _db_available, _ra_data_hash, _template_version):
     """Generate PDF. Charts and plan data are cached separately so client_name changes are fast."""
     from pdf_census_renderer import generate_census_analysis_pdf
@@ -128,7 +147,8 @@ def generate_census_pdf_cached(_employees_df_hash, _dependents_df_hash, client_n
     chart_images = _generate_charts_cached(_employees_df_hash, _dependents_df_hash)
 
     # Get cached plan availability (expensive - cached by data hash, NOT client_name)
-    plan_availability_df = _get_plan_availability_cached(_ra_data_hash, _db_available)
+    ra_data_json = _get_ra_data_json()
+    plan_availability_df = _get_plan_availability_cached(_ra_data_hash, _db_available, ra_data_json)
 
     display_name = client_name if client_name else 'Client'
 
@@ -371,9 +391,9 @@ if st.session_state.census_df is not None:
         max_age = int(all_ages.max())
         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
 
-    # PDF Export Section
+    # Export Section
     st.markdown("---")
-    export_col1, export_col2 = st.columns([3, 1])
+    export_col1, export_col2, export_col3 = st.columns([3, 1, 1])
     with export_col1:
         if 'client_name' not in st.session_state:
             st.session_state.client_name = ''
@@ -424,6 +444,27 @@ if st.session_state.census_df is not None:
                 except Exception as e:
                     st.error(f"Error generating PDF: {str(e)}")
                     logging.exception("PDF generation error")
+
+    with export_col3:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        try:
+            from pptx_census_report import generate_census_report_from_session, get_census_report_filename
+            pptx_data = generate_census_report_from_session(st.session_state)
+            client_name = st.session_state.get('client_name', '').strip()
+            filename = get_census_report_filename(client_name)
+            st.download_button(
+                label="📊 Download slide",
+                data=pptx_data,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                type="secondary",
+                use_container_width=True,
+                key="pptx_download_nav"
+            )
+        except Exception as e:
+            if st.button("📊 Download slide", type="secondary", use_container_width=True, key="pptx_error_nav", disabled=True):
+                pass
+            st.caption(f"Error: {str(e)}")
 
     st.markdown("---")
 
@@ -711,7 +752,8 @@ if st.session_state.census_df is not None:
 
         if 'rating_area_id' in employees_df.columns and db_available:
             # Get cached plan availability (no DB query on every keystroke!)
-            plan_availability_df = _get_plan_availability_cached(ra_hash, db_available)
+            ra_data_json = _get_ra_data_json()
+            plan_availability_df = _get_plan_availability_cached(ra_hash, db_available, ra_data_json)
 
             if not plan_availability_df.empty:
                 display_df = plan_availability_df.copy()
@@ -1104,9 +1146,9 @@ else:
                         max_age = int(all_ages.max())
                         st.metric("Age range of covered lives", f"{min_age} - {max_age} yrs")
 
-                    # PDF Export Section
+                    # Export Section
                     st.markdown("### 📄 Export Census Analysis")
-                    export_col1, export_col2 = st.columns([3, 1])
+                    export_col1, export_col2, export_col3 = st.columns([3, 1, 1])
                     with export_col1:
                         # Initialize client_name in session state if not present
                         if 'client_name' not in st.session_state:
@@ -1160,6 +1202,27 @@ else:
                                 except Exception as e:
                                     st.error(f"Error generating PDF: {str(e)}")
                                     logging.exception("PDF generation error")
+
+                    with export_col3:
+                        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                        try:
+                            from pptx_census_report import generate_census_report_from_session, get_census_report_filename
+                            pptx_data = generate_census_report_from_session(st.session_state)
+                            client_name = st.session_state.get('client_name', '').strip()
+                            filename = get_census_report_filename(client_name)
+                            st.download_button(
+                                label="📊 Download slide",
+                                data=pptx_data,
+                                file_name=filename,
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                type="secondary",
+                                use_container_width=True,
+                                key="pptx_download_upload"
+                            )
+                        except Exception as e:
+                            if st.button("📊 Download slide", type="secondary", use_container_width=True, key="pptx_error_upload", disabled=True):
+                                pass
+                            st.caption(f"Error: {str(e)}")
 
                     # Detailed breakdown
                     st.markdown("---")
@@ -1449,7 +1512,8 @@ else:
 
                         if 'rating_area_id' in employees_df.columns and db_available:
                             # Get cached plan availability (no DB query on every keystroke!)
-                            plan_availability_df = _get_plan_availability_cached(ra_hash, db_available)
+                            ra_data_json = _get_ra_data_json()
+                            plan_availability_df = _get_plan_availability_cached(ra_hash, db_available, ra_data_json)
 
                             if not plan_availability_df.empty:
                                 display_df = plan_availability_df.copy()
@@ -1679,4 +1743,11 @@ with st.sidebar:
             st.session_state.dependents_df = None
             st.rerun()
     else:
-        st.warning("No census loaded")
+        st.markdown("""
+        <div style="background: rgba(255,255,255,0.9); padding: 12px 16px; border-radius: 8px; color: #374151; font-size: 14px;">
+            No census loaded
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Feedback button in sidebar
+    render_feedback_sidebar()

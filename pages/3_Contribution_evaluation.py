@@ -27,6 +27,7 @@ except ImportError:
 from database import get_database_connection
 from contribution_strategies import calculate_affordability_impact
 from queries import MarketplaceQueries
+from utils import render_feedback_sidebar
 
 
 def get_anthropic_api_key():
@@ -2954,3 +2955,6 @@ with col2:
     st.markdown("- Compare current vs ICHRA costs for all employees")
 with col3:
     st.markdown("- What's the LCSP for employee 1002?")
+
+# Feedback button in sidebar
+render_feedback_sidebar()

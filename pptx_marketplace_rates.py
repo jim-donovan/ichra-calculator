@@ -63,7 +63,7 @@ CORNER_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-corner.png"
 EDGE_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-edge-h-fade.png"
 
 # Banner image path
-BANNER_IMAGE = Path("/Users/jimdonovan/Desktop/GLOVE/PPT_header.png")
+BANNER_IMAGE = Path(__file__).parent / "decoratives" / "PPT_header.png"
 
 
 @dataclass

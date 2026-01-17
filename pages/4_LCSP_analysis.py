@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 
 from database import get_database_connection
 from financial_calculator import FinancialSummaryCalculator
+from utils import render_feedback_sidebar
 
 # Page config
 st.set_page_config(page_title="LCSP Analysis", page_icon="📊", layout="wide")
@@ -905,3 +906,6 @@ if results and 'total_monthly' in results:
 
 else:
     st.info("LCSP calculation in progress...")
+
+# Feedback button in sidebar
+render_feedback_sidebar()

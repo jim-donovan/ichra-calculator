@@ -18,7 +18,7 @@ from pptx_generator import ProposalData
 from fit_score_calculator import FitScoreCalculator, FIT_SCORE_WEIGHTS
 from database import get_database_connection
 from constants import FAMILY_STATUS_CODES
-from utils import ContributionComparison
+from utils import ContributionComparison, render_feedback_sidebar
 from email_service import EmailService, validate_email, validate_file_size
 
 
@@ -806,3 +806,6 @@ st.info("""
 - **PowerPoint:** Editable after download, but complex graphics may not display correctly
 - **Email Delivery:** Enable email delivery to automatically send the proposal to your client after generation
 """)
+
+# Feedback button in sidebar
+render_feedback_sidebar()

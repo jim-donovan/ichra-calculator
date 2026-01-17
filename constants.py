@@ -338,8 +338,29 @@ FAMILY_STATUS_CODES = {
     'F': 'Family (Employee + Spouse + Children)'
 }
 
-# All census columns (for template generation)
-NEW_CENSUS_ALL_COLUMNS = NEW_CENSUS_REQUIRED_COLUMNS + NEW_CENSUS_OPTIONAL_COLUMNS
+# All census columns (for template generation) - ordered for user convenience
+# Monthly Income in column F for easy data entry
+NEW_CENSUS_ALL_COLUMNS = [
+    'Employee Number',    # A
+    'Last Name',          # B
+    'First Name',         # C
+    'Home Zip',           # D
+    'Home State',         # E
+    'Monthly Income',     # F - moved here for convenience
+    'Family Status',      # G
+    'EE DOB',             # H
+    'Spouse DOB',         # I
+    'Dep 2 DOB',          # J
+    'Dep 3 DOB',          # K
+    'Dep 4 DOB',          # L
+    'Dep 5 DOB',          # M
+    'Dep 6 DOB',          # N
+    'Current EE Monthly', # O
+    'Current ER Monthly', # P
+    'Current Plan Name',  # Q
+    '2026 Premium',       # R
+    'Gap Insurance',      # S
+]
 
 # ==============================================================================
 # Dependent-related constants

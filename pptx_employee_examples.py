@@ -64,7 +64,7 @@ SLIDE_WIDTH = Inches(13.333)
 SLIDE_HEIGHT = Inches(7.5)
 
 # Banner image path
-BANNER_IMAGE = Path("/Users/jimdonovan/Desktop/GLOVE/PPT_header.png")
+BANNER_IMAGE = Path(__file__).parent / "decoratives" / "PPT_header.png"
 
 
 @dataclass

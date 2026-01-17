@@ -53,12 +53,12 @@ SLIDE_WIDTH = Inches(13.333)
 SLIDE_HEIGHT = Inches(7.5)
 
 # Decorative image paths
-DECORATIVE_IMAGES_DIR = Path(__file__).parent.parent / "glove-design" / "✍️ Design + Crit 01"
-CORNER_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-corner.png"
-EDGE_IMAGE = DECORATIVE_IMAGES_DIR / "glove-tile-edge-h-fade.png"
+DECORATIVES_DIR = Path(__file__).parent / "decoratives"
+CORNER_IMAGE = DECORATIVES_DIR / "glove-tile-corner.png"
+EDGE_IMAGE = DECORATIVES_DIR / "glove-tile-edge-h-fade.png"
 
 # Banner image path
-BANNER_IMAGE = Path("/Users/jimdonovan/Desktop/GLOVE/PPT_header.png")
+BANNER_IMAGE = DECORATIVES_DIR / "PPT_header.png"
 
 
 @dataclass
@@ -729,7 +729,7 @@ class CooperativeHealthSlideGenerator:
             legend_parts.append("HAS = Health Access Solutions with specified deductible")
         if has_sedera:
             legend_parts.append("Sedera = Health sharing with specified IUA")
-        legend_parts.append("Rates shown are total monthly employer costs")
+        legend_parts.append("Rates shown are total monthly premiums")
 
         legend_top = Inches(6.8)
         legend_box = slide.shapes.add_textbox(table_left, legend_top, Inches(10), Inches(0.4))

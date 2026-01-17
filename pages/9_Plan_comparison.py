@@ -28,6 +28,7 @@ from plan_comparison_types import (
     calculate_enhanced_ranking_score,
 )
 from queries import PlanComparisonQueries, PlanQueries
+from utils import render_feedback_sidebar
 from pptx_plan_comparison import (
     PlanComparisonSlideData,
     PlanColumnData,
@@ -3241,6 +3242,9 @@ def main():
         render_stage_2_marketplace_selection()
     elif current_stage == 3:
         render_stage_3_comparison_table()
+
+    # Feedback button in sidebar
+    render_feedback_sidebar()
 
 
 if __name__ == "__main__":

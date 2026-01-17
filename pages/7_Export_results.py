@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from constants import EXPORT_FILE_PREFIX, DATE_FORMAT, FAMILY_STATUS_CODES
-from utils import DataFormatter, ContributionComparison
+from utils import DataFormatter, ContributionComparison, render_feedback_sidebar
 from database import get_database_connection
 import re
 
@@ -750,3 +750,6 @@ You've successfully completed the ICHRA calculator workflow:
 
 **Need to make changes?** Use the sidebar navigation to go back to any step.
 """)
+
+# Feedback button in sidebar
+render_feedback_sidebar()
