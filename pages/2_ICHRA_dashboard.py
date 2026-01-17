@@ -1222,8 +1222,14 @@ def calculate_hap_totals(census_df: pd.DataFrame, coop_rates_df: pd.DataFrame,
 # Plan Configurator Constants
 SEDERA_IUA_OPTIONS = ['500', '1000', '1500', '2500', '5000']
 HAS_IUA_OPTIONS = ['1k', '2.5k']
-PREVENTIVE_CARE_RATE_WITH_DPC = 124.0
-PREVENTIVE_CARE_RATE_WITHOUT_DPC = 107.0
+
+# Preventive Care rates by family tier (monthly per member)
+PREVENTIVE_RATES_BY_TIER = {
+    'EE': 124.0,   # Employee Only
+    'ES': 236.0,   # Employee + Spouse
+    'EC': 236.0,   # Employee + Children
+    'F': 293.0,    # Family
+}
 
 
 @st.cache_data(show_spinner=False, ttl=3600)  # Cache for 1 hour
@@ -1516,13 +1522,31 @@ def calculate_admin_fee_total(admin_fee_pepm: float, employee_count: int) -> flo
     return admin_fee_pepm * employee_count
 
 
-def calculate_preventive_care_total(include_dpc: bool, employee_count: int) -> float:
+def calculate_preventive_care_by_tier(tier_counts: Dict[str, int]) -> Dict[str, any]:
     """
-    Calculate preventive care add-on: rate × employee count.
-    Rate: $124/mo with DPC, $107/mo without DPC.
+    Calculate preventive care add-on costs by family tier.
+
+    Args:
+        tier_counts: Dict mapping tier code ('EE', 'ES', 'EC', 'F') to employee count
+
+    Returns:
+        Dict with:
+            - 'by_tier': {code: {'count': n, 'rate': r, 'total': t}}
+            - 'total': grand total across all tiers
     """
-    rate = PREVENTIVE_CARE_RATE_WITH_DPC if include_dpc else PREVENTIVE_CARE_RATE_WITHOUT_DPC
-    return rate * employee_count
+    result = {'by_tier': {}, 'total': 0}
+
+    for code, count in tier_counts.items():
+        rate = PREVENTIVE_RATES_BY_TIER.get(code, 0)
+        tier_total = rate * count
+        result['by_tier'][code] = {
+            'count': count,
+            'rate': rate,
+            'total': tier_total
+        }
+        result['total'] += tier_total
+
+    return result
 
 
 def calculate_age_bracket_costs(census_df: pd.DataFrame, multi_metal_results: Dict = None,
@@ -3560,18 +3584,11 @@ def init_plan_configurator(total_employees: int = 0):
             'sedera_iuas': set(),  # Empty = none selected
             'sedera_admin_fee': 0.0,
             'preventive_enabled': False,
-            'preventive_include_dpc': True,
-            'preventive_employee_count': total_employees,
+            'preventive_counts': {'EE': 0, 'ES': 0, 'EC': 0, 'F': 0},  # Editable counts per tier
         }
-    # Update max employee count if census changes
-    if total_employees > 0:
-        config = st.session_state.plan_configurator
-        # Cap preventive employee count to new total if it exceeds
-        if config['preventive_employee_count'] > total_employees:
-            config['preventive_employee_count'] = total_employees
 
 
-def render_plan_configurator(total_employees: int = 0):
+def render_plan_configurator(total_employees: int = 0, census_df: pd.DataFrame = None):
     """
     Render the Plan Configurator UI for selecting plan options.
 
@@ -3579,6 +3596,16 @@ def render_plan_configurator(total_employees: int = 0):
     """
     init_plan_configurator(total_employees)
     config = st.session_state.plan_configurator
+
+    # Migration: add preventive_counts if missing (for existing sessions)
+    if 'preventive_counts' not in config:
+        config['preventive_counts'] = {'EE': 0, 'ES': 0, 'EC': 0, 'F': 0}
+
+    # Get census tier counts for preventive defaults
+    census_tier_counts = {'EE': 0, 'ES': 0, 'EC': 0, 'F': 0}
+    if census_df is not None and not census_df.empty and 'family_status' in census_df.columns:
+        for code in ['EE', 'ES', 'EC', 'F']:
+            census_tier_counts[code] = len(census_df[census_df['family_status'] == code])
 
     with st.expander("Plan Configurator", expanded=False):
         col1, col2, col3 = st.columns(3)
@@ -3666,31 +3693,29 @@ def render_plan_configurator(total_employees: int = 0):
             config['preventive_enabled'] = preventive_enabled
 
             if preventive_enabled:
-                # DPC toggle
-                include_dpc = st.toggle(
-                    "Include DPC ($124/mo)",
-                    value=config['preventive_include_dpc'],
-                    key="preventive_dpc_toggle",
-                    help="With DPC: $124/mo, Without: $107/mo"
-                )
-                config['preventive_include_dpc'] = include_dpc
+                # Editable tier counts with rates
+                tier_labels = [
+                    ('EE', '$124/mo'),
+                    ('ES', '$236/mo'),
+                    ('EC', '$236/mo'),
+                    ('F', '$293/mo'),
+                ]
+                for tier_code, rate_label in tier_labels:
+                    # Default to census count if not yet set or if census changed
+                    current_val = config['preventive_counts'].get(tier_code, 0)
+                    census_val = census_tier_counts.get(tier_code, 0)
+                    # Use census value as default if current is 0 and census has data
+                    default_val = current_val if current_val > 0 else census_val
 
-                # Employee count
-                max_employees = total_employees if total_employees > 0 else 100
-                emp_count = st.number_input(
-                    f"Employees (max: {max_employees})",
-                    min_value=0,
-                    max_value=max_employees,
-                    value=min(config['preventive_employee_count'], max_employees),
-                    step=1,
-                    key="preventive_emp_count"
-                )
-                config['preventive_employee_count'] = emp_count
-
-                # Show monthly cost preview
-                rate = PREVENTIVE_CARE_RATE_WITH_DPC if include_dpc else PREVENTIVE_CARE_RATE_WITHOUT_DPC
-                monthly_cost = rate * emp_count
-                st.caption(f"Monthly: ${monthly_cost:,.0f}")
+                    tier_count = st.number_input(
+                        f"{tier_code} ({rate_label})",
+                        min_value=0,
+                        max_value=max(census_val, 1000),
+                        value=default_val,
+                        step=1,
+                        key=f"preventive_{tier_code}_count"
+                    )
+                    config['preventive_counts'][tier_code] = tier_count
 
     return config
 
@@ -3706,7 +3731,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     total_employees = len(census_df) if census_df is not None and not census_df.empty else 0
 
     # Render Plan Configurator above table
-    config = render_plan_configurator(total_employees)
+    config = render_plan_configurator(total_employees, census_df)
 
     # Title row (no scenario selector)
     st.markdown("""
@@ -3760,6 +3785,8 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 
     # HAS columns (if enabled)
     if config['hap_enabled'] and config['hap_iuas']:
+        # Subtitle changes based on preventive toggle
+        has_subtitle = 'with Preventive' if config['preventive_enabled'] else 'Health Access Solutions'
         for iua in sorted(config['hap_iuas'], key=lambda x: float(x.replace('k', ''))):
             col_key = f'HAS ${iua}'
             totals_key = f'hap_{iua.replace(".", "_")}' if '.' not in iua else f'hap_{iua.replace(".", "_")}'
@@ -3771,7 +3798,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             plan_columns.append({
                 'key': col_key,
                 'label': f'HAS ${iua}',
-                'subtitle': 'Health Access Solutions',
+                'subtitle': has_subtitle,
                 'style_class': 'col-header-has',
                 'totals_key': totals_key,
                 'type': 'has',
@@ -3783,6 +3810,8 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     if config['sedera_enabled'] and config['sedera_iuas']:
         # Map database IUA values to display labels
         iua_display_map = {'500': '$500', '1000': '$1k', '1500': '$1.5k', '2500': '$2.5k', '5000': '$5k'}
+        # Subtitle changes based on preventive toggle
+        sedera_subtitle = 'with Preventive' if config['preventive_enabled'] else 'Prime+'
         for iua in sorted(config['sedera_iuas'], key=lambda x: int(x)):
             display_iua = iua_display_map.get(iua, f'${iua}')
             col_key = f'Sedera {display_iua}'
@@ -3790,7 +3819,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             plan_columns.append({
                 'key': col_key,
                 'label': f'Sedera {display_iua}',
-                'subtitle': 'Prime+ with DPC',
+                'subtitle': sedera_subtitle,
                 'style_class': 'col-header-sedera',
                 'totals_key': totals_key,
                 'type': 'sedera',
@@ -3951,10 +3980,21 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             tier_total = totals_data.get('by_tier', {}).get(code, {}).get('total', 0)
             rate_range = totals_data.get('rate_ranges', {}).get(code, {'min': 0, 'max': 0})
 
+            # Add preventive cost if enabled (uses config counts, not census counts)
+            preventive_rate = PREVENTIVE_RATES_BY_TIER.get(code, 0)
+            preventive_count = config['preventive_counts'].get(code, 0) if config['preventive_enabled'] else 0
+            preventive_tier_total = preventive_rate * preventive_count
+            tier_total_with_preventive = tier_total + preventive_tier_total
+
             # Format rate range
             range_str = f"${rate_range['min']:,.0f}-${rate_range['max']:,.0f}" if rate_range['min'] > 0 else ""
 
-            plan_cols_html += f'<td><span style="font-weight: 600;">{fmt(tier_total)}</span><br><span class="rate-range">{range_str}</span></td>'
+            # Add preventive line if enabled (format: "$124/mo x 6 = +$744")
+            preventive_line = ""
+            if config['preventive_enabled'] and preventive_count > 0:
+                preventive_line = f'<br><span class="rate-range">${preventive_rate:.0f}/mo x {preventive_count} = +${preventive_tier_total:,.0f}</span>'
+
+            plan_cols_html += f'<td><span style="font-weight: 600;">{fmt(tier_total_with_preventive)}</span><br><span class="rate-range">{range_str}</span>{preventive_line}</td>'
 
         # Format employee count with average age
         age_suffix = f" · avg age {avg_age}" if avg_age > 0 else ""
@@ -3970,29 +4010,30 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
     total_premium[current_key] = total_current
     total_premium[renewal_key] = total_renewal
 
-    # Add totals for each plan column
+    # Calculate preventive totals using config counts (user-editable)
+    preventive_total = 0
+    if config['preventive_enabled']:
+        preventive_data = calculate_preventive_care_by_tier(config['preventive_counts'])
+        preventive_total = preventive_data['total']
+
+    # Add totals for each plan column (including preventive if enabled)
     for col in plan_columns:
         if col['type'] == 'has':
-            total_premium[col['key']] = hap_totals.get(col['totals_key'], {}).get('total', 0)
+            base_total = hap_totals.get(col['totals_key'], {}).get('total', 0)
         else:  # sedera
-            total_premium[col['key']] = sedera_totals.get(col['totals_key'], {}).get('total', 0)
+            base_total = sedera_totals.get(col['totals_key'], {}).get('total', 0)
+        # Add preventive to HAS/Sedera totals
+        total_premium[col['key']] = base_total + preventive_total
 
-    # Calculate admin fees and preventive care totals
+    # Calculate admin fees
     admin_fee_totals = {}
     for col in plan_columns:
         admin_fee_totals[col['key']] = calculate_admin_fee_total(col['admin_fee'], total_employees)
 
-    preventive_total = 0
-    if config['preventive_enabled']:
-        preventive_total = calculate_preventive_care_total(
-            config['preventive_include_dpc'],
-            config['preventive_employee_count']
-        )
-
-    # Calculate grand totals (premium + admin fee + preventive)
+    # Calculate grand totals (premium already includes preventive, just add admin fee)
     grand_totals = {}
     for col in plan_columns:
-        grand_totals[col['key']] = total_premium.get(col['key'], 0) + admin_fee_totals.get(col['key'], 0) + preventive_total
+        grand_totals[col['key']] = total_premium.get(col['key'], 0) + admin_fee_totals.get(col['key'], 0)
 
     # Calculate annual totals (using grand totals for plan columns)
     annual_totals = {current_key: total_premium[current_key] * 12, renewal_key: total_premium[renewal_key] * 12}
@@ -4033,19 +4074,9 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             admin_fee_cells += f'<td>{fmt(admin_fee_totals.get(col["key"], 0))}<br><span class="rate-range">${col["admin_fee"]:.2f} × {total_employees} PEPM</span></td>'
         admin_fee_row = f'<tr><td>Admin Fee</td><td></td><td></td>{admin_fee_cells}</tr>'
 
-    # Build preventive care row (only if enabled)
-    preventive_row = ""
-    if config['preventive_enabled'] and preventive_total > 0:
-        rate_label = f"${PREVENTIVE_CARE_RATE_WITH_DPC:.0f}" if config['preventive_include_dpc'] else f"${PREVENTIVE_CARE_RATE_WITHOUT_DPC:.0f}"
-        dpc_label = "with DPC" if config['preventive_include_dpc'] else "without DPC"
-        preventive_cells = ""
-        for col in plan_columns:
-            preventive_cells += f'<td>{fmt(preventive_total)}<br><span class="rate-range">{rate_label}/mo × {config["preventive_employee_count"]} EEs</span></td>'
-        preventive_row = f'<tr><td>Preventive Care<br><span class="tier-subtitle">{dpc_label}</span></td><td></td><td></td>{preventive_cells}</tr>'
-
-    # Build grand total row (only if there are add-ons)
+    # Build grand total row (only if there are admin fees - preventive is now included in tier rows)
     grand_total_row = ""
-    if has_admin_fees or (config['preventive_enabled'] and preventive_total > 0):
+    if has_admin_fees:
         grand_total_cells = ""
         for col in plan_columns:
             grand_total_cells += f'<td style="font-weight: 700;">{fmt(grand_totals.get(col["key"], 0))}</td>'
@@ -4096,7 +4127,7 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
 </style>
 <table class="scenario-table">
 <thead>{header_row}</thead>
-<tbody>{tier_rows}{total_monthly_row}{preventive_row}{admin_fee_row}{grand_total_row}{annual_row}{savings_row}</tbody>
+<tbody>{tier_rows}{total_monthly_row}{admin_fee_row}{grand_total_row}{annual_row}{savings_row}</tbody>
 </table>"""
 
     st.markdown(table_html, unsafe_allow_html=True)
@@ -4231,9 +4262,6 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
             annual_current = annual_totals.get(current_key, 0)
             annual_renewal = annual_totals.get(renewal_key, 0)
 
-            # Determine preventive care rate based on DPC setting
-            preventive_rate = PREVENTIVE_CARE_RATE_WITH_DPC if config['preventive_include_dpc'] else PREVENTIVE_CARE_RATE_WITHOUT_DPC
-
             pptx_data = CooperativeHealthData(
                 tiers=pptx_tiers,
                 plan_columns=pptx_plan_columns,
@@ -4247,12 +4275,12 @@ def render_comparison_table(data: DashboardData, db=None, census_df: pd.DataFram
                 gap_rate_es=gap_rates_by_tier.get('ES', 0),
                 gap_rate_ec=gap_rates_by_tier.get('EC', 0),
                 gap_rate_f=gap_rates_by_tier.get('F', 0),
-                # Preventive care
-                has_preventive=config['preventive_enabled'] and preventive_total > 0,
-                preventive_total=preventive_total,
-                preventive_rate=preventive_rate,
-                preventive_employee_count=config['preventive_employee_count'],
-                preventive_include_dpc=config['preventive_include_dpc'],
+                # Preventive care (now included in tier totals, not shown as separate row)
+                has_preventive=False,  # Preventive is now baked into tier totals
+                preventive_total=0,
+                preventive_rate=0,
+                preventive_employee_count=0,
+                preventive_include_dpc=True,
                 # Admin fees
                 has_admin_fees=has_admin_fees,
                 client_name=st.session_state.get('client_name', ''),

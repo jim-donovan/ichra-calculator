@@ -139,6 +139,40 @@ def main():
                 else:
                     st.error("Connection failed")
 
+    # Feedback button
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("""
+    <div style="margin-top: 1rem;">
+        <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem;">Share feedback</h3>
+        <p style="font-size: 0.9rem; margin-bottom: 1rem; opacity: 0.8;">Help us improve Canopy!</p>
+        <a
+            href="https://tally.so/r/nplM6B"
+            target="_blank"
+            style="
+                display: block;
+                background: #0047AB;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 0.75rem 1.5rem;
+                font-size: 1rem;
+                font-weight: 600;
+                cursor: pointer;
+                width: 100%;
+                text-align: center;
+                text-decoration: none;
+                font-family: 'Poppins', sans-serif;
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+                box-sizing: border-box;
+            "
+            onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0, 71, 171, 0.3)';"
+            onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';"
+        >
+            Give Feedback
+        </a>
+    </div>
+    """, unsafe_allow_html=True)
+
     # Show home page content
     show_home_page()
 
