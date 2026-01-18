@@ -220,15 +220,18 @@ if has_individual_contribs:
         # 2026 Renewal TOTAL premium (from census or financial summary)
         renewal_total_annual = 0
         renewal_total_monthly = 0
+        has_renewal_data = False
         _financial_summary = st.session_state.get('financial_summary')
         if _financial_summary and _financial_summary.get('renewal_monthly'):
             renewal_total_monthly = _financial_summary['renewal_monthly']
             renewal_total_annual = renewal_total_monthly * 12
+            has_renewal_data = True
         else:
             projected_data = FinancialSummaryCalculator.calculate_projected_2026_total(census_df)
             if projected_data['has_data']:
                 renewal_total_monthly = projected_data['total_monthly']
                 renewal_total_annual = projected_data['total_annual']
+                has_renewal_data = True
 
         # Calculate ER/EE split percentages from current costs
         er_pct = current_er_monthly / current_total_monthly if current_total_monthly > 0 else 0.60
@@ -260,27 +263,46 @@ if has_individual_contribs:
         # === COST BREAKDOWN DETAILS (moved to top) ===
         st.caption(f"Strategy: {strategy_name} · {employees_covered} employees · ER share: {er_pct*100:.1f}%")
 
-        detail_col1, detail_col2, detail_col3 = st.columns(3)
+        if has_renewal_data:
+            detail_col1, detail_col2, detail_col3 = st.columns(3)
 
-        with detail_col1:
-            st.markdown("**Current (2025)**")
-            st.write(f"- ER: {DataFormatter.format_currency(current_er_annual)}/yr")
-            st.write(f"- EE: {DataFormatter.format_currency(current_ee_annual)}/yr")
-            st.write(f"- **Total**: {DataFormatter.format_currency(current_total_annual)}/yr")
+            with detail_col1:
+                st.markdown("**Current (2025)**")
+                st.write(f"- ER: {DataFormatter.format_currency(current_er_annual)}/yr")
+                st.write(f"- EE: {DataFormatter.format_currency(current_ee_annual)}/yr")
+                st.write(f"- **Total**: {DataFormatter.format_currency(current_total_annual)}/yr")
 
-        with detail_col2:
-            st.markdown("**2026 Renewal (Projected)**")
-            st.write(f"- ER: {DataFormatter.format_currency(projected_er_annual_2026)}/yr")
-            st.write(f"- EE: {DataFormatter.format_currency(projected_ee_annual_2026)}/yr")
-            st.write(f"- **Total**: {DataFormatter.format_currency(renewal_total_annual)}/yr")
-            st.caption(f"+{((renewal_total_annual/current_total_annual)-1)*100:.1f}% increase" if current_total_annual > 0 else "")
+            with detail_col2:
+                st.markdown("**2026 Renewal (Projected)**")
+                st.write(f"- ER: {DataFormatter.format_currency(projected_er_annual_2026)}/yr")
+                st.write(f"- EE: {DataFormatter.format_currency(projected_ee_annual_2026)}/yr")
+                st.write(f"- **Total**: {DataFormatter.format_currency(renewal_total_annual)}/yr")
+                st.caption(f"+{((renewal_total_annual/current_total_annual)-1)*100:.1f}% increase" if current_total_annual > 0 else "")
 
-        with detail_col3:
-            st.markdown("**Proposed ICHRA**")
-            avg_per_emp = proposed_monthly / employees_covered if employees_covered > 0 else 0
-            st.write(f"- ER Budget: {DataFormatter.format_currency(proposed_annual)}/yr")
-            st.write(f"- Avg/Employee: {DataFormatter.format_currency(avg_per_emp)}/mo")
-            st.write(f"- Employees: {employees_covered}")
+            with detail_col3:
+                st.markdown("**Proposed ICHRA**")
+                avg_per_emp = proposed_monthly / employees_covered if employees_covered > 0 else 0
+                st.write(f"- ER Budget: {DataFormatter.format_currency(proposed_annual)}/yr")
+                st.write(f"- Avg/Employee: {DataFormatter.format_currency(avg_per_emp)}/mo")
+                st.write(f"- Employees: {employees_covered}")
+        else:
+            # No renewal data - show only Current vs Proposed
+            detail_col1, detail_col2 = st.columns(2)
+
+            with detail_col1:
+                st.markdown("**Current (2025)**")
+                st.write(f"- ER: {DataFormatter.format_currency(current_er_annual)}/yr")
+                st.write(f"- EE: {DataFormatter.format_currency(current_ee_annual)}/yr")
+                st.write(f"- **Total**: {DataFormatter.format_currency(current_total_annual)}/yr")
+
+            with detail_col2:
+                st.markdown("**Proposed ICHRA**")
+                avg_per_emp = proposed_monthly / employees_covered if employees_covered > 0 else 0
+                st.write(f"- ER Budget: {DataFormatter.format_currency(proposed_annual)}/yr")
+                st.write(f"- Avg/Employee: {DataFormatter.format_currency(avg_per_emp)}/mo")
+                st.write(f"- Employees: {employees_covered}")
+
+            st.caption("💡 *No renewal premium data available. Savings calculated vs current employer costs.*")
 
         # === EXPORT BUTTONS ===
         st.markdown("")
@@ -329,54 +351,85 @@ if has_individual_contribs:
                 pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False, header=False)
 
                 # === TAB 2: COST COMPARISON ===
-                cost_data = {
-                    'Category': ['Employer Pays', 'Employees Pay', 'Total Premium'],
-                    'Current (2025)': [current_er_annual, current_ee_annual, current_total_annual],
-                    '2026 Renewal': [projected_er_annual_2026, projected_ee_annual_2026, renewal_total_annual],
-                    'ICHRA': [proposed_annual, 'Varies', proposed_annual],
-                }
+                if has_renewal_data:
+                    cost_data = {
+                        'Category': ['Employer Pays', 'Employees Pay', 'Total Premium'],
+                        'Current (2025)': [current_er_annual, current_ee_annual, current_total_annual],
+                        '2026 Renewal': [projected_er_annual_2026, projected_ee_annual_2026, renewal_total_annual],
+                        'ICHRA': [proposed_annual, 'Varies', proposed_annual],
+                    }
+                else:
+                    cost_data = {
+                        'Category': ['Employer Pays', 'Employees Pay', 'Total Premium'],
+                        'Current (2025)': [current_er_annual, current_ee_annual, current_total_annual],
+                        'ICHRA': [proposed_annual, 'Varies', proposed_annual],
+                    }
                 cost_df = pd.DataFrame(cost_data)
                 cost_df.to_excel(writer, sheet_name='Cost Comparison', index=False)
 
                 # === TAB 3: SAVINGS ===
-                ichra_70 = proposed_annual * 0.70
-                savings_70 = renewal_total_annual - ichra_70
-                savings_70_pct = (savings_70 / renewal_total_annual * 100) if renewal_total_annual > 0 else 0
                 savings_vs_current = current_total_annual - proposed_annual
                 savings_vs_current_pct = (savings_vs_current / current_total_annual * 100) if current_total_annual > 0 else 0
 
-                savings_data = {
-                    'Scenario': [
-                        'vs 2026 Renewal',
-                        'vs 2026 Renewal (ICHRA @ 70% Take Rate)',
-                        'vs Current Plan (2025)'
-                    ],
-                    'Formula': [
-                        'Renewal Total - ICHRA Budget',
-                        'Renewal Total - (ICHRA Budget × 70% take rate)',
-                        'Current Total - ICHRA Budget'
-                    ],
-                    'ICHRA Cost': [
-                        proposed_annual,
-                        ichra_70,
-                        proposed_annual
-                    ],
-                    'Comparison Cost': [
-                        renewal_total_annual,
-                        renewal_total_annual,
-                        current_total_annual
-                    ],
-                    'Savings ($)': [
-                        savings_vs_renewal_total,
-                        savings_70,
-                        savings_vs_current
-                    ],
-                    'Savings (%)': [
-                        savings_vs_renewal_total_pct,
-                        savings_70_pct,
-                        savings_vs_current_pct
-                    ],
-                }
+                if has_renewal_data:
+                    ichra_70 = proposed_annual * 0.70
+                    savings_70 = renewal_total_annual - ichra_70
+                    savings_70_pct = (savings_70 / renewal_total_annual * 100) if renewal_total_annual > 0 else 0
+
+                    savings_data = {
+                        'Scenario': [
+                            'vs 2026 Renewal',
+                            'vs 2026 Renewal (ICHRA @ 70% Take Rate)',
+                            'vs Current Plan (2025)'
+                        ],
+                        'Formula': [
+                            'Renewal Total - ICHRA Budget',
+                            'Renewal Total - (ICHRA Budget × 70% take rate)',
+                            'Current Total - ICHRA Budget'
+                        ],
+                        'ICHRA Cost': [
+                            proposed_annual,
+                            ichra_70,
+                            proposed_annual
+                        ],
+                        'Comparison Cost': [
+                            renewal_total_annual,
+                            renewal_total_annual,
+                            current_total_annual
+                        ],
+                        'Savings ($)': [
+                            savings_vs_renewal_total,
+                            savings_70,
+                            savings_vs_current
+                        ],
+                        'Savings (%)': [
+                            savings_vs_renewal_total_pct,
+                            savings_70_pct,
+                            savings_vs_current_pct
+                        ],
+                    }
+                else:
+                    # No renewal data - only show vs Current comparison
+                    savings_data = {
+                        'Scenario': [
+                            'vs Current Plan (2025)'
+                        ],
+                        'Formula': [
+                            'Current Total - ICHRA Budget'
+                        ],
+                        'ICHRA Cost': [
+                            proposed_annual
+                        ],
+                        'Comparison Cost': [
+                            current_total_annual
+                        ],
+                        'Savings ($)': [
+                            savings_vs_current
+                        ],
+                        'Savings (%)': [
+                            savings_vs_current_pct
+                        ],
+                    }
                 savings_df = pd.DataFrame(savings_data)
                 savings_df.to_excel(writer, sheet_name='Savings', index=False)
 

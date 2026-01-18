@@ -31,19 +31,25 @@ COLORS = {
     'text_muted': RGBColor(0x9C, 0xA3, 0xAF),     # #9CA3AF - Footer
     'text_body': RGBColor(0x4B, 0x55, 0x63),      # #4B5563 - Body text
     'text_label': RGBColor(0x37, 0x41, 0x51),     # #374151 - Labels in cards
+    'section_header': RGBColor(0x36, 0x41, 0x51), # #364151 - Section headers and card values
 
     # Card colors
     'card_bg': RGBColor(0xF9, 0xFA, 0xFB),        # #F9FAFB - Card background
-    'cyan_bg': RGBColor(0xEC, 0xFE, 0xFF),        # #ECFEFF - Cyan card bg (50% opacity simulated)
-    'cyan_border': RGBColor(0x06, 0xB6, 0xD4),    # #06B6D4 - Cyan border
-    'amber_bg': RGBColor(0xFE, 0xF3, 0xC7),       # #FEF3C7 - Amber card bg
-    'amber_border': RGBColor(0xF5, 0x9E, 0x0B),   # #F59E0B - Amber border
-    'red_bg': RGBColor(0xFE, 0xE2, 0xE2),         # #FEE2E2 - Red card bg
-    'red_border': RGBColor(0xEF, 0x44, 0x44),     # #EF4444 - Red border
+
+    # Dependent Overview cards - brand palette (teal, golden, burnt sienna, brown)
+    # All pass WCAG AA with text_body (#4B5563) labels: 6.9-7.3:1 contrast
+    'dep_card_1_bg': RGBColor(0xE6, 0xFF, 0xFA),     # #E6FFFA - teal tint
+    'dep_card_1_border': RGBColor(0x37, 0xBE, 0xAE), # #37BEAE - Glove brand teal
+    'dep_card_2_bg': RGBColor(0xF5, 0xF3, 0xFF),     # #F5F3FF - violet-50
+    'dep_card_2_border': RGBColor(0x7C, 0x3A, 0xED), # #7C3AED - violet-600
+    'dep_card_3_bg': RGBColor(0xEF, 0xF6, 0xFF),     # #EFF6FF - blue-50
+    'dep_card_3_border': RGBColor(0x1D, 0x4E, 0xD8), # #1D4ED8 - blue-700
+    'dep_card_4_bg': RGBColor(0xEE, 0xF2, 0xFF),     # #EEF2FF - indigo-50
+    'dep_card_4_border': RGBColor(0x4F, 0x46, 0xE5), # #4F46E5 - indigo-600
 
     # Progress bar colors
     'progress_bg': RGBColor(0xE5, 0xE7, 0xEB),    # #E5E7EB - Progress bar bg
-    'progress_cyan': RGBColor(0x06, 0xB6, 0xD4),  # #06B6D4 - Children progress
+    'progress_cyan': RGBColor(0x38, 0xBF, 0xB1),  # #38BFB1 - Children progress
     'progress_brown': RGBColor(0x78, 0x35, 0x0F), # #78350F - Spouses progress
 
     # Base
@@ -57,7 +63,7 @@ SLIDE_HEIGHT = Inches(7.5)
 # Decorative image paths
 DECORATIVES_DIR = Path(__file__).parent / "decoratives"
 CORNER_IMAGE = DECORATIVES_DIR / "glove-tile-corner.png"
-LOGO_IMAGE = DECORATIVES_DIR / "glove_logo.png"
+BANNER_IMAGE = DECORATIVES_DIR / "PPT_header.png"
 
 
 @dataclass
@@ -240,16 +246,16 @@ class CensusReportSlideGenerator:
         border.fill.fore_color.rgb = border_color
         border.line.fill.background()
 
-        # Label (font size 10)
+        # Label (font size 10) - use text_body for WCAG AA accessibility
         self._add_text_box(
             slide, left + Inches(0.2), top + Inches(0.15), width - Inches(0.3), Inches(0.25),
-            label, font_size=10, color=COLORS['text_secondary'], bold=True
+            label, font_size=10, color=COLORS['text_body'], bold=True
         )
 
         # Value (font size 24)
         self._add_text_box(
             slide, left + Inches(0.2), top + Inches(0.4), width - Inches(0.3), Inches(0.4),
-            value, font_size=24, color=COLORS['text_primary'], bold=True
+            value, font_size=24, color=COLORS['section_header'], bold=True
         )
 
     def _add_progress_bar(self, slide, left, top, width, height,
@@ -284,16 +290,16 @@ class CensusReportSlideGenerator:
         return shape
 
     def _add_decorative_images(self, slide):
-        """Add decorative images - logo top-left, corner tile bottom-right"""
-        # Logo in top-left corner
-        if LOGO_IMAGE.exists():
+        """Add decorative images - banner at top, corner tile bottom-right"""
+        # Banner at top (same as Cooperative Health slide)
+        if BANNER_IMAGE.exists():
             try:
                 slide.shapes.add_picture(
-                    str(LOGO_IMAGE),
-                    Inches(0.25),   # Small margin from left edge
-                    Inches(0.2),    # Small margin from top edge
-                    width=Inches(0.75),
-                    height=Inches(0.75)
+                    str(BANNER_IMAGE),
+                    left=Inches(0),
+                    top=Inches(0),
+                    width=SLIDE_WIDTH,
+                    height=Inches(0.25)
                 )
             except Exception:
                 pass  # Skip if image can't be added
@@ -328,7 +334,7 @@ class CensusReportSlideGenerator:
         # Title
         self._add_text_box(
             slide, margin_left, margin_top, Inches(6), Inches(0.6),
-            "Census Analysis Report", font_size=32,
+            "Census analysis", font_size=32,
             color=COLORS['teal_dark'], bold=True
         )
 
@@ -397,8 +403,8 @@ class CensusReportSlideGenerator:
         # --- LEFT COLUMN: Employee Demographics ---
         self._add_text_box(
             slide, margin_left, main_top, left_col_width, Inches(0.4),
-            "Employee Demographics", font_size=20,
-            color=COLORS['text_primary'], bold=True
+            "Employee demographics", font_size=20,
+            color=COLORS['section_header'], bold=True
         )
 
         demo_top = main_top + Inches(0.5)
@@ -426,7 +432,7 @@ class CensusReportSlideGenerator:
         range_top = demo_top + 3 * line_height + Inches(0.15)
         self._add_text_box(
             slide, margin_left, range_top, left_col_width, Inches(0.3),
-            "Age range", font_size=16, color=COLORS['text_primary'], bold=True
+            "Age range", font_size=16, color=COLORS['section_header'], bold=True
         )
 
         range_items = [
@@ -448,8 +454,8 @@ class CensusReportSlideGenerator:
         # --- RIGHT COLUMN: Dependent Overview ---
         self._add_text_box(
             slide, right_col_left, main_top, right_col_width, Inches(0.4),
-            "Dependent Overview", font_size=20,
-            color=COLORS['text_primary'], bold=True
+            "Dependent overview", font_size=20,
+            color=COLORS['section_header'], bold=True
         )
 
         # 4 Colored Cards
@@ -464,10 +470,10 @@ class CensusReportSlideGenerator:
         spouses_pct = (data.dep_spouses_count / total_deps) * 100 if total_deps > 0 else 0
 
         dep_cards = [
-            ("TOTAL DEPENDENTS", str(data.total_dependents), COLORS['cyan_bg'], COLORS['cyan_border']),
-            ("COVERAGE BURDEN", f"{data.coverage_burden:.2f}:1", COLORS['cyan_bg'], COLORS['cyan_border']),
-            ("AVERAGE AGE", f"{data.dep_avg_age:.1f}", COLORS['amber_bg'], COLORS['amber_border']),
-            ("AGE RANGE", f"{data.dep_min_age}-{data.dep_max_age}" if data.dep_max_age > 0 else "--", COLORS['red_bg'], COLORS['red_border']),
+            ("TOTAL DEPENDENTS", str(data.total_dependents), COLORS['dep_card_1_bg'], COLORS['dep_card_1_border']),
+            ("COVERAGE BURDEN", f"{data.coverage_burden:.2f}:1", COLORS['dep_card_2_bg'], COLORS['dep_card_2_border']),
+            ("AVERAGE AGE", f"{data.dep_avg_age:.1f}", COLORS['dep_card_3_bg'], COLORS['dep_card_3_border']),
+            ("AGE RANGE", f"{data.dep_min_age}-{data.dep_max_age}" if data.dep_max_age > 0 else "--", COLORS['dep_card_4_bg'], COLORS['dep_card_4_border']),
         ]
 
         for i, (label, value, bg, border) in enumerate(dep_cards):
@@ -487,7 +493,7 @@ class CensusReportSlideGenerator:
         self._add_text_box(
             slide, right_col_left + Inches(0.2), sections_top + Inches(0.15),
             section_width - Inches(0.4), Inches(0.3),
-            "By relationship", font_size=16, color=COLORS['text_primary'], bold=True
+            "By relationship", font_size=16, color=COLORS['section_header'], bold=True
         )
 
         # Children row
@@ -535,7 +541,7 @@ class CensusReportSlideGenerator:
             slide, stats_left + Inches(0.2), sections_top + Inches(0.15),
             section_width - Inches(0.4), Inches(0.3),
             "Dependents age statistics", font_size=16,
-            color=COLORS['text_primary'], bold=True
+            color=COLORS['section_header'], bold=True
         )
 
         age_stat_items = [

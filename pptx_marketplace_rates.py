@@ -113,8 +113,12 @@ class MarketplaceRatesData:
     silver_annual: float = 0.0
     gold_annual: float = 0.0
 
-    # Renewal premium for comparison
-    renewal_monthly: float = 0.0
+    # Comparison baseline for savings calculation
+    renewal_monthly: float = 0.0  # Renewal premium if available
+    current_monthly: float = 0.0  # Current premium as fallback
+    has_renewal_data: bool = True
+    comparison_baseline: float = 0.0  # Either renewal or current monthly
+    comparison_label: str = "vs Renewal"  # "vs Renewal" or "vs Current"
 
     # Client info
     client_name: str = ""
@@ -122,15 +126,18 @@ class MarketplaceRatesData:
 
     @classmethod
     def from_dashboard_data(cls, tier_costs: Dict, renewal_monthly: float = 0,
-                            metal_av: Dict = None, client_name: str = "") -> 'MarketplaceRatesData':
+                            metal_av: Dict = None, client_name: str = "",
+                            current_monthly: float = 0, has_renewal_data: bool = True) -> 'MarketplaceRatesData':
         """
         Build MarketplaceRatesData from calculate_tier_marketplace_costs() output.
 
         Args:
             tier_costs: Output from calculate_tier_marketplace_costs()
-            renewal_monthly: Current renewal premium for savings calculation
+            renewal_monthly: Renewal premium for savings calculation (if available)
             metal_av: Dict of metal level -> AV percentage
             client_name: Client/company name
+            current_monthly: Current premium for savings calculation (fallback if no renewal)
+            has_renewal_data: Whether renewal data is available
 
         Returns:
             Populated MarketplaceRatesData instance
@@ -139,6 +146,16 @@ class MarketplaceRatesData:
         data.client_name = client_name
         data.generated_date = datetime.now().strftime("%m.%d.%y")
         data.renewal_monthly = renewal_monthly
+        data.current_monthly = current_monthly
+        data.has_renewal_data = has_renewal_data
+
+        # Set comparison baseline - use renewal if available, otherwise current
+        if has_renewal_data and renewal_monthly > 0:
+            data.comparison_baseline = renewal_monthly
+            data.comparison_label = "vs Renewal"
+        else:
+            data.comparison_baseline = current_monthly
+            data.comparison_label = "vs Current"
 
         if metal_av:
             data.bronze_av = int(metal_av.get('Bronze', 60))
@@ -249,23 +266,23 @@ class MarketplaceRatesSlideGenerator:
             return f"${min_val:,.0f}-${max_val:,.0f}"
         return "--"
 
-    def _calc_savings(self, metal_monthly: float, renewal_monthly: float) -> tuple:
-        """Calculate savings vs renewal. Returns (text, color)"""
-        if renewal_monthly <= 0 or metal_monthly <= 0:
+    def _calc_savings(self, metal_monthly: float, comparison_baseline: float) -> tuple:
+        """Calculate savings vs comparison baseline. Returns (text, color)"""
+        if comparison_baseline <= 0 or metal_monthly <= 0:
             return ("--", COLORS['secondary_text'])
-        diff = renewal_monthly - metal_monthly
+        diff = comparison_baseline - metal_monthly
         if diff > 0:
-            return (f"-${diff:,.0f}", COLORS['savings_green'])
+            return (f"${diff:,.0f}", COLORS['savings_green'])  # Savings shown without sign
         elif diff < 0:
-            return (f"${abs(diff):,.0f}", COLORS['cost_red'])  # No sign needed, red color indicates cost increase
+            return (f"+${abs(diff):,.0f}", COLORS['cost_red'])  # Cost increase shown with + sign
         return ("--", COLORS['secondary_text'])
 
-    def _calc_savings_pct(self, metal_monthly: float, renewal_monthly: float) -> tuple:
+    def _calc_savings_pct(self, metal_monthly: float, comparison_baseline: float) -> tuple:
         """Calculate savings percentage. Returns (text, color)"""
-        if renewal_monthly <= 0 or metal_monthly <= 0:
+        if comparison_baseline <= 0 or metal_monthly <= 0:
             return ("--", COLORS['secondary_text'])
-        diff = renewal_monthly - metal_monthly
-        pct = (diff / renewal_monthly) * 100
+        diff = comparison_baseline - metal_monthly
+        pct = (diff / comparison_baseline) * 100
         if pct > 0:
             return (f"{pct:.0f}%", COLORS['savings_green'])
         return ("--", COLORS['secondary_text'])
@@ -352,9 +369,9 @@ class MarketplaceRatesSlideGenerator:
         # Row 0: Header
         header_configs = [
             ("Coverage Type", COLORS['white'], COLORS['row_label_text']),
-            (f"Bronze\n{data.bronze_av}% AV", COLORS['bronze_header_bg'], COLORS['bronze_text']),
-            (f"Silver\n{data.silver_av}% AV", COLORS['silver_header_bg'], COLORS['silver_text']),
-            (f"Gold\n{data.gold_av}% AV", COLORS['gold_header_bg'], COLORS['gold_text']),
+            (f"Lowest Cost\nBronze\n{data.bronze_av}% AV", COLORS['bronze_header_bg'], COLORS['bronze_text']),
+            (f"Lowest Cost\nSilver\n{data.silver_av}% AV", COLORS['silver_header_bg'], COLORS['silver_text']),
+            (f"Lowest Cost\nGold\n{data.gold_av}% AV", COLORS['gold_header_bg'], COLORS['gold_text']),
         ]
 
         for col_idx, (text, bg_color, text_color) in enumerate(header_configs):
@@ -362,10 +379,12 @@ class MarketplaceRatesSlideGenerator:
             self._set_cell_fill(cell, bg_color)
             # Handle multi-line headers
             lines = text.split('\n')
-            self._set_cell_text(cell, lines[0], text_color, font_size=14, bold=True,
+            self._set_cell_text(cell, lines[0], text_color, font_size=10, bold=True,
                                align=PP_ALIGN.LEFT if col_idx == 0 else PP_ALIGN.CENTER)
             if len(lines) > 1:
-                self._add_cell_line(cell, lines[1], text_color, font_size=10, bold=False)
+                self._add_cell_line(cell, lines[1], text_color, font_size=12, bold=True)
+            if len(lines) > 2:
+                self._add_cell_line(cell, lines[2], text_color, font_size=9, bold=False)
 
         # Row 1: Plans available
         cell = table.cell(1, 0)
@@ -428,7 +447,7 @@ class MarketplaceRatesSlideGenerator:
             # Use dark text color for readability
             self._set_cell_text(cell, self._format_currency(value), COLORS['total_text'], font_size=14, bold=True)
 
-        # "vs a renewal of $X/mo:" merged row
+        # "vs a [renewal/current] of $X/mo:" merged row - dynamic label
         row_idx = footer_row_start + 1
         # Merge all cells in this row
         start_cell = table.cell(row_idx, 0)
@@ -436,8 +455,9 @@ class MarketplaceRatesSlideGenerator:
         start_cell.merge(end_cell)
         merged_cell = table.cell(row_idx, 0)
         self._set_cell_fill(merged_cell, COLORS['renewal_bg'])
-        renewal_text = f"vs a renewal of {self._format_currency(data.renewal_monthly)}/mo:"
-        self._set_cell_text(merged_cell, renewal_text, COLORS['renewal_text'],
+        comparison_type = "renewal" if data.has_renewal_data else "current"
+        comparison_text = f"vs a {comparison_type} of {self._format_currency(data.comparison_baseline)}/mo:"
+        self._set_cell_text(merged_cell, comparison_text, COLORS['renewal_text'],
                            font_size=14, bold=True, align=PP_ALIGN.CENTER, italic=True)
 
         # Monthly Savings row
@@ -450,7 +470,7 @@ class MarketplaceRatesSlideGenerator:
         for col_idx, value in enumerate(monthly_values, start=1):
             cell = table.cell(row_idx, col_idx)
             self._set_cell_fill(cell, COLORS['white'])
-            text, color = self._calc_savings(value, data.renewal_monthly)
+            text, color = self._calc_savings(value, data.comparison_baseline)
             self._set_cell_text(cell, text, color, font_size=14, bold=True)
 
         # Premium savings % row
@@ -463,12 +483,12 @@ class MarketplaceRatesSlideGenerator:
         for col_idx, value in enumerate(monthly_values, start=1):
             cell = table.cell(row_idx, col_idx)
             self._set_cell_fill(cell, COLORS['white'])
-            text, color = self._calc_savings_pct(value, data.renewal_monthly)
+            text, color = self._calc_savings_pct(value, data.comparison_baseline)
             self._set_cell_text(cell, text, color, font_size=16, bold=True)
 
         # Add footer note
-        note_top = table_top + table_height + Inches(0.2)
-        note_box = slide.shapes.add_textbox(table_left, note_top, Inches(10), Inches(0.4))
+        note_top = table_top + table_height + Inches(0.15)
+        note_box = slide.shapes.add_textbox(table_left, note_top, Inches(10), Inches(0.3))
         note_tf = note_box.text_frame
         note_tf.paragraphs[0].text = ("Rate ranges show lowest cost plan rates from youngest to oldest "
                                        "age band within each coverage tier.")
@@ -476,8 +496,8 @@ class MarketplaceRatesSlideGenerator:
         note_tf.paragraphs[0].font.size = Pt(10)
         note_tf.paragraphs[0].font.color.rgb = COLORS['secondary_text']
 
-        # Add generated footer
-        footer_top = Inches(6.9)
+        # Add generated footer (positioned below the note)
+        footer_top = note_top + Inches(0.3)
         footer_box = slide.shapes.add_textbox(table_left, footer_top, Inches(10), Inches(0.3))
         footer_tf = footer_box.text_frame
         client_suffix = f" for {data.client_name}" if data.client_name else ""
@@ -491,14 +511,14 @@ class MarketplaceRatesSlideGenerator:
 
     def _add_decoratives(self, slide) -> None:
         """Add decorative corner and edge images to the slide"""
-        corner_size = Inches(1.5)
+        # Bottom-right corner decoration (same position as Census Analysis Report)
         if CORNER_IMAGE.exists():
             slide.shapes.add_picture(
                 str(CORNER_IMAGE),
-                left=Inches(0),
-                top=Inches(0),
-                width=corner_size,
-                height=corner_size
+                left=Inches(12.58),
+                top=Inches(6.78),
+                width=Inches(0.75),
+                height=Inches(0.75)
             )
 
         edge_width = Inches(3.2)

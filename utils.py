@@ -16,7 +16,7 @@ def calculate_age_from_dob(dob_str: str, reference_date: Optional[date] = None) 
     Args:
         dob_str: Date of birth as string (flexible format)
                  Accepts: m/d/yy, mm/dd/yy, m/d/yyyy, mm/dd/yyyy, yyyy-mm-dd
-        reference_date: Date to calculate age as of (default: January 1, 2026 - plan effective date)
+        reference_date: Date to calculate age as of (default: today's date)
 
     Returns:
         Age in years
@@ -25,16 +25,13 @@ def calculate_age_from_dob(dob_str: str, reference_date: Optional[date] = None) 
         ValueError: If date format is invalid
 
     Examples:
-        >>> calculate_age_from_dob('03/15/1985')
-        40  # As of 2026-01-01
-        >>> calculate_age_from_dob('3/15/85')
-        40  # As of 2026-01-01 (2-digit year: 85 → 1985)
-        >>> calculate_age_from_dob('12/25/10')
-        15  # As of 2026-01-01 (2-digit year: 10 → 2010)
+        >>> calculate_age_from_dob('03/15/1985')  # Age as of today
+        >>> calculate_age_from_dob('3/15/85')     # 2-digit year: 85 → 1985
+        >>> calculate_age_from_dob('12/25/10')    # 2-digit year: 10 → 2010
     """
     if reference_date is None:
-        # Default to plan effective date (2026-01-01)
-        reference_date = date(2026, 1, 1)
+        # Default to today's date
+        reference_date = date.today()
 
     # Parse DOB - try multiple formats
     dob_date = None

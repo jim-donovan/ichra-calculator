@@ -70,7 +70,7 @@ BANNER_IMAGE = Path(__file__).parent / "decoratives" / "PPT_header.png"
 @dataclass
 class EmployeeExampleData:
     """Data for a single employee example slide"""
-    label: str  # "Youngest Employee", "Mid-Age Family", "Oldest Employee"
+    label: str  # "Youngest Employee", "Mid-Age Family", "Older Employee"
     name: str
     age: int
     tier: str  # "Employee Only", "Family", etc.
@@ -91,6 +91,8 @@ class EmployeeExampleData:
     current_total_monthly: float = 0.0
     renewal_total_monthly: float = 0.0
     use_ee_rate_only: bool = False
+    has_renewal_data: bool = True  # When False, hide renewal column and compare vs current
+    contribution_strategy: str = ""  # Description of employer contribution strategy
 
 
 class EmployeeExamplesSlideGenerator:
@@ -128,6 +130,18 @@ class EmployeeExamplesSlideGenerator:
         cell.text_frame.paragraphs[0].font.color.rgb = color
         cell.text_frame.paragraphs[0].font.bold = bold
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    def _add_cell_line(self, cell, text: str, color: RGBColor,
+                       font_size: int = 10, bold: bool = False,
+                       align: PP_ALIGN = PP_ALIGN.CENTER):
+        """Add additional line to cell"""
+        p = cell.text_frame.add_paragraph()
+        p.text = str(text) if text is not None else "—"
+        p.alignment = align
+        p.font.name = 'Poppins'
+        p.font.size = Pt(font_size)
+        p.font.color.rgb = color
+        p.font.bold = bold
 
     def _format_currency(self, val) -> str:
         """Format value as currency"""
@@ -223,18 +237,36 @@ class EmployeeExamplesSlideGenerator:
         p.font.size = Pt(12)
         p.font.color.rgb = COLORS['secondary']
 
-        # --- COST COMPARISON TABLE ---
-        # Build dynamic column list based on plan_config
+        # Contribution strategy (below subtitle)
+        if employee.contribution_strategy:
+            strategy_box = slide.shapes.add_textbox(
+                Inches(0.5), Inches(1.0) + banner_offset, Inches(12), Inches(0.3)
+            )
+            strategy_tf = strategy_box.text_frame
+            p = strategy_tf.paragraphs[0]
+            p.text = employee.contribution_strategy
+            p.font.name = 'Poppins'
+            p.font.size = Pt(11)
+            p.font.color.rgb = COLORS['secondary']
 
-        # Base columns: Label, Current, Renewal, Bronze, Silver, Gold
+        # --- COST COMPARISON TABLE ---
+        # Build dynamic column list based on plan_config and has_renewal_data
+
+        # Base columns: Label, Current, (Renewal if available), Bronze, Silver, Gold
         columns = [
             {'header': '', 'scenario': None, 'bg': COLORS['white'], 'text': COLORS['black']},
             {'header': 'Current', 'scenario': 'Current', 'bg': COLORS['current_bg'], 'text': COLORS['current_text']},
-            {'header': 'Renewal', 'scenario': 'Renewal', 'bg': COLORS['renewal_bg'], 'text': COLORS['renewal_text']},
-            {'header': 'Bronze', 'scenario': 'ICHRA Bronze', 'bg': COLORS['bronze_bg'], 'text': COLORS['bronze_text']},
-            {'header': 'Silver', 'scenario': 'ICHRA Silver', 'bg': COLORS['silver_bg'], 'text': COLORS['silver_text']},
-            {'header': 'Gold', 'scenario': 'ICHRA Gold', 'bg': COLORS['gold_bg'], 'text': COLORS['gold_text']},
         ]
+        # Only include Renewal column if renewal data is available
+        if employee.has_renewal_data:
+            columns.append({'header': 'Renewal', 'scenario': 'Renewal', 'bg': COLORS['renewal_bg'], 'text': COLORS['renewal_text']})
+
+        # Metal plan columns
+        columns.extend([
+            {'header': 'Lowest Cost\nBronze', 'scenario': 'ICHRA Bronze', 'bg': COLORS['bronze_bg'], 'text': COLORS['bronze_text']},
+            {'header': 'Lowest Cost\nSilver', 'scenario': 'ICHRA Silver', 'bg': COLORS['silver_bg'], 'text': COLORS['silver_text']},
+            {'header': 'Lowest Cost\nGold', 'scenario': 'ICHRA Gold', 'bg': COLORS['gold_bg'], 'text': COLORS['gold_text']},
+        ])
 
         # Add HAS columns for each enabled IUA level
         if self.plan_config.get('hap_enabled') and self.plan_config.get('hap_iuas'):
@@ -285,11 +317,17 @@ class EmployeeExamplesSlideGenerator:
         for i, width in enumerate(col_widths):
             table.columns[i].width = width
 
-        # Row 0: Headers
+        # Row 0: Headers (handle multi-line headers)
         for col, col_def in enumerate(columns):
             cell = table.cell(0, col)
             self._set_cell_fill(cell, col_def['bg'])
-            self._set_cell_text(cell, col_def['header'], col_def['text'], font_size=11, bold=True)
+            header_text = col_def['header']
+            if '\n' in header_text:
+                lines = header_text.split('\n')
+                self._set_cell_text(cell, lines[0], col_def['text'], font_size=10, bold=True)
+                self._add_cell_line(cell, lines[1], col_def['text'], font_size=11, bold=True)
+            else:
+                self._set_cell_text(cell, header_text, col_def['text'], font_size=11, bold=True)
 
         # Get costs data
         costs = employee.costs
@@ -377,10 +415,11 @@ class EmployeeExamplesSlideGenerator:
         )
         footer_tf = footer_box.text_frame
         p = footer_tf.paragraphs[0]
-        timestamp = datetime.now().strftime("%B %d, %Y")
-        footer_text = f"Generated {timestamp}"
+        date_str = datetime.now().strftime("%m.%d.%y")
         if self.client_name:
-            footer_text = f"{self.client_name} | {footer_text}"
+            footer_text = f"Generated by Glove Benefits for {self.client_name} | {date_str}"
+        else:
+            footer_text = f"Generated by Glove Benefits | {date_str}"
         p.text = footer_text
         p.font.name = 'Poppins'
         p.font.size = Pt(9)
@@ -431,11 +470,16 @@ class EmployeeExamplesSlideGenerator:
             cell = table.cell(0, col)
             bg, text = metal_colors.get(metal, (COLORS['white'], COLORS['black']))
             self._set_cell_fill(cell, bg)
-            self._set_cell_text(cell, metal, text, font_size=11, bold=True)
+            # Two-line header: "Lowest Cost" on first line, metal name on second
+            self._set_cell_text(cell, "Lowest Cost", text, font_size=10, bold=True)
+            self._add_cell_line(cell, metal, text, font_size=11, bold=True)
 
-        # Data rows
-        row_labels = ["Plan Name", "Monthly Premium", "vs Renewal", "Deductible", "Max Out-of-Pocket"]
-        renewal_total = employee.renewal_total_monthly
+        # Data rows - use dynamic comparison label based on renewal data availability
+        comparison_label = "vs Renewal (Savings)" if employee.has_renewal_data else "vs Current (Savings)"
+        # Reordered: Plan Name, Deductible, Max OOP, then Premium and comparison
+        row_labels = ["Plan Name", "Deductible", "Max Out-of-Pocket", "Monthly Premium", comparison_label]
+        # Use renewal or current as comparison baseline
+        comparison_baseline = employee.renewal_total_monthly if employee.has_renewal_data else employee.current_total_monthly
 
         for row_idx, label in enumerate(row_labels, 1):
             # Row label
@@ -456,27 +500,6 @@ class EmployeeExamplesSlideGenerator:
                     cell.text_frame.word_wrap = True
                     self._set_cell_text(cell, plan_name, COLORS['black'], font_size=9)
 
-                elif label == "Monthly Premium":
-                    premium = metal_data.get('premium', 0)
-                    self._set_cell_text(cell, self._format_currency(premium), COLORS['black'], font_size=10)
-
-                elif label == "vs Renewal":
-                    premium = metal_data.get('premium', 0)
-                    if renewal_total and renewal_total > 0:
-                        diff = premium - renewal_total
-                        if diff < 0:
-                            text = f"-${abs(diff):,.0f}"
-                            color = COLORS['savings_green']
-                        elif diff > 0:
-                            text = f"+${diff:,.0f}"
-                            color = COLORS['cost_red']
-                        else:
-                            text = "$0"
-                            color = COLORS['secondary']
-                        self._set_cell_text(cell, text, color, font_size=10, bold=True)
-                    else:
-                        self._set_cell_text(cell, "—", COLORS['secondary'], font_size=10)
-
                 elif label == "Deductible":
                     ded = metal_data.get('deductible')
                     self._set_cell_text(cell, self._format_currency(ded), COLORS['black'], font_size=10)
@@ -484,6 +507,30 @@ class EmployeeExamplesSlideGenerator:
                 elif label == "Max Out-of-Pocket":
                     moop = metal_data.get('moop')
                     self._set_cell_text(cell, self._format_currency(moop), COLORS['black'], font_size=10)
+
+                elif label == "Monthly Premium":
+                    premium = metal_data.get('premium', 0)
+                    self._set_cell_text(cell, self._format_currency(premium), COLORS['black'], font_size=10)
+
+                elif label == comparison_label:  # "vs Renewal" or "vs Current"
+                    premium = metal_data.get('premium', 0)
+                    if comparison_baseline and comparison_baseline > 0:
+                        diff = premium - comparison_baseline
+                        pct = abs(diff) / comparison_baseline * 100
+                        if diff < 0:
+                            # Savings: show without minus sign, add percentage
+                            text = f"${abs(diff):,.0f} ({pct:.0f}%)"
+                            color = COLORS['savings_green']
+                        elif diff > 0:
+                            # Cost increase: show with plus sign, add percentage
+                            text = f"+${diff:,.0f} ({pct:.0f}%)"
+                            color = COLORS['cost_red']
+                        else:
+                            text = "$0"
+                            color = COLORS['secondary']
+                        self._set_cell_text(cell, text, color, font_size=10, bold=True)
+                    else:
+                        self._set_cell_text(cell, "—", COLORS['secondary'], font_size=10)
 
         # Add QR code linking to member breakdown page (if enabled, has breakdown data, and has dependents)
         has_dependents = employee.family_status in ('ES', 'EC', 'F') or bool(employee.family_ages)
@@ -500,6 +547,7 @@ class EmployeeExamplesSlideGenerator:
             from r2_storage import R2StorageService
             from qr_generator import generate_qr_code
             from member_breakdown_template import generate_member_breakdown_html
+            from url_shortener import shorten_url
 
             # Check if R2 is configured
             r2 = R2StorageService()
@@ -528,37 +576,77 @@ class EmployeeExamplesSlideGenerator:
                 return
             logger.info(f"Uploaded successfully, URL: {url[:80]}...")
 
+            # Shorten URL for cleaner QR code (falls back to original if dub not configured)
+            short_url = shorten_url(url)
+            if short_url != url:
+                logger.info(f"Shortened URL: {short_url}")
+
             # Generate QR code image
-            qr_buffer = generate_qr_code(url)
+            qr_buffer = generate_qr_code(short_url)
             if not qr_buffer:
                 logger.warning(f"Failed to generate QR code for {employee.name}")
                 return
             logger.info(f"QR code generated for {employee.name}")
 
-            # Add QR code to slide (bottom-right corner, larger for easy scanning)
+            # Add QR code to slide (bottom-right corner)
+            qr_size = Inches(2.5)
+            qr_left = Inches(10.6)
+            qr_top = Inches(4.25) + banner_offset
+
             slide.shapes.add_picture(
                 qr_buffer,
-                left=Inches(10.8),
-                top=Inches(4.3) + banner_offset,
-                width=Inches(1.6),
-                height=Inches(1.6)
+                left=qr_left,
+                top=qr_top,
+                width=qr_size,
+                height=qr_size
             )
 
             # Calculate expiration date (7 days from now)
             expiry_date = (datetime.now() + timedelta(days=7)).strftime("%b %d, %Y")
 
-            # Add label below QR
+            # Add styled label below QR
+            label_left = Inches(10.62)
+            label_top = Inches(6.81)
             qr_label = slide.shapes.add_textbox(
-                Inches(10.5), Inches(5.95) + banner_offset, Inches(2.3), Inches(0.5)
+                label_left, label_top, Inches(2.5), Inches(0.5)
             )
             tf = qr_label.text_frame
             tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.text = f"Scan for member\nrate breakdown\nExpires {expiry_date}"
-            p.font.name = 'Poppins'
-            p.font.size = Pt(8)
-            p.font.color.rgb = COLORS['secondary']
-            p.alignment = PP_ALIGN.CENTER
+
+            # Title line
+            p1 = tf.paragraphs[0]
+            p1.text = "Scan for member details"
+            p1.font.name = 'Poppins'
+            p1.font.size = Pt(9)
+            p1.font.bold = True
+            p1.font.color.rgb = RGBColor(0x93, 0x42, 0x1B)  # Glove brand color
+            p1.alignment = PP_ALIGN.CENTER
+
+            # Clickable link line (for desktop viewers)
+            p2 = tf.add_paragraph()
+            # "click " text (no hyperlink)
+            run1 = p2.add_run()
+            run1.text = "click "
+            run1.font.name = 'Poppins'
+            run1.font.size = Pt(8)
+            run1.font.color.rgb = COLORS['secondary']
+            # "here" as hyperlink
+            run2 = p2.add_run()
+            run2.text = "here"
+            run2.font.name = 'Poppins'
+            run2.font.size = Pt(8)
+            run2.font.color.rgb = RGBColor(0x37, 0xBE, 0xAE)  # Glove teal
+            run2.font.underline = True
+            run2.hyperlink.address = short_url
+            p2.alignment = PP_ALIGN.CENTER
+
+            # Expiry line
+            p3 = tf.add_paragraph()
+            p3.text = f"Expires {expiry_date}"
+            p3.font.name = 'Poppins'
+            p3.font.size = Pt(7)
+            p3.font.color.rgb = COLORS['secondary']
+            p3.alignment = PP_ALIGN.CENTER
 
         except ImportError as e:
             # Dependencies not installed, skip QR code
@@ -584,7 +672,8 @@ def generate_employee_examples_pptx(
     employee_examples: List[Dict],
     client_name: str = "",
     plan_config: Dict = None,
-    include_qr_links: bool = False
+    include_qr_links: bool = False,
+    has_renewal_data: bool = True
 ) -> BytesIO:
     """
     Generate PowerPoint slides for employee examples.
@@ -594,6 +683,7 @@ def generate_employee_examples_pptx(
         client_name: Optional client name for footer
         plan_config: Optional plan configurator settings dict for dynamic columns
         include_qr_links: Whether to add QR codes linking to member breakdown pages
+        has_renewal_data: Whether renewal data is available (hides Renewal column if False)
 
     Returns:
         BytesIO containing the PowerPoint file
@@ -617,6 +707,8 @@ def generate_employee_examples_pptx(
             current_total_monthly=emp.get('current_total_monthly', 0),
             renewal_total_monthly=emp.get('renewal_total_monthly', 0),
             use_ee_rate_only=emp.get('use_ee_rate_only', False),
+            has_renewal_data=has_renewal_data,
+            contribution_strategy=emp.get('contribution_strategy', ''),
         ))
 
     generator = EmployeeExamplesSlideGenerator(

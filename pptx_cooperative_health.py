@@ -54,7 +54,6 @@ SLIDE_HEIGHT = Inches(7.5)
 
 # Decorative image paths
 DECORATIVES_DIR = Path(__file__).parent / "decoratives"
-CORNER_IMAGE = DECORATIVES_DIR / "glove-tile-corner.png"
 EDGE_IMAGE = DECORATIVES_DIR / "glove-tile-edge-h-fade.png"
 
 # Banner image path
@@ -142,9 +141,15 @@ class CooperativeHealthData:
     preventive_rate: float = 0.0  # Per-employee rate
     preventive_employee_count: int = 0
     preventive_include_dpc: bool = True  # "with DPC" vs "without DPC"
+    # Preventive by tier: {tier_code: {'rate': X, 'count': Y, 'total': Z}}
+    preventive_by_tier: Dict[str, Dict] = field(default_factory=dict)
 
     # Admin fee flag (True if any plan column has admin fee > 0)
     has_admin_fees: bool = False
+
+    # Renewal data availability - when False, hide renewal column and compare to current
+    has_renewal_data: bool = True
+    comparison_label: str = "Savings vs Renewal"  # "Savings vs Renewal" or "Savings vs Current"
 
     # Client info
     client_name: str = ""
@@ -405,9 +410,12 @@ class CooperativeHealthSlideGenerator:
         subtitle_tf.paragraphs[0].font.size = Pt(14)
         subtitle_tf.paragraphs[0].font.color.rgb = COLORS['gap_text']
 
-        # Dynamic column count: 3 fixed (Coverage Type, Current, Renewal) + plan columns
+        # Dynamic column count: fixed columns + plan columns
+        # 3 fixed (Coverage Type, Current, Renewal) when has_renewal_data
+        # 2 fixed (Coverage Type, Current) when no renewal data
         num_plan_cols = len(data.plan_columns)
-        num_cols = 3 + num_plan_cols
+        num_fixed_cols = 3 if data.has_renewal_data else 2
+        num_cols = num_fixed_cols + num_plan_cols
 
         # Create table
         table_left = Inches(0.5)
@@ -416,20 +424,17 @@ class CooperativeHealthSlideGenerator:
 
         # Calculate row heights
         header_height = Inches(0.5)
-        tier_height = Inches(0.65) if data.has_gap else Inches(0.5)
+        # Increase tier height if gap or preventive data exists (extra lines)
+        tier_height = Inches(0.75) if (data.has_gap or data.has_preventive) else Inches(0.5)
         summary_height = Inches(0.45)
 
         # Calculate dynamic row count
         # Base: Header + 4 tiers + Total Monthly + Annual Total + Savings vs Renewal = 8
         num_rows = 8
-        if data.has_preventive:
-            num_rows += 1
         if data.has_admin_fees:
-            num_rows += 1
-        if data.has_preventive or data.has_admin_fees:
-            num_rows += 1  # Grand Total row
+            num_rows += 1  # Admin Fee row (Grand Total merged into Total Monthly)
 
-        num_summary_rows = 3 + (1 if data.has_preventive else 0) + (1 if data.has_admin_fees else 0) + (1 if data.has_preventive or data.has_admin_fees else 0)
+        num_summary_rows = 3 + (1 if data.has_admin_fees else 0)
         table_height = header_height + (4 * tier_height) + (num_summary_rows * summary_height)
 
         # Add table with dynamic columns
@@ -445,18 +450,29 @@ class CooperativeHealthSlideGenerator:
         for i in range(1, num_cols):
             table.columns[i].width = other_col_width
 
-        # Build dynamic headers and colors
-        headers = ['Coverage Type', 'Current 2025', 'Renewal 2026']
-        header_colors = [
-            (COLORS['row_label_bg'], COLORS['row_label_text']),
-            (COLORS['current_header'], COLORS['current_text']),
-            (COLORS['renewal_header'], COLORS['renewal_text']),
-        ]
-        data_text_colors = [
-            COLORS['row_label_text'],
-            COLORS['current_text'],
-            COLORS['renewal_text'],
-        ]
+        # Build dynamic headers and colors - conditionally include renewal column
+        if data.has_renewal_data:
+            headers = ['Coverage Type', 'Current 2025', 'Renewal 2026']
+            header_colors = [
+                (COLORS['row_label_bg'], COLORS['row_label_text']),
+                (COLORS['current_header'], COLORS['current_text']),
+                (COLORS['renewal_header'], COLORS['renewal_text']),
+            ]
+            data_text_colors = [
+                COLORS['row_label_text'],
+                COLORS['current_text'],
+                COLORS['renewal_text'],
+            ]
+        else:
+            headers = ['Coverage Type', 'Current 2025']
+            header_colors = [
+                (COLORS['row_label_bg'], COLORS['row_label_text']),
+                (COLORS['current_header'], COLORS['current_text']),
+            ]
+            data_text_colors = [
+                COLORS['row_label_text'],
+                COLORS['current_text'],
+            ]
 
         # Add plan column headers and colors
         for plan_col in data.plan_columns:
@@ -473,6 +489,14 @@ class CooperativeHealthSlideGenerator:
             cell = table.cell(0, col_idx)
             self._set_cell_fill(cell, bg_color)
             self._set_cell_text(cell, header_text, text_color, font_size=12, bold=True)
+
+        # Add "with Preventive" subtitle to HAS column headers when preventive is enabled
+        if data.has_preventive:
+            for col_offset, plan_col in enumerate(data.plan_columns):
+                if plan_col.plan_type == 'has':
+                    col_idx = num_fixed_cols + col_offset
+                    cell = table.cell(0, col_idx)
+                    self._add_cell_line(cell, "with Preventive", COLORS['has_text'], font_size=9)
 
         # Style tier rows (white background for data cells)
         for row_idx, tier in enumerate(data.tiers, start=1):
@@ -498,21 +522,22 @@ class CooperativeHealthSlideGenerator:
                     breakdown = f"${tier.current_rate_per_ee:,.0f}"
                 self._add_cell_line(cell, breakdown, COLORS['gap_text'], font_size=9)
 
-            # Renewal 2026 column
-            cell = table.cell(row_idx, 2)
-            self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, self._format_currency(tier.renewal_total),
-                               data_text_colors[2], font_size=12, bold=True)
-            if tier.renewal_rate_per_ee > 0:
-                if data.has_gap and tier.gap_rate_per_ee > 0:
-                    breakdown = f"${tier.renewal_rate_per_ee:,.0f} + ${tier.gap_rate_per_ee:,.0f} gap"
-                else:
-                    breakdown = f"${tier.renewal_rate_per_ee:,.0f}"
-                self._add_cell_line(cell, breakdown, COLORS['gap_text'], font_size=9)
+            # Renewal 2026 column (only if has_renewal_data)
+            if data.has_renewal_data:
+                cell = table.cell(row_idx, 2)
+                self._set_cell_fill(cell, COLORS['white'])
+                self._set_cell_text(cell, self._format_currency(tier.renewal_total),
+                                   data_text_colors[2], font_size=12, bold=True)
+                if tier.renewal_rate_per_ee > 0:
+                    if data.has_gap and tier.gap_rate_per_ee > 0:
+                        breakdown = f"${tier.renewal_rate_per_ee:,.0f} + ${tier.gap_rate_per_ee:,.0f} gap"
+                    else:
+                        breakdown = f"${tier.renewal_rate_per_ee:,.0f}"
+                    self._add_cell_line(cell, breakdown, COLORS['gap_text'], font_size=9)
 
             # Dynamic plan columns
             for col_offset, plan_col in enumerate(data.plan_columns):
-                col_idx = 3 + col_offset
+                col_idx = num_fixed_cols + col_offset
                 cell = table.cell(row_idx, col_idx)
                 self._set_cell_fill(cell, COLORS['white'])
 
@@ -524,67 +549,19 @@ class CooperativeHealthSlideGenerator:
                     if tier_plan_data.min_rate > 0 and tier_plan_data.max_rate > 0:
                         rate_range = f"${tier_plan_data.min_rate:,.0f}-${tier_plan_data.max_rate:,.0f}"
                         self._add_cell_line(cell, rate_range, COLORS['gap_text'], font_size=9)
+                    # Add preventive care breakdown if enabled for this tier (HAS only)
+                    if data.has_preventive and plan_col.plan_type == 'has' and tier.code in data.preventive_by_tier:
+                        prev_data = data.preventive_by_tier[tier.code]
+                        if prev_data.get('count', 0) > 0:
+                            prev_line = f"${prev_data['rate']:,.0f}/mo × {prev_data['count']} = +${prev_data['total']:,.0f}"
+                            self._add_cell_line(cell, prev_line, COLORS['gap_text'], font_size=9)
                 else:
                     self._set_cell_text(cell, "N/A", COLORS['gap_text'], font_size=12)
 
         # Track current row index (starts after tier rows)
         current_row = 5
 
-        # Row: Total Monthly
-        total_monthly_row = current_row
-        total_label = "Total Monthly*" if data.has_gap else "Total Monthly"
-
-        cell = table.cell(total_monthly_row, 0)
-        self._set_cell_fill(cell, COLORS['white'])
-        self._set_cell_text(cell, total_label, COLORS['total_text'],
-                           font_size=12, bold=True, align=PP_ALIGN.LEFT)
-
-        # Current and Renewal monthly totals
-        for col_idx, total_val in enumerate([data.total_current, data.total_renewal], start=1):
-            cell = table.cell(total_monthly_row, col_idx)
-            self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, self._format_currency(total_val), data_text_colors[col_idx],
-                               font_size=13, bold=True)
-
-        # Plan column monthly totals
-        for col_offset, plan_col in enumerate(data.plan_columns):
-            col_idx = 3 + col_offset
-            cell = table.cell(total_monthly_row, col_idx)
-            self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, self._format_currency(plan_col.monthly_total),
-                               data_text_colors[col_idx], font_size=13, bold=True)
-
-        current_row += 1
-
-        # Row: Preventive Care (if enabled)
-        if data.has_preventive:
-            preventive_row = current_row
-            dpc_label = "with DPC" if data.preventive_include_dpc else "without DPC"
-
-            cell = table.cell(preventive_row, 0)
-            self._set_cell_fill(cell, COLORS['row_label_bg'])
-            self._set_cell_text(cell, "Preventive Care", COLORS['row_label_text'],
-                               font_size=11, bold=True, align=PP_ALIGN.LEFT)
-            self._add_cell_line(cell, dpc_label, COLORS['gap_text'], font_size=9, align=PP_ALIGN.LEFT)
-
-            # Empty cells for Current and Renewal
-            for col_idx in [1, 2]:
-                cell = table.cell(preventive_row, col_idx)
-                self._set_cell_fill(cell, COLORS['white'])
-
-            # Plan column preventive totals (same value for all)
-            rate_breakdown = f"${data.preventive_rate:.0f}/mo × {data.preventive_employee_count} EEs"
-            for col_offset, plan_col in enumerate(data.plan_columns):
-                col_idx = 3 + col_offset
-                cell = table.cell(preventive_row, col_idx)
-                self._set_cell_fill(cell, COLORS['white'])
-                self._set_cell_text(cell, self._format_currency(data.preventive_total),
-                                   data_text_colors[col_idx], font_size=12, bold=True)
-                self._add_cell_line(cell, rate_breakdown, COLORS['gap_text'], font_size=9)
-
-            current_row += 1
-
-        # Row: Admin Fee (if any plan has admin fee)
+        # Row: Admin Fee (if any plan has admin fee) - appears above Total Monthly
         if data.has_admin_fees:
             admin_row = current_row
 
@@ -593,14 +570,18 @@ class CooperativeHealthSlideGenerator:
             self._set_cell_text(cell, "Admin Fee", COLORS['row_label_text'],
                                font_size=11, bold=True, align=PP_ALIGN.LEFT)
 
-            # Empty cells for Current and Renewal
-            for col_idx in [1, 2]:
-                cell = table.cell(admin_row, col_idx)
+            # Empty cell for Current
+            cell = table.cell(admin_row, 1)
+            self._set_cell_fill(cell, COLORS['white'])
+
+            # Empty cell for Renewal (only if has_renewal_data)
+            if data.has_renewal_data:
+                cell = table.cell(admin_row, 2)
                 self._set_cell_fill(cell, COLORS['white'])
 
             # Plan column admin fees
             for col_offset, plan_col in enumerate(data.plan_columns):
-                col_idx = 3 + col_offset
+                col_idx = num_fixed_cols + col_offset
                 cell = table.cell(admin_row, col_idx)
                 self._set_cell_fill(cell, COLORS['white'])
                 if plan_col.admin_fee_total > 0:
@@ -613,30 +594,38 @@ class CooperativeHealthSlideGenerator:
 
             current_row += 1
 
-        # Row: Grand Total (if preventive or admin fees exist)
-        if data.has_preventive or data.has_admin_fees:
-            grand_total_row = current_row
+        # Row: Total Monthly (now includes admin fees - this is the grand total)
+        total_monthly_row = current_row
+        total_label = "Total Monthly*" if data.has_gap else "Total Monthly"
 
-            cell = table.cell(grand_total_row, 0)
+        cell = table.cell(total_monthly_row, 0)
+        self._set_cell_fill(cell, COLORS['white'])
+        self._set_cell_text(cell, total_label, COLORS['total_text'],
+                           font_size=12, bold=True, align=PP_ALIGN.LEFT)
+
+        # Current monthly total
+        cell = table.cell(total_monthly_row, 1)
+        self._set_cell_fill(cell, COLORS['white'])
+        self._set_cell_text(cell, self._format_currency(data.total_current), data_text_colors[1],
+                           font_size=13, bold=True)
+
+        # Renewal monthly total (only if has_renewal_data)
+        if data.has_renewal_data:
+            cell = table.cell(total_monthly_row, 2)
             self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, "Grand Total", COLORS['total_text'],
-                               font_size=12, bold=True, align=PP_ALIGN.LEFT)
+            self._set_cell_text(cell, self._format_currency(data.total_renewal), data_text_colors[2],
+                               font_size=13, bold=True)
 
-            # Empty cells for Current and Renewal
-            for col_idx in [1, 2]:
-                cell = table.cell(grand_total_row, col_idx)
-                self._set_cell_fill(cell, COLORS['white'])
+        # Plan column monthly totals (grand total = monthly_total + admin_fee_total)
+        for col_offset, plan_col in enumerate(data.plan_columns):
+            col_idx = num_fixed_cols + col_offset
+            cell = table.cell(total_monthly_row, col_idx)
+            self._set_cell_fill(cell, COLORS['white'])
+            grand_total = plan_col.monthly_total + plan_col.admin_fee_total
+            self._set_cell_text(cell, self._format_currency(grand_total),
+                               data_text_colors[col_idx], font_size=13, bold=True)
 
-            # Plan column grand totals (monthly_total + preventive + admin_fee)
-            for col_offset, plan_col in enumerate(data.plan_columns):
-                col_idx = 3 + col_offset
-                cell = table.cell(grand_total_row, col_idx)
-                self._set_cell_fill(cell, COLORS['white'])
-                grand_total = plan_col.monthly_total + (data.preventive_total if data.has_preventive else 0) + plan_col.admin_fee_total
-                self._set_cell_text(cell, self._format_currency(grand_total),
-                                   data_text_colors[col_idx], font_size=13, bold=True)
-
-            current_row += 1
+        current_row += 1
 
         # Row: Annual Total
         annual_row = current_row
@@ -645,16 +634,22 @@ class CooperativeHealthSlideGenerator:
         self._set_cell_text(cell, "Annual Total", COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
-        # Current and Renewal annual totals
-        for col_idx, annual_val in enumerate([data.annual_current, data.annual_renewal], start=1):
-            cell = table.cell(annual_row, col_idx)
+        # Current annual total
+        cell = table.cell(annual_row, 1)
+        self._set_cell_fill(cell, COLORS['white'])
+        self._set_cell_text(cell, self._format_currency(data.annual_current), data_text_colors[1],
+                           font_size=12, bold=True)
+
+        # Renewal annual total (only if has_renewal_data)
+        if data.has_renewal_data:
+            cell = table.cell(annual_row, 2)
             self._set_cell_fill(cell, COLORS['white'])
-            self._set_cell_text(cell, self._format_currency(annual_val), data_text_colors[col_idx],
+            self._set_cell_text(cell, self._format_currency(data.annual_renewal), data_text_colors[2],
                                font_size=12, bold=True)
 
         # Plan column annual totals
         for col_offset, plan_col in enumerate(data.plan_columns):
-            col_idx = 3 + col_offset
+            col_idx = num_fixed_cols + col_offset
             cell = table.cell(annual_row, col_idx)
             self._set_cell_fill(cell, COLORS['white'])
             self._set_cell_text(cell, self._format_currency(plan_col.annual_total),
@@ -662,25 +657,28 @@ class CooperativeHealthSlideGenerator:
 
         current_row += 1
 
-        # Row: Savings vs Renewal
+        # Row: Savings (dynamic label based on comparison baseline)
         savings_row = current_row
         cell = table.cell(savings_row, 0)
         self._set_cell_fill(cell, COLORS['white'])
-        self._set_cell_text(cell, "Savings vs Renewal", COLORS['total_text'],
+        self._set_cell_text(cell, data.comparison_label, COLORS['total_text'],
                            font_size=12, bold=True, align=PP_ALIGN.LEFT)
 
-        # Current column: empty
+        # Baseline column (Current or Renewal): dash to indicate comparison base
         cell = table.cell(savings_row, 1)
         self._set_cell_fill(cell, COLORS['white'])
-
-        # Renewal column: dash
-        cell = table.cell(savings_row, 2)
-        self._set_cell_fill(cell, COLORS['white'])
-        self._set_cell_text(cell, "—", COLORS['gap_text'], font_size=12)
+        if data.has_renewal_data:
+            # Current column empty, Renewal column shows dash
+            cell = table.cell(savings_row, 2)
+            self._set_cell_fill(cell, COLORS['white'])
+            self._set_cell_text(cell, "—", COLORS['gap_text'], font_size=12)
+        else:
+            # No renewal column, Current column shows dash
+            self._set_cell_text(cell, "—", COLORS['gap_text'], font_size=12)
 
         # Plan column savings - dollar amount first, percentage on second line (matches UI)
         for col_offset, plan_col in enumerate(data.plan_columns):
-            col_idx = 3 + col_offset
+            col_idx = num_fixed_cols + col_offset
             cell = table.cell(savings_row, col_idx)
             self._set_cell_fill(cell, COLORS['white'])
 
@@ -806,18 +804,7 @@ class CooperativeHealthSlideGenerator:
         subtitle_tf.paragraphs[0].font.color.rgb = text_color
 
     def _add_decoratives(self, slide) -> None:
-        """Add decorative corner and edge images to the slide"""
-        # Corner image - top left (175x175px → ~1.5" at 120 DPI scale)
-        corner_size = Inches(1.5)
-        if CORNER_IMAGE.exists():
-            slide.shapes.add_picture(
-                str(CORNER_IMAGE),
-                left=Inches(0),
-                top=Inches(0),
-                width=corner_size,
-                height=corner_size
-            )
-
+        """Add decorative edge images to the slide"""
         # Edge image - bottom right (smaller for better balance)
         edge_width = Inches(3.2)
         edge_height = Inches(0.8)

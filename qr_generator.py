@@ -6,25 +6,30 @@ Generates QR code images for embedding in PowerPoint presentations.
 
 import logging
 from io import BytesIO
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Glove brand color for QR codes
+GLOVE_QR_COLOR = "#37BEAE"
+LOGO_PATH = Path(__file__).parent / "decoratives" / "glove_logo.png"
 
 
 def generate_qr_code(
     url: str,
     box_size: int = 10,
-    border: int = 2,
-    fill_color: str = "black",
+    border: int = 4,
+    fill_color: str = GLOVE_QR_COLOR,
     back_color: str = "white"
 ) -> Optional[BytesIO]:
-    """Generate QR code image as BytesIO for embedding in PPT.
+    """Generate styled QR code image as BytesIO for embedding in PPT.
 
     Args:
         url: URL to encode in QR code
         box_size: Size of each box in pixels (default 10)
-        border: Border size in boxes (default 2)
-        fill_color: QR code color (default black)
+        border: Border size in boxes (default 4)
+        fill_color: QR code color (default Glove brand color)
         back_color: Background color (default white)
 
     Returns:
@@ -32,28 +37,101 @@ def generate_qr_code(
     """
     try:
         import qrcode
-        from qrcode.constants import ERROR_CORRECT_M
+        from qrcode.constants import ERROR_CORRECT_H
+        from qrcode.image.styledpil import StyledPilImage
+        from qrcode.image.styles.moduledrawers import RoundedModuleDrawer
+        from qrcode.image.styles.colormasks import SolidFillColorMask
+        from PIL import Image
 
         qr = qrcode.QRCode(
-            version=1,
-            error_correction=ERROR_CORRECT_M,  # ~15% error correction
+            version=None,  # Auto-determine version
+            error_correction=ERROR_CORRECT_H,  # 30% - needed for logo
             box_size=box_size,
             border=border,
         )
         qr.add_data(url)
         qr.make(fit=True)
 
-        img = qr.make_image(fill_color=fill_color, back_color=back_color)
+        # Convert hex color to RGB tuple
+        if fill_color.startswith('#'):
+            fill_rgb = tuple(int(fill_color[i:i+2], 16) for i in (1, 3, 5))
+        else:
+            fill_rgb = (55, 190, 174)  # Fallback to Glove teal
+
+        # Generate styled QR with rounded modules
+        img = qr.make_image(
+            image_factory=StyledPilImage,
+            module_drawer=RoundedModuleDrawer(),
+            color_mask=SolidFillColorMask(
+                back_color=(255, 255, 255),
+                front_color=fill_rgb
+            )
+        )
+
+        # Add logo in center if available
+        if LOGO_PATH.exists():
+            try:
+                from PIL import ImageDraw
+
+                logo = Image.open(LOGO_PATH)
+
+                # Calculate logo size (max 25% of QR code)
+                qr_width, qr_height = img.size
+                max_logo_size = int(qr_width * 0.25)
+
+                # Resize logo maintaining aspect ratio
+                logo.thumbnail((max_logo_size, max_logo_size), Image.Resampling.LANCZOS)
+                logo_width, logo_height = logo.size
+
+                # Center logo on QR code
+                logo_x = (qr_width - logo_width) // 2
+                logo_y = (qr_height - logo_height) // 2
+
+                # Create rounded white background for logo (with padding)
+                padding = 10
+                corner_radius = 20
+                bg_width = logo_width + padding * 2
+                bg_height = logo_height + padding * 2
+
+                # Create rounded rectangle mask
+                rounded_bg = Image.new('RGBA', (bg_width, bg_height), (0, 0, 0, 0))
+                mask = Image.new('L', (bg_width, bg_height), 0)
+                mask_draw = ImageDraw.Draw(mask)
+                mask_draw.rounded_rectangle(
+                    [(0, 0), (bg_width - 1, bg_height - 1)],
+                    radius=corner_radius,
+                    fill=255
+                )
+
+                # Apply white fill with rounded mask
+                white_fill = Image.new('RGBA', (bg_width, bg_height), (255, 255, 255, 255))
+                rounded_bg.paste(white_fill, mask=mask)
+
+                # Convert QR to RGBA if needed
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+
+                # Paste rounded white background
+                img.paste(rounded_bg, (logo_x - padding, logo_y - padding), rounded_bg)
+
+                # Paste logo
+                if logo.mode == 'RGBA':
+                    img.paste(logo, (logo_x, logo_y), logo)
+                else:
+                    img.paste(logo, (logo_x, logo_y))
+
+            except Exception as e:
+                logger.warning(f"Failed to add logo to QR code: {e}")
 
         buffer = BytesIO()
         img.save(buffer, format='PNG')
         buffer.seek(0)
 
-        logger.debug(f"Generated QR code for URL: {url[:50]}...")
+        logger.debug(f"Generated styled QR code for URL: {url[:50]}...")
         return buffer
 
-    except ImportError:
-        logger.error("qrcode library not installed. Run: pip install qrcode[pil]")
+    except ImportError as e:
+        logger.error(f"qrcode styled components not available: {e}. Run: pip install qrcode[pil]")
         return None
     except Exception as e:
         logger.error(f"Failed to generate QR code: {e}")
