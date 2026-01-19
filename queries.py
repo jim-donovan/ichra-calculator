@@ -1106,6 +1106,185 @@ WHERE
         logging.info(f"LCP ALL METALS BATCH: Total batch time: {time.time() - batch_start:.2f}s")
         return result
 
+    @staticmethod
+    def get_slcsp_for_employees_batch(db: DatabaseConnection,
+                                       employee_locations: list) -> pd.DataFrame:
+        """
+        Get Second Lowest Cost Silver Plan (SLCSP) for multiple employees in one query.
+
+        The SLCSP is used for ACA Premium Tax Credit (subsidy) calculations.
+        This is different from LCSP (Lowest Cost Silver Plan) used for ICHRA affordability.
+
+        Uses a window function to rank Silver plans by premium and select rank=2.
+
+        Args:
+            db: Database connection
+            employee_locations: List of dicts with keys: state_code, rating_area_id, age_band
+                               e.g., [{'state_code': 'CA', 'rating_area_id': 1, 'age_band': '35'}, ...]
+
+        Returns:
+            DataFrame with columns: hios_plan_id, plan_name, state_code,
+                                   rating_area_id, age_band, premium
+        """
+        import logging
+        import time
+        logging.info(f"SLCSP BATCH: Called with {len(employee_locations)} locations")
+        batch_start = time.time()
+
+        if not employee_locations:
+            return pd.DataFrame()
+
+        # Deduplicate combinations
+        unique_combos = []
+        seen = set()
+        for loc in employee_locations:
+            key = (loc['state_code'], loc['rating_area_id'], loc['age_band'])
+            if key not in seen:
+                seen.add(key)
+                unique_combos.append(loc)
+
+        logging.info(f"SLCSP BATCH: {len(unique_combos)} unique combinations after dedup")
+
+        if not unique_combos:
+            return pd.DataFrame()
+
+        # Build UNION ALL query for each unique combination
+        # Uses window function to get the SECOND lowest cost Silver plan
+        union_queries = []
+        params = []
+
+        for combo in unique_combos:
+            union_queries.append("""
+            (WITH ranked_plans AS (
+                SELECT
+                    p.hios_plan_id,
+                    p.plan_marketing_name as plan_name,
+                    SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
+                    CASE
+                        WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                        THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                        ELSE NULL
+                    END AS rating_area_id,
+                    br.age as age_band,
+                    br.individual_rate::numeric as premium,
+                    ROW_NUMBER() OVER (
+                        ORDER BY br.individual_rate::numeric ASC
+                    ) as rank
+                FROM rbis_insurance_plan_base_rates_20251019202724 br
+                JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
+                JOIN rbis_insurance_plan_variant_20251019202724 v ON p.hios_plan_id = v.hios_plan_id
+                WHERE p.level_of_coverage = 'Silver'
+                    AND p.market_coverage = 'Individual'
+                    AND v.csr_variation_type = 'Exchange variant (no CSR)'
+                    AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                    AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
+                    AND br.age = %s
+                    AND br.rate_effective_date = '2026-01-01'
+                    AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)
+            )
+            SELECT hios_plan_id, plan_name, state_code, rating_area_id, age_band, premium
+            FROM ranked_plans
+            WHERE rank = 2)
+            """)
+            params.extend([combo['state_code'], combo['rating_area_id'], combo['age_band']])
+
+        query = "\nUNION ALL\n".join(union_queries)
+        logging.info(f"SLCSP BATCH: Executing query with {len(unique_combos)} UNION ALLs...")
+        query_start = time.time()
+        result = db.execute_query(query, tuple(params))
+        logging.info(f"SLCSP BATCH: Query completed in {time.time() - query_start:.2f}s, returned {len(result)} rows")
+        logging.info(f"SLCSP BATCH: Total batch time: {time.time() - batch_start:.2f}s")
+        return result
+
+    @staticmethod
+    def get_lcsp_and_slcsp_batch(db: DatabaseConnection,
+                                  employee_locations: list) -> pd.DataFrame:
+        """
+        Get both LCSP and SLCSP for multiple employees in one efficient query.
+
+        Returns both the Lowest Cost Silver Plan (rank=1) and Second Lowest Cost
+        Silver Plan (rank=2) for each location, useful for unaffordability analysis.
+
+        Args:
+            db: Database connection
+            employee_locations: List of dicts with keys: state_code, rating_area_id, age_band
+
+        Returns:
+            DataFrame with columns: hios_plan_id, plan_name, state_code,
+                                   rating_area_id, age_band, premium, plan_rank
+                                   where plan_rank is 1 (LCSP) or 2 (SLCSP)
+        """
+        import logging
+        import time
+        logging.info(f"LCSP+SLCSP BATCH: Called with {len(employee_locations)} locations")
+        batch_start = time.time()
+
+        if not employee_locations:
+            return pd.DataFrame()
+
+        # Deduplicate combinations
+        unique_combos = []
+        seen = set()
+        for loc in employee_locations:
+            key = (loc['state_code'], loc['rating_area_id'], loc['age_band'])
+            if key not in seen:
+                seen.add(key)
+                unique_combos.append(loc)
+
+        logging.info(f"LCSP+SLCSP BATCH: {len(unique_combos)} unique combinations after dedup")
+
+        if not unique_combos:
+            return pd.DataFrame()
+
+        # Build UNION ALL query - get rank 1 AND rank 2 for each combo
+        union_queries = []
+        params = []
+
+        for combo in unique_combos:
+            union_queries.append("""
+            (WITH ranked_plans AS (
+                SELECT
+                    p.hios_plan_id,
+                    p.plan_marketing_name as plan_name,
+                    SUBSTRING(p.hios_plan_id, 6, 2) AS state_code,
+                    CASE
+                        WHEN br.rating_area_id ~ '^Rating Area [0-9]+$'
+                        THEN (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer
+                        ELSE NULL
+                    END AS rating_area_id,
+                    br.age as age_band,
+                    br.individual_rate::numeric as premium,
+                    ROW_NUMBER() OVER (
+                        ORDER BY br.individual_rate::numeric ASC
+                    ) as plan_rank
+                FROM rbis_insurance_plan_base_rates_20251019202724 br
+                JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
+                JOIN rbis_insurance_plan_variant_20251019202724 v ON p.hios_plan_id = v.hios_plan_id
+                WHERE p.level_of_coverage = 'Silver'
+                    AND p.market_coverage = 'Individual'
+                    AND v.csr_variation_type = 'Exchange variant (no CSR)'
+                    AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                    AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                    AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
+                    AND br.age = %s
+                    AND br.rate_effective_date = '2026-01-01'
+                    AND (br.tobacco IN ('No Preference', 'None', 'Tobacco User/Non-Tobacco User') OR br.tobacco IS NULL)
+            )
+            SELECT hios_plan_id, plan_name, state_code, rating_area_id, age_band, premium, plan_rank
+            FROM ranked_plans
+            WHERE plan_rank IN (1, 2))
+            """)
+            params.extend([combo['state_code'], combo['rating_area_id'], combo['age_band']])
+
+        query = "\nUNION ALL\n".join(union_queries)
+        logging.info(f"LCSP+SLCSP BATCH: Executing query with {len(unique_combos)} UNION ALLs...")
+        query_start = time.time()
+        result = db.execute_query(query, tuple(params))
+        logging.info(f"LCSP+SLCSP BATCH: Query completed in {time.time() - query_start:.2f}s, returned {len(result)} rows")
+        logging.info(f"LCSP+SLCSP BATCH: Total batch time: {time.time() - batch_start:.2f}s")
+        return result
+
 
 class ComprehensivePlanQueries:
     """SQL queries for comprehensive plan data retrieval"""

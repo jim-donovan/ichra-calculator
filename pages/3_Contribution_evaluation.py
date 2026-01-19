@@ -1255,6 +1255,22 @@ num_employees = len(census_df)
 
 st.success(f"✓ {num_employees} employees loaded from census")
 
+# ALE vs Non-ALE Context
+is_ale = num_employees >= 50
+if is_ale:
+    st.info(
+        "**⚖️ ALE Employer (50+ employees)** — Subject to ACA employer mandate. "
+        "Primary goal is ensuring ICHRA contributions meet the **9.96% affordability threshold** "
+        "to avoid IRS penalties. Use the affordability analysis tools below to verify compliance."
+    )
+else:
+    st.info(
+        "**🎯 Non-ALE Employer (<50 employees)** — Not subject to ACA employer mandate. "
+        "You have flexibility to design contributions that may be **intentionally unaffordable**, "
+        "allowing employees to decline ICHRA and qualify for marketplace subsidies instead. "
+        "Use the **Subsidy Analysis** section to model this strategy."
+    )
+
 # Auto-run affordability analysis if income data exists
 if 'affordability_analysis' not in st.session_state:
     # Check if any employees have income data
@@ -1461,7 +1477,7 @@ if 'strategy_config' not in st.session_state:
         'base_age': 21,
         'base_contribution': 200.0,
         'lcsp_percentage': 75,
-        'tier_amounts': {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900},
+        'fpl_buffer': 5.0,  # FPL Safe Harbor buffer
         'apply_family_multipliers': False,
         'apply_location_adjustment': False,
         'high_cost_adjustment': 100.0,
@@ -1473,7 +1489,7 @@ STRATEGY_OPTIONS = {
     'flat_amount': 'Flat amount',
     'base_age_curve': 'Base age + ACA 3:1 curve',
     'percentage_lcsp': 'Percentage of LCSP',
-    'fixed_age_tiers': 'Fixed age tiers'
+    'fpl_safe_harbor': 'FPL Safe Harbor'
 }
 
 selected_strategy = st.radio(
@@ -1507,11 +1523,18 @@ if selected_strategy == 'flat_amount':
     # Save to session state
     st.session_state.strategy_config['flat_amount'] = flat_amount
 
-    st.info(f"""
-    **${flat_amount:,.0f}/month** for all employees (before family multipliers).
-    If income data is provided, contributions are automatically adjusted upward
-    for employees who need more to meet the 9.96% affordability threshold.
-    """)
+    if is_ale:
+        st.info(f"""
+        **${flat_amount:,.0f}/month** for all employees (before family multipliers).
+        **ALE Note:** Verify this amount meets the 9.96% affordability threshold for your workforce
+        using the affordability analysis below.
+        """)
+    else:
+        st.info(f"""
+        **${flat_amount:,.0f}/month** for all employees (before family multipliers).
+        **Non-ALE Tip:** You can set this below the affordability threshold intentionally.
+        Use **Subsidy Analysis** to see if employees would benefit more from marketplace subsidies.
+        """)
 
 elif selected_strategy == 'base_age_curve':
     st.markdown("""
@@ -1571,37 +1594,64 @@ elif selected_strategy == 'percentage_lcsp':
     # Save to session state
     st.session_state.strategy_config['lcsp_percentage'] = lcsp_percentage
 
-    st.info(f"""
-    At **{lcsp_percentage}%**: Employees pay {100-lcsp_percentage}% of LCSP.
-    For affordability, employee cost must be ≤ 9.96% of income.
-    """)
+    if is_ale:
+        st.info(f"""
+        At **{lcsp_percentage}%**: Employees pay {100-lcsp_percentage}% of LCSP out-of-pocket.
+        **ALE Note:** Higher percentages (90%+) more likely to meet 9.96% affordability threshold.
+        """)
+    else:
+        st.info(f"""
+        At **{lcsp_percentage}%**: Employees pay {100-lcsp_percentage}% of LCSP out-of-pocket.
+        **Non-ALE Tip:** Lower percentages create intentional unaffordability.
+        Use **Subsidy Analysis** to compare with marketplace subsidies.
+        """)
 
-elif selected_strategy == 'fixed_age_tiers':
+elif selected_strategy == 'fpl_safe_harbor':
+    from constants import FPL_ANNUAL_2026, FPL_SAFE_HARBOR_THRESHOLD_2026
+
     st.markdown("""
-    Set fixed dollar amounts for each age tier.
-    Employees are assigned based on their age.
+    **Guarantees IRS affordability for ALL employees** — no income data required.
+
+    Uses the Federal Poverty Level (FPL) safe harbor: if an employee's cost for the
+    lowest-cost silver plan (LCSP) is ≤ 9.96% of FPL, the ICHRA is deemed affordable
+    for everyone regardless of actual income.
     """)
 
-    # 7 tiers in columns
-    tier_cols = st.columns(4)
-    tier_labels = ['21', '18-25', '26-35', '36-45', '46-55', '56-63', '64+']
-    default_amounts = st.session_state.strategy_config.get('tier_amounts',
-        {'21': 300, '18-25': 350, '26-35': 400, '36-45': 500, '46-55': 600, '56-63': 750, '64+': 900})
-
-    tier_amounts = {}
-    for i, tier in enumerate(tier_labels):
-        with tier_cols[i % 4]:
-            tier_amounts[tier] = st.number_input(
-                f"Age {tier}",
-                min_value=0.0,
-                max_value=5000.0,
-                value=float(default_amounts.get(tier, 400)),
-                step=25.0,
-                key=f"tier_{tier}"
-            )
+    # Show FPL details
+    fpl_cols = st.columns(3)
+    with fpl_cols[0]:
+        st.metric("2026 FPL (Single)", f"${FPL_ANNUAL_2026:,.0f}/yr")
+    with fpl_cols[1]:
+        st.metric("9.96% Threshold", f"${FPL_SAFE_HARBOR_THRESHOLD_2026:,.0f}/mo")
+    with fpl_cols[2]:
+        fpl_buffer = st.number_input(
+            "Safety buffer ($/mo)",
+            min_value=0.0,
+            max_value=50.0,
+            value=float(st.session_state.strategy_config.get('fpl_buffer', 5.0)),
+            step=1.0,
+            key="fpl_buffer_input",
+            help="Extra buffer above minimum to ensure compliance"
+        )
 
     # Save to session state
-    st.session_state.strategy_config['tier_amounts'] = tier_amounts
+    st.session_state.strategy_config['fpl_buffer'] = fpl_buffer
+
+    st.info(f"""
+    **How it works:** Each employee's contribution is set so their out-of-pocket cost
+    for LCSP is ≤ ${FPL_SAFE_HARBOR_THRESHOLD_2026:,.0f}/month (plus ${fpl_buffer:,.0f} buffer).
+
+    **Contribution formula:** `LCSP - ${FPL_SAFE_HARBOR_THRESHOLD_2026:,.0f} + ${fpl_buffer:,.0f}`
+
+    ✅ **100% IRS compliant** — no affordability failures possible
+    """)
+
+    if not is_ale:
+        st.warning("""
+        **Non-ALE Note:** This strategy guarantees affordability by design. If your goal is to allow
+        employees to qualify for marketplace subsidies, consider **Flat Amount** or **Percentage LCSP**
+        strategies which can create intentional unaffordability.
+        """)
 
 st.markdown("---")
 
@@ -1738,10 +1788,10 @@ if st.button("Calculate contributions", type="primary", key="calc_strategy_btn")
                     apply_location_adjustment=use_location_adj,
                     location_adjustments=location_adjustments
                 )
-            else:  # fixed_age_tiers
+            else:  # fpl_safe_harbor
                 config = StrategyConfig(
-                    strategy_type=StratType.FIXED_AGE_TIERS,
-                    tier_amounts=cfg.get('tier_amounts', {}),
+                    strategy_type=StratType.FPL_SAFE_HARBOR,
+                    fpl_buffer=cfg.get('fpl_buffer', 5.0),
                     apply_family_multipliers=use_family_mult,
                     apply_location_adjustment=use_location_adj,
                     location_adjustments=location_adjustments
@@ -2237,8 +2287,6 @@ if st.session_state.strategy_results and st.session_state.strategy_results.get('
                 strategy_str = f"percentage_lcsp_{int(config.get('lcsp_percentage', 0))}"
             elif strategy_type == 'base_age_curve':
                 strategy_str = f"base_age_curve_{int(config.get('base_contribution', 0))}"
-            elif strategy_type == 'fixed_age_tiers':
-                strategy_str = "fixed_age_tiers"
             else:
                 strategy_str = strategy_type
 
@@ -2890,6 +2938,268 @@ if st.session_state.contribution_analysis:
 
 # Navigation hint to Individual Analysis page
 st.info("💡 **Need to analyze individual employees?** Go to **5️⃣ Individual analysis** to view LCSP, marketplace options, and affordability details for specific employees.")
+
+st.markdown("---")
+
+# =============================================================================
+# UNAFFORDABILITY & SUBSIDY ANALYSIS (Non-ALE Strategy)
+# =============================================================================
+
+# Only show if we have strategy results
+if st.session_state.strategy_results and st.session_state.strategy_results.get('current'):
+    current_result = st.session_state.strategy_results['current']
+    strategy_type = current_result.get('strategy_type', '').lower()
+
+    # Check if this strategy can use unaffordability analysis
+    from subsidy_calculator import can_use_unaffordability_strategy
+
+    can_analyze = can_use_unaffordability_strategy(strategy_type)
+
+    # Check for income data
+    has_income = census_df['monthly_income'].notna().any() if 'monthly_income' in census_df.columns else False
+
+    with st.expander("📊 Unaffordability & Subsidy Analysis (Non-ALE)", expanded=False):
+        st.markdown("""
+        **For non-ALE employers:** Model intentional ICHRA unaffordability to help employees
+        qualify for marketplace subsidies. Core premise: *Use the larger of either the subsidy
+        or the ICHRA contribution.*
+        """)
+
+        if not can_analyze:
+            st.warning("""
+            ⚠️ **Not applicable with FPL Safe Harbor strategy**
+
+            The FPL Safe Harbor guarantees ICHRA affordability for all employees by definition.
+            Unaffordability analysis only applies to strategies where some employees may have
+            unaffordable ICHRA offers (Flat Amount, Age Curve, Age Tiers, or Percentage LCSP < 90%).
+            """)
+        elif not has_income:
+            st.warning("""
+            ⚠️ **Income data required**
+
+            Add a 'Monthly Income' column to your census to enable unaffordability analysis.
+            This data is needed to:
+            - Calculate FPL percentage for each employee
+            - Determine subsidy eligibility (must be < 400% FPL)
+            - Compare ICHRA contribution vs potential marketplace subsidy
+            """)
+        else:
+            # Run the unaffordability analysis
+            if st.button("Run Subsidy Analysis", key="run_subsidy_analysis", type="secondary"):
+                from subsidy_calculator import analyze_workforce_unaffordability
+                from queries import PlanQueries
+                # Note: get_age_band() is defined locally in this file around line 595
+
+                with st.spinner("Calculating subsidies and comparing to ICHRA contributions..."):
+                    try:
+                        # Build employee locations for SLCSP query
+                        employee_locations = []
+                        emp_lookup = {}  # Map (state, ra, age_band) -> employee_ids
+
+                        for _, emp in census_df.iterrows():
+                            emp_id = str(emp.get('employee_id') or
+                                       emp.get('Employee Number') or
+                                       emp.get('employee_number', ''))
+                            state = str(emp.get('state') or emp.get('Home State', '')).upper()
+                            ra_id = emp.get('rating_area_id')
+                            age = int(emp.get('age') or emp.get('ee_age', 30))
+                            age_band = get_age_band(age)
+
+                            if state and ra_id:
+                                loc = {'state_code': state, 'rating_area_id': int(ra_id), 'age_band': age_band}
+                                key = (state, int(ra_id), age_band)
+                                employee_locations.append(loc)
+                                if key not in emp_lookup:
+                                    emp_lookup[key] = []
+                                emp_lookup[key].append(emp_id)
+
+                        # Get LCSP and SLCSP data
+                        db = st.session_state.db
+                        lcsp_slcsp_df = PlanQueries.get_lcsp_and_slcsp_batch(db, employee_locations)
+
+                        # Build LCSP and SLCSP dictionaries by employee
+                        lcsp_data = {}
+                        slcsp_data = {}
+
+                        for _, row in lcsp_slcsp_df.iterrows():
+                            state = row['state_code']
+                            ra_id = int(row['rating_area_id'])
+                            age_band = row['age_band']
+                            premium = float(row['premium'])
+                            rank = int(row['plan_rank'])
+                            key = (state, ra_id, age_band)
+
+                            for emp_id in emp_lookup.get(key, []):
+                                if rank == 1:  # LCSP
+                                    lcsp_data[emp_id] = {'lcsp_premium': premium}
+                                elif rank == 2:  # SLCSP
+                                    slcsp_data[emp_id] = {'slcsp_premium': premium}
+
+                        # Get employee contributions from strategy results
+                        employee_contributions = current_result.get('employee_contributions', {})
+
+                        # Run analysis
+                        analysis_results = analyze_workforce_unaffordability(
+                            census_df=census_df,
+                            employee_contributions=employee_contributions,
+                            lcsp_data=lcsp_data,
+                            slcsp_data=slcsp_data,
+                            household_size=1  # Default to single
+                        )
+
+                        # Store in session state
+                        st.session_state.subsidy_analysis = analysis_results
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"Error running subsidy analysis: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+
+            # Display results if available
+            if 'subsidy_analysis' in st.session_state and st.session_state.subsidy_analysis:
+                analysis = st.session_state.subsidy_analysis
+                summary = analysis['summary']
+                under_65 = analysis['under_65']
+                medicare = analysis['medicare']
+
+                st.markdown("---")
+                st.markdown("### Analysis Results")
+
+                # Summary metrics
+                summary_cols = st.columns(4)
+
+                with summary_cols[0]:
+                    st.metric("Under 65", summary['under_65_count'])
+                    st.caption(f"Affordable: {summary['affordable_count']}")
+                    st.caption(f"Unaffordable: {summary['unaffordable_count']}")
+
+                with summary_cols[1]:
+                    st.metric("Medicare (65+)", summary['medicare_count'])
+                    st.caption("ICHRA only")
+                    st.caption("(no subsidy eligibility)")
+
+                with summary_cols[2]:
+                    st.metric("Subsidy Recommended", summary['subsidy_recommended_count'])
+                    st.caption("Better off with marketplace")
+
+                with summary_cols[3]:
+                    total_subsidies = summary['total_potential_subsidies_monthly']
+                    st.metric("Potential Subsidies", f"${total_subsidies:,.0f}/mo")
+                    st.caption(f"${total_subsidies * 12:,.0f}/yr")
+
+                # Cost comparison
+                st.markdown("---")
+                st.markdown("#### Cost Comparison")
+
+                cost_cols = st.columns(4)
+                with cost_cols[0]:
+                    st.metric("Total ER ICHRA (all)", f"${summary['total_er_ichra_monthly']:,.0f}/mo")
+                with cost_cols[1]:
+                    st.metric("ER ICHRA (affordable only)", f"${summary['total_er_ichra_affordable_monthly']:,.0f}/mo")
+                with cost_cols[2]:
+                    st.metric("Total Potential Subsidies", f"${summary['total_potential_subsidies_monthly']:,.0f}/mo")
+                with cost_cols[3]:
+                    net_benefit = summary['net_employee_benefit_monthly']
+                    st.metric("Net EE Benefit", f"${net_benefit:,.0f}/mo",
+                             help="Subsidy - foregone ICHRA for unaffordable employees")
+
+                # Employee detail tables
+                st.markdown("---")
+                st.markdown("#### Employee Detail (Under 65)")
+
+                if under_65:
+                    detail_data = []
+                    for r in under_65:
+                        detail_data.append({
+                            'Name': r.employee_name,
+                            'Age': r.age,
+                            'Income': f"${r.monthly_income:,.0f}",
+                            'LCSP': f"${r.lcsp_premium:,.0f}",
+                            'SLCSP': f"${r.slcsp_premium:,.0f}" if r.slcsp_premium else '-',
+                            'ER Contrib': f"${r.er_contribution:,.0f}",
+                            'Subsidy': f"${r.subsidy_value:,.0f}" if r.subsidy_value else '-',
+                            'Affordable': '✅' if r.is_affordable else '❌',
+                            'Recommend': r.recommendation,
+                        })
+
+                    detail_df = pd.DataFrame(detail_data)
+                    st.dataframe(detail_df, hide_index=True, width='stretch')
+                else:
+                    st.info("No employees under 65 with income data.")
+
+                # Medicare employees (separate section)
+                if medicare:
+                    st.markdown("---")
+                    st.markdown("#### Medicare-Eligible Employees (65+)")
+                    st.caption("*Medicare-eligible employees cannot receive ACA marketplace subsidies.*")
+
+                    medicare_data = []
+                    for r in medicare:
+                        medicare_data.append({
+                            'Name': r.employee_name,
+                            'Age': r.age,
+                            'ER Contribution': f"${r.er_contribution:,.0f}",
+                            'Note': 'ICHRA for Medicare premiums only'
+                        })
+
+                    medicare_df = pd.DataFrame(medicare_data)
+                    st.dataframe(medicare_df, hide_index=True, width='stretch')
+
+                # Export to Excel
+                st.markdown("---")
+                if st.button("Export Subsidy Analysis to CSV", key="export_subsidy_csv"):
+                    export_rows = []
+
+                    for r in under_65 + medicare:
+                        export_rows.append({
+                            'Employee ID': r.employee_id,
+                            'Name': r.employee_name,
+                            'Age': r.age,
+                            'State': r.state,
+                            'Family Status': r.family_status,
+                            'Monthly Income': r.monthly_income,
+                            'Annual Income': r.annual_income,
+                            'LCSP Premium': r.lcsp_premium,
+                            'SLCSP Premium': r.slcsp_premium or '',
+                            'ER Contribution': r.er_contribution,
+                            'EE Cost w/ICHRA': r.ee_cost_with_ichra,
+                            'Max Affordable EE Cost': r.max_affordable_ee_cost,
+                            'Is Affordable': r.is_affordable,
+                            'FPL %': r.fpl_percentage or '',
+                            'Applicable %': r.applicable_percentage or '',
+                            'Expected Contribution': r.expected_contribution or '',
+                            'Subsidy Value': r.subsidy_value or '',
+                            'Medicare Eligible': r.is_medicare_eligible,
+                            'Recommendation': r.recommendation,
+                            'Net Benefit': r.net_benefit,
+                            'Notes': r.notes
+                        })
+
+                    export_df = pd.DataFrame(export_rows)
+                    csv_data = export_df.to_csv(index=False)
+
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    client_name = st.session_state.get('client_name', '').strip()
+                    if client_name:
+                        safe_name = client_name.replace(' ', '_').replace('/', '-')
+                        filename = f"subsidy_analysis_{safe_name}_{timestamp}.csv"
+                    else:
+                        filename = f"subsidy_analysis_{timestamp}.csv"
+
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv_data,
+                        file_name=filename,
+                        mime="text/csv",
+                        key="subsidy_csv_download"
+                    )
+
+                # Clear analysis button
+                if st.button("Clear Subsidy Analysis", key="clear_subsidy_analysis"):
+                    del st.session_state.subsidy_analysis
+                    st.rerun()
 
 st.markdown("---")
 

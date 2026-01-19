@@ -2,9 +2,10 @@
 Contribution Strategy Calculator for ICHRA
 
 Supports multiple contribution strategy types:
-1. Base Age + ACA 3:1 Curve - Scale contributions by age using federal age curve
-2. Percentage of LCSP - X% of per-employee LCSP
-3. Fixed Age Tiers - Fixed amounts per age tier
+1. Flat Amount - Single dollar amount for all employees
+2. Base Age + ACA 3:1 Curve - Scale contributions by age using federal age curve
+3. Percentage of LCSP - X% of per-employee LCSP
+4. FPL Safe Harbor - Guarantees IRS affordability for all employees
 
 All strategies support:
 - Optional family status multipliers (EE, ES, EC, F)
@@ -26,11 +27,11 @@ class StrategyType(Enum):
     FLAT_AMOUNT = "flat_amount"             # Single flat amount for all employees
     BASE_AGE_CURVE = "base_age_curve"       # Base age + ACA 3:1 curve
     PERCENTAGE_LCSP = "percentage_lcsp"     # X% of per-employee LCSP
-    FIXED_AGE_TIERS = "fixed_age_tiers"     # Fixed amounts per age tier
+    FPL_SAFE_HARBOR = "fpl_safe_harbor"     # FPL-based affordability safe harbor
 
 
-# Fixed age tiers for FIXED_AGE_TIERS strategy
-FIXED_AGE_TIERS = [
+# Age tiers for reporting/aggregation purposes
+AGE_TIERS = [
     {'age_range': '21', 'age_min': 21, 'age_max': 21},
     {'age_range': '18-25', 'age_min': 18, 'age_max': 25},
     {'age_range': '26-35', 'age_min': 26, 'age_max': 35},
@@ -65,8 +66,8 @@ class StrategyConfig:
     # PERCENTAGE_LCSP specific
     lcsp_percentage: float = 100.0          # e.g., 75.0 for 75%
 
-    # FIXED_AGE_TIERS specific
-    tier_amounts: Dict[str, float] = field(default_factory=dict)  # {"21": 300, "18-25": 320, ...}
+    # FPL_SAFE_HARBOR specific
+    fpl_buffer: float = 5.0  # Additional buffer ($/month) above FPL minimum for safety margin
 
     def __post_init__(self):
         """Generate default name if not provided"""
@@ -77,8 +78,8 @@ class StrategyConfig:
                 self.name = f"Base Age {self.base_age} + ACA 3:1 Curve"
             elif self.strategy_type == StrategyType.PERCENTAGE_LCSP:
                 self.name = f"{self.lcsp_percentage:.0f}% of Per-Employee LCSP"
-            elif self.strategy_type == StrategyType.FIXED_AGE_TIERS:
-                self.name = "Fixed Age Tiers"
+            elif self.strategy_type == StrategyType.FPL_SAFE_HARBOR:
+                self.name = "FPL Safe Harbor (Guaranteed Affordable)"
 
 
 class ContributionStrategyCalculator:
@@ -119,8 +120,8 @@ class ContributionStrategyCalculator:
             result = self._calculate_base_age_curve(config)
         elif config.strategy_type == StrategyType.PERCENTAGE_LCSP:
             result = self._calculate_percentage_lcsp(config)
-        elif config.strategy_type == StrategyType.FIXED_AGE_TIERS:
-            result = self._calculate_fixed_age_tiers(config)
+        elif config.strategy_type == StrategyType.FPL_SAFE_HARBOR:
+            result = self._calculate_fpl_safe_harbor(config)
         else:
             raise ValueError(f"Unknown strategy type: {config.strategy_type}")
 
@@ -172,7 +173,7 @@ class ContributionStrategyCalculator:
         if age == 21:
             return '21'
         # Then check other tiers
-        for tier in FIXED_AGE_TIERS:
+        for tier in AGE_TIERS:
             if tier['age_range'] == '21':
                 continue  # Skip standalone 21 tier
             if tier['age_min'] <= age <= tier['age_max']:
@@ -187,12 +188,10 @@ class ContributionStrategyCalculator:
         All employees receive the same base contribution amount.
         Family multipliers are applied on top of the base amount.
 
-        Auto-affordability: If employee has income data, contribution is automatically
-        bumped to min_affordable if flat_amount would be unaffordable (9.96% threshold).
+        Note: No automatic affordability adjustment. For non-ALE employers (<50 employees),
+        intentional unaffordability may be desired to help employees qualify for
+        marketplace subsidies. Use the Subsidy Analysis tool to evaluate this strategy.
         """
-        from constants import AFFORDABILITY_THRESHOLD_2026
-        from utils import parse_currency
-
         flat_amount = config.flat_amount
         multipliers = config.family_multipliers if config.apply_family_multipliers else {'EE': 1.0, 'ES': 1.0, 'EC': 1.0, 'F': 1.0}
 
@@ -202,7 +201,6 @@ class ContributionStrategyCalculator:
         total_monthly = 0.0
         by_age_tier = {}
         by_family_status = {}
-        employees_affordability_adjusted = 0
 
         for _, emp in self.census_df.iterrows():
             emp_id = str(emp.get('employee_id') or emp.get('Employee Number', ''))
@@ -217,37 +215,14 @@ class ContributionStrategyCalculator:
 
             state = str(emp.get('state') or emp.get('Home State', '')).upper()
 
-            # Get LCSP data (needed for affordability calc)
+            # Get LCSP data for reference (used in analysis, not for auto-adjustment)
             lcsp_data = employee_lcsps.get(emp_id, {})
             lcsp_ee_rate = lcsp_data.get('lcsp_ee_rate', 0) or 0
 
-            # Start with flat amount
+            # Flat amount - no auto-adjustment for affordability
+            # For non-ALE (<50 employees), intentional unaffordability may be desired
+            # to allow employees to qualify for marketplace subsidies
             base_amount = flat_amount
-            affordability_adjusted = False
-
-            # Check for income data to calculate min_affordable
-            monthly_income_raw = emp.get('monthly_income') or emp.get('Monthly Income')
-            monthly_income = None
-            min_affordable = None
-
-            if monthly_income_raw is not None and not pd.isna(monthly_income_raw):
-                # Parse income (handle currency strings)
-                if isinstance(monthly_income_raw, (int, float)):
-                    monthly_income = float(monthly_income_raw)
-                else:
-                    monthly_income = parse_currency(str(monthly_income_raw))
-
-                if monthly_income and monthly_income > 0 and lcsp_ee_rate > 0:
-                    # Calculate min_affordable: LCSP - (income × 9.96%) + $1 buffer
-                    max_ee = monthly_income * AFFORDABILITY_THRESHOLD_2026
-                    min_affordable_raw = max(0, lcsp_ee_rate - max_ee)
-                    min_affordable = min_affordable_raw + 1.0 if min_affordable_raw > 0 else 0
-
-                    # Use higher of flat amount or min_affordable
-                    if min_affordable > base_amount:
-                        base_amount = min_affordable
-                        affordability_adjusted = True
-                        employees_affordability_adjusted += 1
 
             # Get age ratio from ACA curve for reference
             emp_age_clamped = min(max(emp_age, 0), 64)
@@ -275,8 +250,6 @@ class ContributionStrategyCalculator:
                 'family_status': family_status,
                 'age_ratio': emp_ratio,
                 'flat_amount': flat_amount,
-                'min_affordable': round(min_affordable, 2) if min_affordable is not None else None,
-                'affordability_adjusted': affordability_adjusted,
                 'base_contribution': round(base_amount, 2),
                 'family_multiplier': multipliers.get(family_status, 1.0),
                 'monthly_contribution': round(final_amount, 2),
@@ -290,11 +263,9 @@ class ContributionStrategyCalculator:
             # Aggregate by age tier
             age_tier = self._get_age_tier(emp_age)
             if age_tier not in by_age_tier:
-                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0, 'adjusted_count': 0}
+                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0}
             by_age_tier[age_tier]['count'] += 1
             by_age_tier[age_tier]['total_monthly'] += final_amount
-            if affordability_adjusted:
-                by_age_tier[age_tier]['adjusted_count'] += 1
 
             # Aggregate by family status
             if family_status not in by_family_status:
@@ -305,8 +276,6 @@ class ContributionStrategyCalculator:
         # NOTE: No 3:1 ratio check for flat amount strategy.
         # The 3:1 rule applies to age-based variation in contribution design.
         # Flat amount has NO age-based variation (everyone gets the same base).
-        # Affordability adjustments are income-based and legally required,
-        # not subject to the 3:1 age ratio rule.
 
         return {
             'strategy_type': config.strategy_type.value,
@@ -320,7 +289,7 @@ class ContributionStrategyCalculator:
             'total_monthly': round(total_monthly, 2),
             'total_annual': round(total_monthly * 12, 2),
             'employees_covered': len(employee_contributions),
-            'employees_affordability_adjusted': employees_affordability_adjusted,
+            'employees_affordability_adjusted': 0,  # No auto-adjustment in flat amount
             'employees_ratio_adjusted': 0,  # No ratio check for flat amount
             'ratio_adjustment_details': [],  # No ratio check for flat amount
             'by_age_tier': by_age_tier,
@@ -537,20 +506,25 @@ class ContributionStrategyCalculator:
             'by_family_status': by_family_status,
         }
 
-    def _calculate_fixed_age_tiers(self, config: StrategyConfig) -> Dict[str, Any]:
+    def _calculate_fpl_safe_harbor(self, config: StrategyConfig) -> Dict[str, Any]:
         """
-        Fixed Age Tiers Strategy.
+        FPL Safe Harbor Strategy.
 
-        User specifies dollar amounts for each age tier.
-        Tiers: 21, 18-25, 26-35, 36-45, 46-55, 56-63, 64+
+        This strategy guarantees IRS affordability for ALL employees regardless of income.
+        It uses the Federal Poverty Level safe harbor method where an ICHRA is deemed
+        affordable if the employee's cost for LCSP ≤ 9.96% of FPL.
 
-        Auto-affordability: If employee has income data, contribution is automatically
-        bumped to min_affordable if tier_amount would be unaffordable (9.96% threshold).
+        Calculation:
+        - FPL monthly (2026) ≈ $1,283
+        - 9.96% of FPL ≈ $128/month
+        - Required contribution = LCSP - $128 + buffer
+
+        This means every employee's out-of-pocket cost will be ≤ $128/month for LCSP,
+        which automatically satisfies the IRS affordability safe harbor.
         """
-        from constants import AFFORDABILITY_THRESHOLD_2026
-        from utils import parse_currency
+        from constants import FPL_SAFE_HARBOR_THRESHOLD_2026
 
-        tier_amounts = config.tier_amounts or {}
+        fpl_buffer = config.fpl_buffer  # Additional safety margin
         multipliers = config.family_multipliers if config.apply_family_multipliers else {'EE': 1.0, 'ES': 1.0, 'EC': 1.0, 'F': 1.0}
 
         employee_lcsps = self._get_employee_lcsps()
@@ -559,7 +533,9 @@ class ContributionStrategyCalculator:
         total_monthly = 0.0
         by_age_tier = {}
         by_family_status = {}
-        employees_affordability_adjusted = 0
+
+        # Maximum employee cost under FPL safe harbor (~$128/month for 2026)
+        max_ee_cost_fpl = FPL_SAFE_HARBOR_THRESHOLD_2026
 
         for _, emp in self.census_df.iterrows():
             emp_id = str(emp.get('employee_id') or emp.get('Employee Number', ''))
@@ -574,48 +550,21 @@ class ContributionStrategyCalculator:
 
             state = str(emp.get('state') or emp.get('Home State', '')).upper()
 
-            # Get LCSP data first (needed for affordability calc)
+            # Get LCSP data
             lcsp_data = employee_lcsps.get(emp_id, {})
             lcsp_ee_rate = lcsp_data.get('lcsp_ee_rate', 0) or 0
-
-            # Get tier for this employee's age
-            age_tier = self._get_age_tier(emp_age)
-            tier_amount = tier_amounts.get(age_tier, 0)
-
-            # Check for income data to calculate min_affordable
-            monthly_income_raw = emp.get('monthly_income') or emp.get('Monthly Income')
-            monthly_income = None
-            min_affordable = None
-            affordability_adjusted = False
-
-            if monthly_income_raw is not None and not pd.isna(monthly_income_raw):
-                # Parse income (handle currency strings)
-                if isinstance(monthly_income_raw, (int, float)):
-                    monthly_income = float(monthly_income_raw)
-                else:
-                    monthly_income = parse_currency(str(monthly_income_raw))
-
-                if monthly_income and monthly_income > 0 and lcsp_ee_rate > 0:
-                    # Calculate min_affordable: LCSP - (income × 9.96%) + $1 buffer
-                    max_ee = monthly_income * AFFORDABILITY_THRESHOLD_2026
-                    min_affordable_raw = max(0, lcsp_ee_rate - max_ee)
-                    min_affordable = min_affordable_raw + 1.0 if min_affordable_raw > 0 else 0
-
-                    # Use higher of tier amount or min_affordable
-                    if min_affordable > tier_amount:
-                        base_amount = min_affordable
-                        affordability_adjusted = True
-                        employees_affordability_adjusted += 1
-                    else:
-                        base_amount = tier_amount
-                else:
-                    base_amount = tier_amount
-            else:
-                base_amount = tier_amount
 
             # Get age ratio from ACA curve for reference
             emp_age_clamped = min(max(emp_age, 0), 64)
             emp_ratio = ACA_AGE_CURVE.get(emp_age_clamped, 1.0)
+
+            # Calculate minimum contribution for FPL safe harbor
+            # Employee cost = LCSP - contribution ≤ FPL threshold
+            # Therefore: contribution ≥ LCSP - FPL threshold
+            min_contribution_fpl = max(0, lcsp_ee_rate - max_ee_cost_fpl)
+
+            # Add buffer for safety margin
+            base_amount = min_contribution_fpl + fpl_buffer
 
             # Apply family multiplier
             final_amount = base_amount * multipliers.get(family_status, 1.0)
@@ -632,33 +581,36 @@ class ContributionStrategyCalculator:
             else:
                 emp_name = emp_id
 
+            # Employee's out-of-pocket cost under this strategy
+            employee_cost = max(0, lcsp_ee_rate - base_amount)
+
             employee_contributions[emp_id] = {
                 'name': emp_name,
                 'age': emp_age,
                 'state': state,
                 'family_status': family_status,
                 'age_ratio': emp_ratio,
-                'age_tier': age_tier,
-                'tier_amount': round(tier_amount, 2),
-                'min_affordable': round(min_affordable, 2) if min_affordable is not None else None,
-                'affordability_adjusted': affordability_adjusted,
+                'lcsp_ee_rate': lcsp_ee_rate,
+                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),
+                'fpl_threshold': round(max_ee_cost_fpl, 2),
+                'min_contribution_fpl': round(min_contribution_fpl, 2),
+                'fpl_buffer': fpl_buffer,
                 'base_contribution': round(base_amount, 2),
                 'family_multiplier': multipliers.get(family_status, 1.0),
                 'monthly_contribution': round(final_amount, 2),
                 'annual_contribution': round(final_amount * 12, 2),
-                'lcsp_ee_rate': lcsp_ee_rate,
-                'lcsp_tier_premium': lcsp_data.get('lcsp_tier_premium', 0),
+                'employee_cost': round(employee_cost, 2),  # What employee pays for LCSP
+                'is_fpl_affordable': employee_cost <= max_ee_cost_fpl,  # Should always be True
                 'rating_area': lcsp_data.get('rating_area', ''),
             }
             total_monthly += final_amount
 
             # Aggregate by age tier
+            age_tier = self._get_age_tier(emp_age)
             if age_tier not in by_age_tier:
-                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0, 'tier_amount': tier_amount, 'adjusted_count': 0}
+                by_age_tier[age_tier] = {'count': 0, 'total_monthly': 0.0}
             by_age_tier[age_tier]['count'] += 1
             by_age_tier[age_tier]['total_monthly'] += final_amount
-            if affordability_adjusted:
-                by_age_tier[age_tier]['adjusted_count'] += 1
 
             # Aggregate by family status
             if family_status not in by_family_status:
@@ -666,80 +618,12 @@ class ContributionStrategyCalculator:
             by_family_status[family_status]['count'] += 1
             by_family_status[family_status]['total_monthly'] += final_amount
 
-        # ============================================================
-        # 3:1 AGE RATIO COMPLIANCE CHECK
-        # Per ICHRA regulations (Federal Register 2019-12571), the maximum
-        # contribution to the oldest participant cannot exceed 3x the amount
-        # made available to the youngest participant.
-        # ============================================================
-        MAX_AGE_RATIO = 3.0
-        employees_ratio_adjusted = 0
-        ratio_adjustment_details = []
-
-        if employee_contributions:
-            # Get base contributions (before family multipliers) for ratio check
-            base_contributions = [
-                (emp_id, data['base_contribution'], data['age'])
-                for emp_id, data in employee_contributions.items()
-            ]
-
-            if base_contributions:
-                max_base = max(bc[1] for bc in base_contributions)
-                min_base = min(bc[1] for bc in base_contributions)
-
-                # Check if ratio exceeds 3:1
-                if min_base > 0 and max_base / min_base > MAX_AGE_RATIO:
-                    # Calculate required floor to maintain 3:1 ratio
-                    required_floor = max_base / MAX_AGE_RATIO
-
-                    # Find employees below the required floor and adjust
-                    for emp_id, data in employee_contributions.items():
-                        old_base = data['base_contribution']
-                        if old_base < required_floor:
-                            # Adjust base contribution to meet ratio requirement
-                            new_base = round(required_floor, 2)
-                            family_mult = data['family_multiplier']
-                            new_monthly = round(new_base * family_mult, 2)
-                            old_monthly = data['monthly_contribution']
-
-                            # Update contribution data
-                            data['base_contribution'] = new_base
-                            data['monthly_contribution'] = new_monthly
-                            data['annual_contribution'] = round(new_monthly * 12, 2)
-                            data['ratio_adjusted'] = True
-                            data['ratio_adjustment_from'] = old_base
-                            data['ratio_adjustment_to'] = new_base
-
-                            # Update totals
-                            total_monthly += (new_monthly - old_monthly)
-
-                            # Track adjustment
-                            employees_ratio_adjusted += 1
-                            ratio_adjustment_details.append({
-                                'employee_id': emp_id,
-                                'name': data['name'],
-                                'age': data['age'],
-                                'old_base': old_base,
-                                'new_base': new_base,
-                                'old_monthly': old_monthly,
-                                'new_monthly': new_monthly,
-                            })
-
-                            # Update by_age_tier totals
-                            age_tier = self._get_age_tier(data['age'])
-                            if age_tier in by_age_tier:
-                                by_age_tier[age_tier]['total_monthly'] += (new_monthly - old_monthly)
-
-                            # Update by_family_status totals
-                            fs = data['family_status']
-                            if fs in by_family_status:
-                                by_family_status[fs]['total_monthly'] += (new_monthly - old_monthly)
-
         return {
             'strategy_type': config.strategy_type.value,
             'strategy_name': config.name,
             'config': {
-                'tier_amounts': tier_amounts,
+                'fpl_buffer': fpl_buffer,
+                'fpl_threshold': round(max_ee_cost_fpl, 2),
                 'apply_family_multipliers': config.apply_family_multipliers,
                 'family_multipliers': multipliers,
             },
@@ -747,9 +631,7 @@ class ContributionStrategyCalculator:
             'total_monthly': round(total_monthly, 2),
             'total_annual': round(total_monthly * 12, 2),
             'employees_covered': len(employee_contributions),
-            'employees_affordability_adjusted': employees_affordability_adjusted,
-            'employees_ratio_adjusted': employees_ratio_adjusted,
-            'ratio_adjustment_details': ratio_adjustment_details,
+            'fpl_affordable_count': len(employee_contributions),  # All should be affordable
             'by_age_tier': by_age_tier,
             'by_family_status': by_family_status,
         }
@@ -1086,7 +968,7 @@ if __name__ == "__main__":
     print("Contribution Strategy Calculator")
     print("=" * 50)
     print(f"\nStrategy Types: {[s.value for s in StrategyType]}")
-    print(f"\nFixed Age Tiers: {[t['age_range'] for t in FIXED_AGE_TIERS]}")
+    print(f"\nAge Tiers (for reporting): {[t['age_range'] for t in AGE_TIERS]}")
     print(f"\nACA Age Curve (sample):")
     print(f"  Age 21: {ACA_AGE_CURVE[21]}")
     print(f"  Age 40: {ACA_AGE_CURVE[40]}")

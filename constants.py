@@ -42,6 +42,16 @@ PLAN_TYPES = [
 # An ICHRA is affordable if employee's self-only LCSP cost ≤ 9.96% of household income
 AFFORDABILITY_THRESHOLD_2026 = 0.0996  # 9.96% of household income
 
+# Federal Poverty Level (FPL) Safe Harbor (2026 Plan Year)
+# Source: HHS Poverty Guidelines (projected for 2026)
+# The FPL Safe Harbor allows employers to use FPL instead of actual employee income
+# to determine affordability. If employee's LCSP cost ≤ 9.96% of FPL, it's deemed
+# affordable for ALL employees regardless of their actual income.
+# 2025 FPL (single, mainland) = $15,060; estimated 2026 with ~2.3% increase
+FPL_ANNUAL_2026 = 15400  # $15,400/year for single individual (48 contiguous states)
+FPL_MONTHLY_2026 = FPL_ANNUAL_2026 / 12  # ~$1,283/month
+FPL_SAFE_HARBOR_THRESHOLD_2026 = FPL_MONTHLY_2026 * AFFORDABILITY_THRESHOLD_2026  # ~$128/month
+
 # ==============================================================================
 # ACA 3:1 AGE RATING CURVE
 # ==============================================================================
@@ -465,6 +475,74 @@ EXPORT_FILE_PREFIX = "ICHRA_Calculator"
 
 # Date format for exports
 DATE_FORMAT = "%Y-%m-%d"
+
+# ==============================================================================
+# 2026 ACA SUBSIDY CALCULATION CONSTANTS
+# ==============================================================================
+# Used for Unaffordability Analysis - calculating potential ACA subsidies
+# when employees decline ICHRA due to unaffordability
+
+# Federal Poverty Level (FPL) 2026 by household size
+# Source: HHS Poverty Guidelines (projected for 2026)
+# Note: Alaska and Hawaii have higher FPL amounts
+FPL_2026_BY_HOUSEHOLD_SIZE = {
+    1: 15960,   # Single individual
+    2: 21640,
+    3: 27320,
+    4: 33000,
+    5: 38680,
+    6: 44360,
+    7: 50040,
+    8: 55720,
+    # Add $5,680 per additional person above 8
+}
+FPL_2026_PER_ADDITIONAL_PERSON = 5680
+
+# Alaska FPL 2026 (approximately 25% higher)
+FPL_2026_ALASKA = {
+    1: 19950,
+    2: 27050,
+    3: 34150,
+    4: 41250,
+    5: 48350,
+    6: 55450,
+    7: 62550,
+    8: 69650,
+}
+FPL_2026_ALASKA_PER_ADDITIONAL = 7100
+
+# Hawaii FPL 2026 (approximately 15% higher)
+FPL_2026_HAWAII = {
+    1: 18360,
+    2: 24890,
+    3: 31420,
+    4: 37950,
+    5: 44480,
+    6: 51010,
+    7: 57540,
+    8: 64070,
+}
+FPL_2026_HAWAII_PER_ADDITIONAL = 6530
+
+# 2026 ACA Applicable Percentage Table for Premium Tax Credit
+# Source: IRS Revenue Procedure (The Finance Buff 2026 projections)
+# Format: (lower_fpl_pct, upper_fpl_pct, lower_applicable_pct, upper_applicable_pct)
+# Linear interpolation between boundaries
+ACA_APPLICABLE_PERCENTAGE_2026 = [
+    # (FPL lower %, FPL upper %, applicable % at lower, applicable % at upper)
+    (100, 133, 2.10, 2.10),      # 100-133% FPL: flat 2.10%
+    (133, 150, 3.14, 4.19),      # 133-150% FPL: interpolate 3.14% to 4.19%
+    (150, 200, 4.19, 6.60),      # 150-200% FPL: interpolate 4.19% to 6.60%
+    (200, 250, 6.60, 8.44),      # 200-250% FPL: interpolate 6.60% to 8.44%
+    (250, 300, 8.44, 9.96),      # 250-300% FPL: interpolate 8.44% to 9.96%
+    (300, 400, 9.96, 9.96),      # 300-400% FPL: flat 9.96%
+]
+
+# Above 400% FPL: No subsidy available
+ACA_SUBSIDY_FPL_CAP = 400
+
+# Medicare eligibility age (used for filtering subsidy eligibility)
+MEDICARE_ELIGIBILITY_AGE = 65
 
 # Default employer contribution by class (can be customized)
 DEFAULT_CONTRIBUTIONS_BY_CLASS = {

@@ -15,6 +15,7 @@ from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
 from io import BytesIO
 from pathlib import Path
+import base64
 import logging
 import subprocess
 import sys
@@ -72,12 +73,14 @@ class EmployerSummaryData:
     current_er_annual: float = 0.0
     current_ee_annual: float = 0.0
     current_total_annual: float = 0.0
+    has_current_data: bool = False  # True if we have current cost data
 
     # Projected 2026 Renewal costs
     projected_er_annual: float = 0.0
     projected_ee_annual: float = 0.0
     renewal_total_annual: float = 0.0
     renewal_increase_pct: float = 0.0
+    has_renewal_data: bool = False  # True if we have renewal cost data
 
     # Proposed ICHRA
     proposed_ichra_annual: float = 0.0
@@ -109,6 +112,26 @@ class EmployerSummaryData:
     employees_affordable_pct: float = 0.0
     employees_needing_increase: int = 0
     affordability_gap_annual: float = 0.0  # Additional cost for 100% compliance
+
+    # Strategy details for IRS compliance explanation
+    strategy_type: str = ""  # e.g., 'fpl_safe_harbor', 'flat_amount', 'percentage_lcsp'
+    affordability_method: str = ""  # Human-readable explanation of how affordability is determined
+    fpl_threshold: float = 0.0  # FPL threshold amount (for FPL Safe Harbor strategy)
+
+    # Footer branding
+    logo_base64: str = ""  # Base64 encoded logo image for PDF footer
+
+
+def _load_logo_base64() -> str:
+    """Load the Glove logo and return as base64 string."""
+    try:
+        logo_path = Path(__file__).parent / "decoratives" / "glove_logo.png"
+        if logo_path.exists():
+            with open(logo_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        logging.warning(f"Could not load logo: {e}")
+    return ""
 
 
 def _savings_format(amount, decimals=0):
@@ -243,6 +266,7 @@ def build_employer_summary_data(
     """
     data = EmployerSummaryData(client_name=client_name)
     data.report_date = datetime.now().strftime("%m.%d.%y")
+    data.logo_base64 = _load_logo_base64()
 
     # Strategy info
     result = strategy_results.get('result', {})
@@ -251,16 +275,26 @@ def build_employer_summary_data(
 
     # Build strategy description from config
     config = strategy_results.get('config', {})
-    strategy_type = config.get('strategy_type', '')
-    if strategy_type == 'PERCENTAGE_LCSP':
-        pct = config.get('lcsp_percentage', 0)
+    # Get strategy type from result (lowercase) or config (uppercase)
+    strategy_type = result.get('strategy_type', '') or config.get('strategy_type', '')
+    strategy_type_lower = strategy_type.lower() if strategy_type else ''
+    data.strategy_type = strategy_type_lower
+
+    if strategy_type_lower == 'percentage_lcsp' or strategy_type == 'PERCENTAGE_LCSP':
+        pct = config.get('lcsp_percentage', 0) or result.get('config', {}).get('lcsp_percentage', 0)
         data.strategy_description = f"{pct:.0f}% of lowest-cost Silver plan (LCSP)"
-    elif strategy_type == 'BASE_AGE_CURVE':
+        data.affordability_method = "Income-based: Employee cost must be ≤ 9.96% of household income"
+    elif strategy_type_lower == 'base_age_curve' or strategy_type == 'BASE_AGE_CURVE':
         base = config.get('base_amount', 0)
         data.strategy_description = f"${base:,.0f}/mo base (age 21), scaled by ACA age curve"
-    elif strategy_type == 'FIXED_AGE_TIERS':
-        data.strategy_description = "Fixed dollar amounts by age tier"
-    elif strategy_type == 'flat' or 'flat' in data.strategy_name.lower():
+        data.affordability_method = "Income-based: Employee cost must be ≤ 9.96% of household income"
+    elif strategy_type_lower == 'fpl_safe_harbor':
+        # FPL Safe Harbor strategy
+        fpl_threshold = result.get('config', {}).get('fpl_threshold', 0)
+        data.fpl_threshold = fpl_threshold
+        data.strategy_description = "FPL Safe Harbor (guaranteed affordable)"
+        data.affordability_method = f"FPL Safe Harbor: Employee cost ≤ ${fpl_threshold:,.0f}/mo (9.96% of Federal Poverty Level)"
+    elif strategy_type_lower == 'flat_amount' or 'flat' in data.strategy_name.lower():
         # Flat contribution - calculate from total/employees
         if data.employees_covered > 0:
             proposed_monthly = result.get('total_monthly', 0)
@@ -268,6 +302,7 @@ def build_employer_summary_data(
             data.strategy_description = f"${avg_monthly:,.0f}/mo flat contribution per employee"
         else:
             data.strategy_description = "Flat contribution per employee"
+        data.affordability_method = "Income-based: Employee cost must be ≤ 9.96% of household income"
     else:
         # Default: try to use strategy name or calculate from totals
         if data.employees_covered > 0:
@@ -276,6 +311,7 @@ def build_employer_summary_data(
             data.strategy_description = f"~${avg_monthly:,.0f}/mo average per employee"
         else:
             data.strategy_description = data.strategy_name
+        data.affordability_method = "Income-based: Employee cost must be ≤ 9.96% of household income"
 
     # Proposed ICHRA
     data.proposed_ichra_annual = result.get('total_annual', 0)
@@ -286,6 +322,7 @@ def build_employer_summary_data(
     data.current_er_annual = contrib_totals.get('total_current_er_annual', 0)
     data.current_ee_annual = contrib_totals.get('total_current_ee_annual', 0)
     data.current_total_annual = data.current_er_annual + data.current_ee_annual
+    data.has_current_data = data.current_total_annual > 0
 
     current_er_monthly = contrib_totals.get('total_current_er_monthly', 0)
     current_total_monthly = current_er_monthly + contrib_totals.get('total_current_ee_monthly', 0)
@@ -297,9 +334,10 @@ def build_employer_summary_data(
     data.renewal_total_annual = renewal_data.get('renewal_total_annual', 0)
     data.projected_er_annual = renewal_data.get('projected_er_annual', 0)
     data.projected_ee_annual = renewal_data.get('projected_ee_annual', 0)
+    data.has_renewal_data = data.renewal_total_annual > 0
 
     # Renewal increase percentage
-    if data.current_total_annual > 0:
+    if data.current_total_annual > 0 and data.renewal_total_annual > 0:
         data.renewal_increase_pct = ((data.renewal_total_annual / data.current_total_annual) - 1) * 100
     else:
         data.renewal_increase_pct = 0

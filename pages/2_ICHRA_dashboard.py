@@ -3236,7 +3236,7 @@ def render_contribution_input_card():
     # Ensure contribution_settings is initialized
     if 'contribution_settings' not in st.session_state:
         st.session_state.contribution_settings = {
-            'strategy_type': 'percentage',  # percentage, flat_amount, base_age_curve, percentage_lcsp, fixed_age_tiers
+            'strategy_type': 'percentage',  # percentage, flat_amount, base_age_curve, percentage_lcsp
             'default_percentage': 75,
             'by_class': {},
             'input_mode': 'percentage',  # Keep for backwards compat
@@ -3281,8 +3281,7 @@ def render_contribution_input_card():
         'percentage': 'Percentage of premium',
         'flat_amount': 'Flat amount by tier',
         'base_age_curve': 'Base age + ACA 3:1 curve',
-        'percentage_lcsp': '% of LCSP',
-        'fixed_age_tiers': 'Fixed age tiers'
+        'percentage_lcsp': '% of LCSP'
     }
 
     # Determine current index
@@ -3435,7 +3434,7 @@ def render_contribution_input_card():
             preview_data.append({"Age": age, "Contribution": f"${amount:,.0f}"})
 
         st.markdown("<p style='font-size: 12px; color: #6b7280; margin-top: 8px;'>Preview by age:</p>", unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(preview_data), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(preview_data), hide_index=True, width='stretch')
 
     elif strategy_type == 'percentage_lcsp':
         # Percentage of LCSP
@@ -3464,34 +3463,6 @@ def render_contribution_input_card():
             Higher-cost employees get proportionally larger contributions.
         </div>
         """, unsafe_allow_html=True)
-
-    elif strategy_type == 'fixed_age_tiers':
-        # Fixed age tiers
-        st.markdown("""
-        <p style="font-size: 13px; color: #6b7280; margin-bottom: 8px;">
-            Set fixed dollar amounts for each age tier. Employees are assigned based on their age.
-        </p>
-        """, unsafe_allow_html=True)
-
-        tier_labels = ['21', '18-25', '26-35', '36-45', '46-55', '56-63', '64+']
-        current_tier_amounts = settings.get('tier_amounts', {})
-
-        tier_cols = st.columns(4)
-        updated_tier_amounts = {}
-        for i, tier in enumerate(tier_labels):
-            with tier_cols[i % 4]:
-                default_val = current_tier_amounts.get(tier, 400)
-                updated_tier_amounts[tier] = st.number_input(
-                    f"Age {tier}",
-                    min_value=0.0,
-                    max_value=5000.0,
-                    value=float(default_val),
-                    step=25.0,
-                    key=f"age_tier_{tier}",
-                    help=f"Monthly contribution for age {tier}"
-                )
-
-        st.session_state.contribution_settings['tier_amounts'] = updated_tier_amounts
 
 
 # =============================================================================
@@ -3592,7 +3563,7 @@ def render_contribution_pattern_card():
         pattern_data.append(row)
 
     import pandas as pd
-    st.dataframe(pd.DataFrame(pattern_data), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(pattern_data), width='stretch', hide_index=True)
 
     # Show any warnings
     if summary.get('warnings'):
@@ -4898,14 +4869,6 @@ def get_contribution_strategy_description() -> str:
     elif strategy_type == 'percentage_lcsp':
         lcsp_pct = settings.get('lcsp_percentage', 75)
         desc = f"ER: {lcsp_pct}% of LCSP"
-    elif strategy_type == 'fixed_age_tiers':
-        tier_amounts = settings.get('tier_amounts', {})
-        if tier_amounts:
-            min_amt = min(v for v in tier_amounts.values() if v > 0) if any(v > 0 for v in tier_amounts.values()) else 0
-            max_amt = max(tier_amounts.values()) if tier_amounts else 0
-            desc = f"ER: Fixed age tiers (${min_amt:,.0f}-${max_amt:,.0f}/mo)"
-        else:
-            desc = "ER: Fixed age tiers"
     else:
         desc = "Default ER contribution"
 

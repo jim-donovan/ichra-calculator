@@ -312,8 +312,10 @@ if has_individual_contribs:
 
         # Build comprehensive Excel export with multiple tabs
         def generate_comprehensive_excel():
-            """Generate Excel workbook with separate tabs for each section."""
+            """Generate Excel workbook with tabs: Employee Detail, Summary & Costs, Breakdowns, Glossary."""
             import io
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            from openpyxl.utils.dataframe import dataframe_to_rows
 
             output = io.BytesIO()
             client_name = st.session_state.get('client_name', 'Client')
@@ -323,143 +325,29 @@ if has_individual_contribs:
             strategy_type = result.get('strategy_type', '')
             emp_contribs = result.get('employee_contributions', {})
 
+            # Define Tahoma 12pt font style
+            tahoma_font = Font(name='Tahoma', size=12)
+            tahoma_bold = Font(name='Tahoma', size=12, bold=True)
+            header_fill = PatternFill(start_color='E8F1FD', end_color='E8F1FD', fill_type='solid')
+            section_fill = PatternFill(start_color='F0F4FA', end_color='F0F4FA', fill_type='solid')
+
+            def apply_tahoma_styling(worksheet):
+                """Apply Tahoma 12pt font to all cells in worksheet."""
+                for row in worksheet.iter_rows():
+                    for cell in row:
+                        cell.font = tahoma_font
+
+            def style_header_row(worksheet, header_row=1):
+                """Style the header row with bold font and fill."""
+                for cell in worksheet[header_row]:
+                    cell.font = tahoma_bold
+                    cell.fill = header_fill
+
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
 
-                # === TAB 1: SUMMARY ===
-                summary_data = [
-                    ['ICHRA COST ANALYSIS'],
-                    [''],
-                    ['Report Generated', pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')],
-                    ['Client Name', client_name],
-                    [''],
-                    ['STRATEGY'],
-                    ['Strategy Name', strategy_name],
-                    ['Strategy Type', strategy_type],
-                    ['Employees Covered', employees_covered],
-                ]
-                # Strategy-specific parameters
-                if strategy_type == 'base_age_curve':
-                    summary_data.append(['Base Age', config.get('base_age', 21)])
-                    summary_data.append(['Base Contribution', config.get('base_contribution', 0)])
-                    summary_data.append(['Method', 'Base contribution × ACA 3:1 age curve ratio'])
-                elif strategy_type == 'percentage_lcsp':
-                    summary_data.append(['LCSP Percentage', f"{config.get('lcsp_percentage', 0):.1f}%"])
-                    summary_data.append(['Method', 'Percentage of employee LCSP'])
-                summary_data.append(['Family Multipliers', 'Yes' if config.get('apply_family_multipliers') else 'No'])
-                summary_data.append(['Affordability Adjusted', 'Yes' if result.get('affordability_adjusted') else 'No'])
-
-                pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False, header=False)
-
-                # === TAB 2: COST COMPARISON ===
-                if has_renewal_data:
-                    cost_data = {
-                        'Category': ['Employer Pays', 'Employees Pay', 'Total Premium'],
-                        'Current (2025)': [current_er_annual, current_ee_annual, current_total_annual],
-                        '2026 Renewal': [projected_er_annual_2026, projected_ee_annual_2026, renewal_total_annual],
-                        'ICHRA': [proposed_annual, 'Varies', proposed_annual],
-                    }
-                else:
-                    cost_data = {
-                        'Category': ['Employer Pays', 'Employees Pay', 'Total Premium'],
-                        'Current (2025)': [current_er_annual, current_ee_annual, current_total_annual],
-                        'ICHRA': [proposed_annual, 'Varies', proposed_annual],
-                    }
-                cost_df = pd.DataFrame(cost_data)
-                cost_df.to_excel(writer, sheet_name='Cost Comparison', index=False)
-
-                # === TAB 3: SAVINGS ===
-                savings_vs_current = current_total_annual - proposed_annual
-                savings_vs_current_pct = (savings_vs_current / current_total_annual * 100) if current_total_annual > 0 else 0
-
-                if has_renewal_data:
-                    ichra_70 = proposed_annual * 0.70
-                    savings_70 = renewal_total_annual - ichra_70
-                    savings_70_pct = (savings_70 / renewal_total_annual * 100) if renewal_total_annual > 0 else 0
-
-                    savings_data = {
-                        'Scenario': [
-                            'vs 2026 Renewal',
-                            'vs 2026 Renewal (ICHRA @ 70% Take Rate)',
-                            'vs Current Plan (2025)'
-                        ],
-                        'Formula': [
-                            'Renewal Total - ICHRA Budget',
-                            'Renewal Total - (ICHRA Budget × 70% take rate)',
-                            'Current Total - ICHRA Budget'
-                        ],
-                        'ICHRA Cost': [
-                            proposed_annual,
-                            ichra_70,
-                            proposed_annual
-                        ],
-                        'Comparison Cost': [
-                            renewal_total_annual,
-                            renewal_total_annual,
-                            current_total_annual
-                        ],
-                        'Savings ($)': [
-                            savings_vs_renewal_total,
-                            savings_70,
-                            savings_vs_current
-                        ],
-                        'Savings (%)': [
-                            savings_vs_renewal_total_pct,
-                            savings_70_pct,
-                            savings_vs_current_pct
-                        ],
-                    }
-                else:
-                    # No renewal data - only show vs Current comparison
-                    savings_data = {
-                        'Scenario': [
-                            'vs Current Plan (2025)'
-                        ],
-                        'Formula': [
-                            'Current Total - ICHRA Budget'
-                        ],
-                        'ICHRA Cost': [
-                            proposed_annual
-                        ],
-                        'Comparison Cost': [
-                            current_total_annual
-                        ],
-                        'Savings ($)': [
-                            savings_vs_current
-                        ],
-                        'Savings (%)': [
-                            savings_vs_current_pct
-                        ],
-                    }
-                savings_df = pd.DataFrame(savings_data)
-                savings_df.to_excel(writer, sheet_name='Savings', index=False)
-
-                # === TAB 4: IRS COMPLIANCE ===
-                if after:
-                    compliance_status = 'Compliant (Adjusted)' if result.get('affordability_adjusted') else (
-                        'Action Needed' if after.get('total_gap', 0) > 0 else 'Compliant'
-                    )
-                    compliance_data = {
-                        'Metric': [
-                            'IRS Threshold (2026)',
-                            'Employees with Income Data',
-                            'Employees Meeting Threshold',
-                            'Compliance Rate',
-                            'Annual Gap to 100%',
-                            'Status'
-                        ],
-                        'Value': [
-                            '9.96% of household income',
-                            after.get('employees_analyzed', 0),
-                            after.get('affordable_count', 0),
-                            f"{after.get('affordable_pct', 0):.1f}%",
-                            after.get('total_gap', 0),
-                            compliance_status
-                        ],
-                    }
-                    compliance_df = pd.DataFrame(compliance_data)
-                    compliance_df.to_excel(writer, sheet_name='IRS Compliance', index=False)
-
-                # === TAB 5: EMPLOYEE DETAIL ===
+                # ============================================================
+                # TAB 1: EMPLOYEE DETAIL (moved to first position)
+                # ============================================================
                 if emp_contribs:
                     emp_rows = []
                     for emp_id, emp_data in emp_contribs.items():
@@ -478,7 +366,29 @@ if has_individual_contribs:
                             monthly_income = 0
 
                         emp_aff = aff_impact.get('employee_affordability', {}).get(emp_id, {}) if aff_impact else {}
-                        max_ee_cost = monthly_income * 0.0996 if monthly_income > 0 else None
+
+                        # Determine affordability method and max EE cost
+                        is_fpl_strategy = strategy_type == 'fpl_safe_harbor'
+                        has_income = monthly_income > 0
+
+                        if is_fpl_strategy:
+                            # FPL Safe Harbor strategy - use FPL threshold
+                            fpl_threshold = emp_data.get('fpl_threshold') or result.get('config', {}).get('fpl_threshold')
+                            max_ee_cost = fpl_threshold
+                            affordability_basis = 'FPL'
+                            # If income data available, also calculate income-based threshold for reference
+                            income_based_threshold = monthly_income * 0.0996 if has_income else None
+                        elif has_income:
+                            # Income-based strategy with income data
+                            max_ee_cost = monthly_income * 0.0996
+                            affordability_basis = 'Income'
+                            income_based_threshold = max_ee_cost
+                        else:
+                            # No income data and not FPL strategy
+                            max_ee_cost = None
+                            affordability_basis = ''
+                            income_based_threshold = None
+
                         lcsp_ee = emp_data.get('lcsp_ee_rate', 0)
                         ichra_monthly = emp_data.get('monthly_contribution', 0)
                         ee_cost_after_ichra = max(0, lcsp_ee - ichra_monthly) if lcsp_ee else None
@@ -487,7 +397,7 @@ if has_individual_contribs:
                         lcsp_tier = emp_data.get('lcsp_tier_premium', 0)
                         tier_mult = round(lcsp_tier / lcsp_ee, 2) if lcsp_ee and lcsp_ee > 0 else 1.0
 
-                        emp_rows.append({
+                        row_data = {
                             'Employee ID': emp_id,
                             'Name': emp_data.get('name', emp_id),
                             'Age': emp_data.get('age', ''),
@@ -503,82 +413,356 @@ if has_individual_contribs:
                             'Tier Multiplier': tier_mult,
                             'LCSP (Tier/Family)': lcsp_tier,
                             'Age Ratio (ACA)': emp_data.get('age_ratio', 1.0),
-                            'Base Contribution': emp_data.get('base_contribution', 0),
+                            'ER Minimum Contribution': emp_data.get('base_contribution', 0),
                             'Family Multiplier': emp_data.get('family_multiplier', 1.0),
-                            'ICHRA Monthly': ichra_monthly,
-                            'ICHRA Annual': emp_data.get('annual_contribution', 0),
-                            'Monthly Income': monthly_income if monthly_income else None,
+                            'ER ICHRA Monthly': ichra_monthly,
+                            'ER ICHRA Annual': emp_data.get('annual_contribution', 0),
+                            'Monthly Income': monthly_income if has_income else None,
+                            'Affordability Basis': affordability_basis,
                             'Max EE Cost (9.96%)': max_ee_cost,
+                        }
+
+                        # Add income-based threshold column if using FPL but income data exists
+                        if is_fpl_strategy:
+                            row_data['Income-Based Threshold'] = income_based_threshold
+
+                        row_data.update({
                             'EE Cost After ICHRA': ee_cost_after_ichra,
-                            'Affordable': 'Yes' if emp_aff.get('is_affordable') else ('No' if emp_aff.get('is_affordable') is False else ''),
+                            'Affordable': (
+                                'Yes' if (
+                                    (is_fpl_strategy and emp_data.get('is_fpl_affordable')) or
+                                    emp_aff.get('is_affordable')
+                                ) else (
+                                    'No' if (
+                                        (is_fpl_strategy and emp_data.get('is_fpl_affordable') is False) or
+                                        emp_aff.get('is_affordable') is False
+                                    ) else ''
+                                )
+                            ),
                             'Min Needed': emp_aff.get('monthly_contribution') if emp_aff.get('monthly_contribution') else None,
                             'Adjusted': 'Yes' if emp_data.get('adjusted_for_affordability') else '',
                         })
 
+                        emp_rows.append(row_data)
+
                     emp_df = pd.DataFrame(emp_rows)
                     emp_df.to_excel(writer, sheet_name='Employee Detail', index=False)
+                    apply_tahoma_styling(writer.sheets['Employee Detail'])
+                    style_header_row(writer.sheets['Employee Detail'])
 
-                # === TAB 6: BY AGE TIER ===
+                # ============================================================
+                # TAB 2: SUMMARY & COSTS (combined Summary, Cost Comparison, Savings, IRS Compliance)
+                # ============================================================
+                summary_rows = []
+
+                # --- REPORT INFO ---
+                summary_rows.append({'Section': 'REPORT INFO', 'Item': '', 'Value': '', 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Report Generated', 'Value': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'), 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Client Name', 'Value': client_name, 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': '', 'Value': '', 'Notes': ''})
+
+                # --- STRATEGY ---
+                summary_rows.append({'Section': 'STRATEGY', 'Item': '', 'Value': '', 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Strategy Name', 'Value': strategy_name, 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Strategy Type', 'Value': strategy_type, 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Employees Covered', 'Value': employees_covered, 'Notes': ''})
+
+                # Strategy-specific parameters
+                if strategy_type == 'base_age_curve':
+                    summary_rows.append({'Section': '', 'Item': 'Base Age', 'Value': config.get('base_age', 21), 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Base Contribution', 'Value': config.get('base_contribution', 0), 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Method', 'Value': 'Base contribution × ACA 3:1 age curve ratio', 'Notes': ''})
+                elif strategy_type == 'percentage_lcsp':
+                    summary_rows.append({'Section': '', 'Item': 'LCSP Percentage', 'Value': f"{config.get('lcsp_percentage', 0):.1f}%", 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Method', 'Value': 'Percentage of employee LCSP', 'Notes': ''})
+                elif strategy_type == 'fpl_safe_harbor':
+                    fpl_threshold = config.get('fpl_threshold', 0) or result.get('config', {}).get('fpl_threshold', 0)
+                    summary_rows.append({'Section': '', 'Item': 'FPL Threshold', 'Value': f"${fpl_threshold:,.2f}/mo", 'Notes': '9.96% of Federal Poverty Level'})
+                    summary_rows.append({'Section': '', 'Item': 'Method', 'Value': 'FPL Safe Harbor (guaranteed affordable)', 'Notes': ''})
+
+                summary_rows.append({'Section': '', 'Item': 'Family Multipliers', 'Value': 'Yes' if config.get('apply_family_multipliers') else 'No', 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Affordability Adjusted', 'Value': 'Yes' if result.get('affordability_adjusted') else 'No', 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': '', 'Value': '', 'Notes': ''})
+
+                # --- COST COMPARISON ---
+                summary_rows.append({'Section': 'COST COMPARISON', 'Item': '', 'Value': '', 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Current (2025) - ER', 'Value': current_er_annual, 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Current (2025) - EE', 'Value': current_ee_annual, 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'Current (2025) - Total', 'Value': current_total_annual, 'Notes': ''})
+
+                if has_renewal_data:
+                    summary_rows.append({'Section': '', 'Item': '2026 Renewal - ER', 'Value': projected_er_annual_2026, 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': '2026 Renewal - EE', 'Value': projected_ee_annual_2026, 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': '2026 Renewal - Total', 'Value': renewal_total_annual, 'Notes': ''})
+
+                summary_rows.append({'Section': '', 'Item': 'ICHRA Budget (ER)', 'Value': proposed_annual, 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': 'ICHRA Budget (EE)', 'Value': 'Varies by plan selection', 'Notes': ''})
+                summary_rows.append({'Section': '', 'Item': '', 'Value': '', 'Notes': ''})
+
+                # --- SAVINGS ---
+                summary_rows.append({'Section': 'SAVINGS ANALYSIS', 'Item': '', 'Value': '', 'Notes': ''})
+                savings_vs_current = current_total_annual - proposed_annual
+                savings_vs_current_pct = (savings_vs_current / current_total_annual * 100) if current_total_annual > 0 else 0
+
+                if has_renewal_data:
+                    ichra_70 = proposed_annual * 0.70
+                    savings_70 = renewal_total_annual - ichra_70
+                    savings_70_pct = (savings_70 / renewal_total_annual * 100) if renewal_total_annual > 0 else 0
+
+                    summary_rows.append({'Section': '', 'Item': 'vs 2026 Renewal', 'Value': savings_vs_renewal_total, 'Notes': f'{savings_vs_renewal_total_pct:.1f}%'})
+                    summary_rows.append({'Section': '', 'Item': 'vs 2026 Renewal (70% take rate)', 'Value': savings_70, 'Notes': f'{savings_70_pct:.1f}%'})
+
+                summary_rows.append({'Section': '', 'Item': 'vs Current Plan (2025)', 'Value': savings_vs_current, 'Notes': f'{savings_vs_current_pct:.1f}%'})
+                summary_rows.append({'Section': '', 'Item': '', 'Value': '', 'Notes': ''})
+
+                # --- IRS COMPLIANCE ---
+                summary_rows.append({'Section': 'IRS COMPLIANCE', 'Item': '', 'Value': '', 'Notes': ''})
+
+                if strategy_type == 'fpl_safe_harbor':
+                    summary_rows.append({'Section': '', 'Item': 'Affordability Method', 'Value': 'FPL Safe Harbor', 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'IRS Threshold', 'Value': f"${fpl_threshold:,.2f}/mo", 'Notes': '9.96% of Federal Poverty Level'})
+                    summary_rows.append({'Section': '', 'Item': 'Employees Affordable', 'Value': employees_covered, 'Notes': '100% (guaranteed)'})
+                    summary_rows.append({'Section': '', 'Item': 'Status', 'Value': 'Compliant', 'Notes': 'FPL Safe Harbor guarantees affordability'})
+                elif after:
+                    compliance_status = 'Compliant (Adjusted)' if result.get('affordability_adjusted') else (
+                        'Action Needed' if after.get('total_gap', 0) > 0 else 'Compliant'
+                    )
+                    summary_rows.append({'Section': '', 'Item': 'Affordability Method', 'Value': 'Income-Based', 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'IRS Threshold', 'Value': '9.96% of household income', 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Employees with Income Data', 'Value': after.get('employees_analyzed', 0), 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Employees Meeting Threshold', 'Value': after.get('affordable_count', 0), 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Compliance Rate', 'Value': f"{after.get('affordable_pct', 0):.1f}%", 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Annual Gap to 100%', 'Value': after.get('total_gap', 0), 'Notes': ''})
+                    summary_rows.append({'Section': '', 'Item': 'Status', 'Value': compliance_status, 'Notes': ''})
+
+                summary_df = pd.DataFrame(summary_rows)
+                summary_df.to_excel(writer, sheet_name='Summary & Costs', index=False)
+                apply_tahoma_styling(writer.sheets['Summary & Costs'])
+                style_header_row(writer.sheets['Summary & Costs'])
+
+                # Highlight section headers
+                ws = writer.sheets['Summary & Costs']
+                for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+                    if row[0].value and row[0].value.isupper():
+                        for cell in row:
+                            cell.font = tahoma_bold
+                            cell.fill = section_fill
+
+                # ============================================================
+                # TAB 3: BREAKDOWNS (combined By Age Tier and By Family Status)
+                # ============================================================
+                breakdown_rows = []
+
+                # --- BY AGE TIER ---
                 by_age = result.get('by_age_tier', {})
                 if by_age:
-                    age_rows = []
+                    breakdown_rows.append({'Category': 'BY AGE TIER', 'Group': '', 'Employee Count': '', 'Total Monthly': '', 'Average Monthly': '', 'Total Annual': ''})
                     for tier, data in sorted(by_age.items()):
                         avg = data['total_monthly'] / data['count'] if data['count'] > 0 else 0
-                        age_rows.append({
-                            'Age Tier': tier,
+                        breakdown_rows.append({
+                            'Category': '',
+                            'Group': tier,
                             'Employee Count': data['count'],
                             'Total Monthly': data['total_monthly'],
                             'Average Monthly': avg,
                             'Total Annual': data['total_monthly'] * 12,
                         })
-                    age_df = pd.DataFrame(age_rows)
-                    age_df.to_excel(writer, sheet_name='By Age Tier', index=False)
+                    breakdown_rows.append({'Category': '', 'Group': '', 'Employee Count': '', 'Total Monthly': '', 'Average Monthly': '', 'Total Annual': ''})
 
-                # === TAB 7: BY FAMILY STATUS ===
+                # --- BY FAMILY STATUS ---
                 by_fs = result.get('by_family_status', {})
                 if by_fs:
-                    fs_rows = []
+                    breakdown_rows.append({'Category': 'BY FAMILY STATUS', 'Group': '', 'Employee Count': '', 'Total Monthly': '', 'Average Monthly': '', 'Total Annual': ''})
                     for fs, data in sorted(by_fs.items()):
                         avg = data['total_monthly'] / data['count'] if data['count'] > 0 else 0
-                        fs_rows.append({
-                            'Family Status': fs,
+                        breakdown_rows.append({
+                            'Category': '',
+                            'Group': fs,
                             'Employee Count': data['count'],
                             'Total Monthly': data['total_monthly'],
                             'Average Monthly': avg,
                             'Total Annual': data['total_monthly'] * 12,
                         })
-                    fs_df = pd.DataFrame(fs_rows)
-                    fs_df.to_excel(writer, sheet_name='By Family Status', index=False)
 
-                # === TAB 8: GLOSSARY ===
+                if breakdown_rows:
+                    breakdown_df = pd.DataFrame(breakdown_rows)
+                    breakdown_df.to_excel(writer, sheet_name='Breakdowns', index=False)
+                    apply_tahoma_styling(writer.sheets['Breakdowns'])
+                    style_header_row(writer.sheets['Breakdowns'])
+
+                    # Highlight section headers
+                    ws = writer.sheets['Breakdowns']
+                    for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+                        if row[0].value and row[0].value.startswith('BY '):
+                            for cell in row:
+                                cell.font = tahoma_bold
+                                cell.fill = section_fill
+
+                # ============================================================
+                # TAB 4: LCSP PLANS (employee LCSP details with plan info)
+                # ============================================================
+                if emp_contribs:
+                    # Query to get LCSP plan details for each employee
+                    lcsp_plan_rows = []
+
+                    # Get unique state/rating_area/age combinations to batch query
+                    lcsp_lookups = {}
+                    for emp_id, emp_data in emp_contribs.items():
+                        state = emp_data.get('state', '')
+                        rating_area = emp_data.get('rating_area', '')
+                        age = emp_data.get('age', 21)
+                        lcsp_ee_rate = emp_data.get('lcsp_ee_rate', 0)
+
+                        if state and rating_area:
+                            key = (state, rating_area, age)
+                            if key not in lcsp_lookups:
+                                lcsp_lookups[key] = {'rate': lcsp_ee_rate, 'employees': []}
+                            lcsp_lookups[key]['employees'].append(emp_id)
+
+                    # Query LCSP plan details for each unique combination
+                    lcsp_plan_details = {}
+                    try:
+                        db = st.session_state.get('db')
+                        if db:
+                            for (state, rating_area, age), lookup_data in lcsp_lookups.items():
+                                # Extract numeric rating area
+                                if isinstance(rating_area, str):
+                                    import re
+                                    ra_match = re.search(r'(\d+)', rating_area)
+                                    ra_numeric = int(ra_match.group(1)) if ra_match else 1
+                                else:
+                                    ra_numeric = int(rating_area) if rating_area else 1
+
+                                # Query for LCSP plan details
+                                lcsp_query = """
+                                SELECT
+                                    p.hios_plan_id as plan_id,
+                                    p.plan_marketing_name,
+                                    i.issr_lgl_name as issuer_name,
+                                    v.plan_brochure,
+                                    v.url_for_summary_of_benefits_and_coverage as sbc_url,
+                                    br.individual_rate::numeric as premium
+                                FROM rbis_insurance_plan_base_rates_20251019202724 br
+                                JOIN rbis_insurance_plan_20251019202724 p ON br.plan_id = p.hios_plan_id
+                                JOIN rbis_insurance_plan_variant_20251019202724 v ON p.hios_plan_id = v.hios_plan_id
+                                LEFT JOIN "HIOS_issuers_pivoted" i ON LEFT(p.hios_plan_id, 5) = i.hios_issuer_id
+                                WHERE p.level_of_coverage = 'Silver'
+                                    AND p.market_coverage = 'Individual'
+                                    AND v.csr_variation_type = 'Exchange variant (no CSR)'
+                                    AND SUBSTRING(p.hios_plan_id, 6, 2) = %s
+                                    AND br.rating_area_id ~ '^Rating Area [0-9]+$'
+                                    AND (REGEXP_REPLACE(br.rating_area_id, '[^0-9]', '', 'g'))::integer = %s
+                                    AND br.age = %s
+                                ORDER BY br.individual_rate::numeric ASC
+                                LIMIT 1
+                                """
+                                try:
+                                    result_df = pd.read_sql(lcsp_query, db.engine, params=(state, ra_numeric, str(age)))
+                                    if not result_df.empty:
+                                        row = result_df.iloc[0]
+                                        for emp_id in lookup_data['employees']:
+                                            lcsp_plan_details[emp_id] = {
+                                                'plan_id': row.get('plan_id', ''),
+                                                'plan_marketing_name': row.get('plan_marketing_name', ''),
+                                                'issuer_name': row.get('issuer_name', ''),
+                                                'plan_brochure': row.get('plan_brochure', ''),
+                                                'sbc_url': row.get('sbc_url', ''),
+                                            }
+                                except Exception as e:
+                                    pass  # Skip on error, leave empty
+                    except Exception as e:
+                        pass  # Skip LCSP plan lookup on error
+
+                    # Build LCSP Plans rows
+                    for emp_id, emp_data in emp_contribs.items():
+                        # Get census data for county and ZIP
+                        emp_census = census_df[census_df['employee_id'] == emp_id]
+                        if not emp_census.empty:
+                            emp_row = emp_census.iloc[0]
+                            county = emp_row.get('county', '')
+                            zip_code = emp_row.get('zip_code', emp_row.get('zip', emp_row.get('home_zip', '')))
+                        else:
+                            county = ''
+                            zip_code = ''
+
+                        plan_details = lcsp_plan_details.get(emp_id, {})
+
+                        lcsp_plan_rows.append({
+                            'Employee ID': emp_id,
+                            'Name': emp_data.get('name', emp_id),
+                            'Age': emp_data.get('age', ''),
+                            'State': emp_data.get('state', ''),
+                            'County': county,
+                            'Rating Area': emp_data.get('rating_area', ''),
+                            'ZIP': zip_code,
+                            'Family Status': emp_data.get('family_status', 'EE'),
+                            'LCSP Premium': emp_data.get('lcsp_ee_rate', 0),
+                            'Plan Name': plan_details.get('plan_marketing_name', ''),
+                            'Plan ID': plan_details.get('plan_id', ''),
+                            'Carrier': plan_details.get('issuer_name', ''),
+                            'Plan Brochure': plan_details.get('plan_brochure', ''),
+                            'SBC Link': plan_details.get('sbc_url', ''),
+                        })
+
+                    if lcsp_plan_rows:
+                        lcsp_df = pd.DataFrame(lcsp_plan_rows)
+                        lcsp_df.to_excel(writer, sheet_name='LCSP Plans', index=False)
+                        apply_tahoma_styling(writer.sheets['LCSP Plans'])
+                        style_header_row(writer.sheets['LCSP Plans'])
+
+                # ============================================================
+                # TAB 5: GLOSSARY
+                # ============================================================
                 glossary_data = {
                     'Term': [
                         'ICHRA',
                         'LCSP',
                         'LCSP (Self-Only)',
                         'LCSP (Tier/Family)',
+                        'LCSP Premium',
+                        'Plan ID',
+                        'Carrier',
+                        'Plan Brochure',
+                        'SBC Link',
                         'Tier Multiplier',
                         'Rating Area',
                         'ACA Age Curve',
                         'Age Ratio',
                         'Family Multiplier',
-                        '9.96% Threshold',
+                        'ER Minimum Contribution',
+                        'ER ICHRA Monthly',
+                        'ER ICHRA Annual',
+                        'Affordability Basis',
+                        '9.96% Threshold (Income)',
+                        'FPL Safe Harbor',
                     ],
                     'Definition': [
                         'Individual Coverage Health Reimbursement Arrangement - employer-funded allowance for employees to buy their own health insurance',
                         'Lowest Cost Silver Plan - cheapest silver-tier marketplace plan in an employees rating area',
                         'LCSP premium for employee-only (self) coverage based on employee age',
                         'Estimated LCSP premium for the employees coverage tier (Self-Only × Tier Multiplier)',
+                        'Monthly premium for the Lowest Cost Silver Plan based on employee age and rating area',
+                        'HIOS Plan ID - unique identifier for the marketplace plan (format: XXXXX-CC-NNNNNNNN-NN)',
+                        'Insurance company (issuer) offering the plan',
+                        'URL to the plan brochure/marketing materials from the carrier',
+                        'URL to the Summary of Benefits and Coverage (SBC) document - standardized plan comparison document',
                         'Multiplier applied to Self-Only LCSP based on family status: EE=1.0, ES=1.5, EC=1.3, F=1.8',
                         'Geographic zone used by insurers to set premiums (defined by state)',
                         'Federal 3:1 age rating curve - premiums can vary up to 3x based on age (21-64)',
                         'Multiplier from ACA age curve (age 21 = 1.0, age 64 = 3.0)',
                         'Multiplier for employees with dependents applied to ICHRA contribution',
-                        '2026 IRS affordability safe harbor - employee LCSP cost cannot exceed 9.96% of household income',
+                        'Base employer contribution before family multipliers are applied',
+                        'Total monthly employer ICHRA contribution (after all multipliers)',
+                        'Total annual employer ICHRA contribution (ER ICHRA Monthly × 12)',
+                        'Method used to determine affordability: "FPL" (Federal Poverty Level) or "Income" (household income)',
+                        '2026 IRS affordability threshold - employee LCSP cost cannot exceed 9.96% of household income',
+                        'IRS safe harbor: if employee LCSP cost ≤ 9.96% of FPL (~$128/mo), ICHRA is deemed affordable for all employees regardless of income',
                     ],
                 }
                 glossary_df = pd.DataFrame(glossary_data)
                 glossary_df.to_excel(writer, sheet_name='Glossary', index=False)
+                apply_tahoma_styling(writer.sheets['Glossary'])
+                style_header_row(writer.sheets['Glossary'])
 
             output.seek(0)
             return output.getvalue()

@@ -458,14 +458,27 @@
             color: #92400e;
         }
 
-        /* Footer */
+        /* Footer - sticky at bottom */
         .footer {
+            position: absolute;
+            bottom: 0.5in;
+            left: 0.5in;
+            right: 0.5in;
             padding-top: 12px;
             border-top: 1px solid #e5e5e5;
+            text-align: center;
+        }
+
+        .footer-logo {
+            width: 36px;
+            height: auto;
+            margin-bottom: 6px;
+            opacity: 0.8;
+        }
+
+        .footer-text {
             font-size: 9px;
             color: #999;
-            text-align: center;
-            margin-top: auto;
         }
 
         @media print {
@@ -523,15 +536,35 @@
                     <div class="detail">${{ "{:,.0f}".format(data.avg_per_employee_monthly) }}/mo × {{ data.employees_covered }} employees</div>
                 </div>
                 <div class="hero-arrow">→</div>
+                {% if data.has_renewal_data %}
                 <div class="hero-savings">
                     <div class="label">You Save</div>
                     <div class="value">${{ "{:,.0f}".format(data.savings_vs_renewal_er) }}</div>
                     <div class="percent">{{ "%.0f"|format(data.savings_vs_renewal_er_pct) }}% less than renewal</div>
                 </div>
+                {% elif data.has_current_data %}
+                <div class="hero-savings">
+                    <div class="label">{% if data.savings_vs_current_total >= 0 %}You Save{% else %}Cost Change{% endif %}</div>
+                    <div class="value"{% if data.savings_vs_current_total < 0 %} style="color: #dc2626;"{% endif %}>${{ "{:,.0f}".format(data.savings_vs_current_total|abs) }}</div>
+                    <div class="percent">{{ "%.0f"|format(data.savings_vs_current_total_pct|abs) }}% {% if data.savings_vs_current_total >= 0 %}less than current{% else %}more than current{% endif %}</div>
+                </div>
+                {% else %}
+                <div class="hero-savings">
+                    <div class="label">Your Annual Budget</div>
+                    <div class="value">${{ "{:,.0f}".format(data.proposed_ichra_annual) }}</div>
+                    <div class="percent">Fixed costs</div>
+                </div>
+                {% endif %}
             </div>
+            {% if data.has_renewal_data %}
             <div class="hero-context">
                 vs. your <strong>2026 renewal</strong> which would cost you <strong>${{ "{:,.0f}".format(data.projected_er_annual) }}/yr</strong>
             </div>
+            {% elif data.has_current_data %}
+            <div class="hero-context">
+                vs. your <strong>current plan (2025)</strong> which costs <strong>${{ "{:,.0f}".format(data.current_total_annual) }}/yr</strong> total
+            </div>
+            {% endif %}
         </div>
 
         <!-- ======================== -->
@@ -543,30 +576,52 @@
                 <thead>
                     <tr>
                         <th class="label-col"></th>
+                        {% if data.has_current_data %}
                         <th class="value-col">Current (2025)</th>
+                        {% endif %}
+                        {% if data.has_renewal_data %}
                         <th class="value-col">2026 Renewal</th>
+                        {% endif %}
                         <th class="value-col ichra">ICHRA</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td class="label-col">You pay</td>
+                        {% if data.has_current_data %}
                         <td class="value-col">${{ "{:,.0f}".format(data.current_er_annual) }}</td>
+                        {% endif %}
+                        {% if data.has_renewal_data %}
                         <td class="value-col">${{ "{:,.0f}".format(data.projected_er_annual) }}</td>
+                        {% endif %}
                         <td class="value-col ichra-col">${{ "{:,.0f}".format(data.proposed_ichra_annual) }}</td>
                     </tr>
                     <tr>
                         <td class="label-col">Employees pay</td>
+                        {% if data.has_current_data %}
                         <td class="value-col">${{ "{:,.0f}".format(data.current_ee_annual) }}</td>
+                        {% endif %}
+                        {% if data.has_renewal_data %}
                         <td class="value-col">${{ "{:,.0f}".format(data.projected_ee_annual) }}</td>
+                        {% endif %}
                         <td class="value-col ichra-col">Varies*</td>
                     </tr>
+                    {% if data.has_renewal_data %}
                     <tr class="savings-row">
                         <td class="label-col">Savings vs Renewal</td>
+                        {% if data.has_current_data %}
                         <td class="value-col">—</td>
+                        {% endif %}
                         <td class="value-col">—</td>
                         <td class="value-col ichra-col">${{ "{:,.0f}".format(data.savings_vs_renewal_er) }}</td>
                     </tr>
+                    {% elif data.has_current_data %}
+                    <tr class="savings-row">
+                        <td class="label-col">{% if data.savings_vs_current_total >= 0 %}Savings vs Current{% else %}Change vs Current{% endif %}</td>
+                        <td class="value-col">—</td>
+                        <td class="value-col ichra-col"{% if data.savings_vs_current_total < 0 %} style="color: #dc2626;"{% endif %}>${{ "{:,.0f}".format(data.savings_vs_current_total) }}</td>
+                    </tr>
+                    {% endif %}
                 </tbody>
             </table>
             <div style="font-size: 9px; color: #666; margin-top: 6px;">
@@ -577,6 +632,7 @@
         <!-- ======================== -->
         <!-- INSIGHT BOX (70%)        -->
         <!-- ======================== -->
+        {% if data.has_renewal_data or data.has_current_data %}
         <div class="insight-box">
             <div class="insight-icon">💡</div>
             <div class="insight-content">
@@ -587,10 +643,16 @@
                 </div>
             </div>
             <div class="insight-value">
+                {% if data.has_renewal_data %}
                 <div class="amount">${{ "{:,.0f}".format(data.savings_ichra_70_vs_renewal) }}</div>
-                <div class="label">potential savings</div>
+                {% elif data.has_current_data %}
+                {% set savings_70_vs_current = data.current_total_annual - data.ichra_projected_70 %}
+                <div class="amount"{% if savings_70_vs_current < 0 %} style="color: #dc2626;"{% endif %}>${{ "{:,.0f}".format(savings_70_vs_current|abs) }}</div>
+                {% endif %}
+                <div class="label">potential {% if (data.has_renewal_data and data.savings_ichra_70_vs_renewal >= 0) or (not data.has_renewal_data and data.has_current_data and (data.current_total_annual - data.ichra_projected_70) >= 0) %}savings{% else %}cost{% endif %}</div>
             </div>
         </div>
+        {% endif %}
 
         {% if data.has_affordability_data %}
         <!-- ======================== -->
@@ -599,17 +661,31 @@
         <div class="compliance-section">
             <div class="compliance-header">
                 <h3>IRS Compliance</h3>
-                {% if data.affordability_adjusted or data.employees_needing_increase == 0 %}
+                {% if data.strategy_type == 'fpl_safe_harbor' or data.affordability_adjusted or data.employees_needing_increase == 0 %}
                 <span class="compliance-badge pass">✓ All Clear</span>
                 {% else %}
                 <span class="compliance-badge needs-attention">Needs Attention</span>
                 {% endif %}
             </div>
 
-            {% if data.affordability_adjusted %}
+            {% if data.strategy_type == 'fpl_safe_harbor' %}
+            {# FPL Safe Harbor strategy - always 100% compliant #}
             <div class="compliance-explanation">
-                The IRS requires allowances be "affordable" (employees pay no more than 9.96% of income for a basic plan).
-                Your budget already includes adjustments to meet this requirement.
+                <strong>Strategy:</strong> FPL Safe Harbor<br>
+                <strong>Affordability Method:</strong> {{ data.affordability_method }}
+            </div>
+            <div class="compliance-result success">
+                <div class="compliance-icon">✓</div>
+                <div class="compliance-text">
+                    <strong>All {{ data.employees_covered }} employees</strong> meet IRS requirements.<br>
+                    <span style="font-size: 9px; color: #666;">FPL Safe Harbor guarantees affordability regardless of employee income.</span>
+                </div>
+            </div>
+            {% elif data.affordability_adjusted %}
+            <div class="compliance-explanation">
+                <strong>Strategy:</strong> {{ data.strategy_description }}<br>
+                <strong>Affordability Method:</strong> {{ data.affordability_method }}<br>
+                Your budget includes adjustments to meet this requirement.
             </div>
             <div class="compliance-result success">
                 <div class="compliance-icon">✓</div>
@@ -620,7 +696,8 @@
             </div>
             {% elif data.employees_needing_increase > 0 %}
             <div class="compliance-explanation">
-                The IRS requires allowances be "affordable" (employees pay no more than 9.96% of income for a basic plan).
+                <strong>Strategy:</strong> {{ data.strategy_description }}<br>
+                <strong>Affordability Method:</strong> {{ data.affordability_method }}<br>
                 {{ data.employees_needing_increase }} employee{{ 's' if data.employees_needing_increase != 1 else '' }} may need a higher allowance.
             </div>
             <div class="compliance-result action">
@@ -632,7 +709,8 @@
             </div>
             {% else %}
             <div class="compliance-explanation">
-                The IRS requires allowances be "affordable" (employees pay no more than 9.96% of income for a basic plan).
+                <strong>Strategy:</strong> {{ data.strategy_description }}<br>
+                <strong>Affordability Method:</strong> {{ data.affordability_method }}
             </div>
             <div class="compliance-result success">
                 <div class="compliance-icon">✓</div>
@@ -646,7 +724,10 @@
         {% endif %}
 
         <div class="footer">
-            Generated by Glove Benefits for {{ data.client_name }} | {{ data.report_date }}
+            {% if data.logo_base64 %}
+            <img src="data:image/png;base64,{{ data.logo_base64 }}" alt="Glove" class="footer-logo">
+            {% endif %}
+            <div class="footer-text">Generated by Glove Benefits for {{ data.client_name }} | {{ data.report_date }}</div>
         </div>
     </div>
 </body>
