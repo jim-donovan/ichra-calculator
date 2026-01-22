@@ -115,8 +115,18 @@ def generate_member_breakdown_html(
 
         for plan in available_plans:
             breakdown = member_breakdowns.get(plan, {})
-            rate_key = f'{member["key"]}_rate'
-            rate = breakdown.get(rate_key)
+
+            # For children, match rate by age (since display order may differ from calc order)
+            if member["key"].startswith("child_"):
+                rate = None
+                member_age = member["age"]
+                for i in range(1, 6):
+                    if breakdown.get(f'child_{i}_age') == member_age:
+                        rate = breakdown.get(f'child_{i}_rate')
+                        break
+            else:
+                rate_key = f'{member["key"]}_rate'
+                rate = breakdown.get(rate_key)
 
             if rate is not None and rate > 0:
                 row_cells += f'<td class="rate-col">${rate:,.0f}</td>'

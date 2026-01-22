@@ -18,6 +18,7 @@ logging.basicConfig(
 from database import get_database_connection
 from utils import CensusProcessor, ContributionComparison, render_feedback_sidebar
 from constants import FAMILY_STATUS_CODES
+from census_schema import normalize_census_df
 # PDF renderer imported lazily when needed (requires playwright)
 
 
@@ -339,6 +340,11 @@ if st.session_state.census_df is not None:
             st.session_state.census_df = None
             st.session_state.dependents_df = None
             st.session_state.contribution_analysis = {}
+            # Clear strategy cache to force recalculation with new census
+            st.session_state.current_strategy_result = None
+            st.session_state.current_strategy_config = None
+            st.session_state.current_recommendation = None
+            st.session_state.lcsp_cache = None
             st.rerun()
 
     st.markdown("---")
@@ -1071,9 +1077,21 @@ else:
                     parse_elapsed = time.time() - parse_start
                     logging.info(f"FILE UPLOAD: Census parsing complete in {parse_elapsed:.1f}s")
 
+                    # Normalize column names before storing (ensures consistent access across pages)
+                    employees_df = normalize_census_df(employees_df)
+
                     # Store in session state
                     st.session_state.census_df = employees_df
                     st.session_state.dependents_df = dependents_df
+
+                    # Clear strategy cache to force recalculation with new census
+                    st.session_state.current_strategy_result = None
+                    st.session_state.current_strategy_config = None
+                    st.session_state.current_recommendation = None
+
+                    # Clear LCSP cache since census changed (will be regenerated on Page 3)
+                    if 'lcsp_cache' in st.session_state:
+                        del st.session_state.lcsp_cache
 
                     # Pre-compute FAST hashes for PDF caching (avoid expensive to_json())
                     # Use shape + key column sums as proxy for data identity
@@ -1741,6 +1759,11 @@ with st.sidebar:
         if st.button("Clear Census", use_container_width=True):
             st.session_state.census_df = None
             st.session_state.dependents_df = None
+            # Clear strategy cache
+            st.session_state.current_strategy_result = None
+            st.session_state.current_strategy_config = None
+            st.session_state.current_recommendation = None
+            st.session_state.lcsp_cache = None
             st.rerun()
     else:
         st.markdown("""

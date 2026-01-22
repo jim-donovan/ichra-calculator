@@ -2325,6 +2325,275 @@ def select_employee_examples(census_df: pd.DataFrame, contribution_analysis: Dic
     return examples
 
 
+# =============================================================================
+# EMPLOYEE DROPDOWN SELECTION HELPERS
+# =============================================================================
+
+# Slot configuration: each slot has a label and tier filter
+EMPLOYEE_SLOT_CONFIG = {
+    'slot_1': {
+        'label': 'Youngest Employee',
+        'tier_filter': ['EE'],  # Employee Only
+        'default_logic': 'youngest'
+    },
+    'slot_2': {
+        'label': 'Mid-Age Family',
+        'tier_filter': ['EC', 'F'],  # With dependents (Children or Family)
+        'default_logic': 'mid'
+    },
+    'slot_3': {
+        'label': 'Older Employee',
+        'tier_filter': ['EE', 'ES', 'EC', 'F'],  # Any tier, just oldest under-65
+        'default_logic': 'oldest'
+    }
+}
+
+
+def get_employee_dropdown_options(census_df: pd.DataFrame, tier_filter: List[str]) -> List[str]:
+    """
+    Get list of employee IDs filtered by tier for dropdown selection.
+
+    Args:
+        census_df: Census DataFrame with employee data
+        tier_filter: List of family status codes to include (e.g., ['EE'], ['EC', 'F'])
+
+    Returns:
+        List of employee_id strings (or DataFrame indices as strings)
+    """
+    if census_df is None or census_df.empty:
+        return []
+
+    # Filter by family status and age < 65 (non-Medicare)
+    filtered = census_df[
+        (census_df['family_status'].isin(tier_filter)) &
+        (census_df['age'] < 65)
+    ].copy()
+
+    if filtered.empty:
+        # Fall back to any employee under 65 if no matches
+        filtered = census_df[census_df['age'] < 65].copy()
+
+    if filtered.empty:
+        return []
+
+    # Sort by age for consistent ordering
+    filtered = filtered.sort_values('age')
+
+    # Return list of employee IDs (or indices as strings if no employee_id column)
+    options = []
+    for idx, row in filtered.iterrows():
+        emp_id = row.get('employee_id', str(idx))
+        options.append(str(emp_id))
+
+    return options
+
+
+def format_employee_option(census_df: pd.DataFrame, emp_id: str) -> str:
+    """
+    Format an employee ID for display in dropdown.
+
+    Returns format: "John D. (42) - Employee Only • Harris County, TX"
+    """
+    # Find the employee row
+    employee_row = get_employee_row_by_id(census_df, emp_id)
+    if employee_row is None:
+        return emp_id
+
+    tier_labels = {
+        'EE': 'Employee Only',
+        'ES': 'Employee + Spouse',
+        'EC': 'Employee + Children',
+        'F': 'Family'
+    }
+
+    first_name = employee_row.get('first_name', 'Employee')
+    last_name = employee_row.get('last_name', '')
+    last_initial = f"{last_name[0]}." if last_name else ""
+    age = int(employee_row.get('age', 0))
+    family_status = employee_row.get('family_status', 'EE')
+    tier_label = tier_labels.get(family_status, family_status)
+
+    # Location info
+    county = employee_row.get('county', '')
+    state = employee_row.get('state', '')
+    location_text = f"{county}, {state}" if county else state
+
+    # Display format: "John D. (42) - Employee Only • Location"
+    display = f"{first_name} {last_initial} ({age}) - {tier_label}"
+    if location_text:
+        display += f"  •  {location_text}"
+
+    return display
+
+
+def get_employee_row_by_id(census_df: pd.DataFrame, emp_id) -> Optional[pd.Series]:
+    """
+    Look up an employee row by ID.
+
+    Args:
+        census_df: Census DataFrame
+        emp_id: Employee ID (string, int, or dict with 'employee_id' key)
+
+    Returns:
+        pandas Series for the employee, or None if not found
+    """
+    if census_df is None or census_df.empty:
+        return None
+
+    # Handle dict input (legacy session state format)
+    if isinstance(emp_id, dict):
+        emp_id = emp_id.get('employee_id', emp_id.get('idx', ''))
+
+    # Convert to string for comparison
+    emp_id_str = str(emp_id)
+
+    # Try matching employee_id column first
+    if 'employee_id' in census_df.columns:
+        matches = census_df[census_df['employee_id'].astype(str) == emp_id_str]
+        if not matches.empty:
+            return matches.iloc[0]
+
+    # Try using emp_id as index
+    try:
+        # Try numeric index
+        idx = int(emp_id_str) if emp_id_str.isdigit() else emp_id_str
+        if idx in census_df.index:
+            return census_df.loc[idx]
+    except (ValueError, KeyError, TypeError):
+        pass
+
+    return None
+
+
+def get_default_employee_selections(census_df: pd.DataFrame) -> Dict[str, str]:
+    """
+    Get default employee selections for each slot based on the original logic.
+
+    Returns:
+        Dict mapping slot keys to employee_id strings
+    """
+    defaults = {
+        'slot_1': None,
+        'slot_2': None,
+        'slot_3': None
+    }
+
+    if census_df is None or census_df.empty or 'age' not in census_df.columns:
+        return defaults
+
+    # Add DOB parsing for tie-breaking
+    df = census_df.copy()
+    if 'dob' in df.columns:
+        df['_dob_parsed'] = pd.to_datetime(df['dob'], format='mixed', errors='coerce')
+        # Sort: age ascending, then DOB descending (later DOB = younger)
+        sorted_df = df.sort_values(['age', '_dob_parsed'], ascending=[True, False])
+    else:
+        sorted_df = df.sort_values('age')
+
+    # Slot 1: Youngest Employee Only (EE)
+    ee_only = sorted_df[(sorted_df['family_status'] == 'EE') & (sorted_df['age'] < 65)]
+    if not ee_only.empty:
+        youngest = ee_only.iloc[0]
+        defaults['slot_1'] = str(youngest.get('employee_id', ee_only.index[0]))
+
+    # Slot 2: Mid-age with dependents (EC or F preferred)
+    with_deps = sorted_df[(sorted_df['family_status'].isin(['EC', 'F'])) & (sorted_df['age'] < 65)]
+    if not with_deps.empty:
+        mid_idx = len(with_deps) // 2
+        mid_family = with_deps.iloc[mid_idx]
+        defaults['slot_2'] = str(mid_family.get('employee_id', with_deps.index[mid_idx]))
+
+    # Slot 3: Oldest under 65
+    under_65 = sorted_df[sorted_df['age'] < 65]
+    if not under_65.empty:
+        oldest = under_65.iloc[-1]
+        defaults['slot_3'] = str(oldest.get('employee_id', under_65.index[-1]))
+
+    return defaults
+
+
+def build_selected_employee_examples(census_df: pd.DataFrame, data: 'DashboardData',
+                                      dependents_df: pd.DataFrame = None,
+                                      contribution_analysis: Dict = None,
+                                      db=None) -> List[Dict]:
+    """
+    Build employee examples for the currently selected employees in session state.
+
+    This is used by export functionality to get the current dropdown selections.
+
+    Returns:
+        List of employee example dicts for the currently selected employees
+    """
+    if census_df is None or census_df.empty:
+        return []
+
+    # Get selections from session state
+    selections = st.session_state.get('employee_example_selections', {})
+    if not selections:
+        selections = get_default_employee_selections(census_df)
+
+    # Get settings
+    contribution_settings = st.session_state.get('contribution_settings', {})
+    plan_config = st.session_state.get('plan_configurator', {})
+    dashboard_config = st.session_state.get('dashboard_config', {})
+    cooperative_ratio = dashboard_config.get('cooperative_ratio', COOPERATIVE_CONFIG['default_discount_ratio'])
+    exclude_deps = contribution_settings.get('exclude_dependent_ichra', False)
+
+    # Get flat amounts if in flat_amount mode
+    flat_amounts = None
+    if contribution_settings.get('input_mode') == 'flat_amount':
+        flat_amounts = contribution_settings.get('flat_amounts', {})
+        flat_amounts = {k: v for k, v in flat_amounts.items() if v is not None}
+        if not flat_amounts:
+            flat_amounts = None
+
+    # Load rate tables
+    coop_rates_df = load_cooperative_rate_table()
+    sedera_rates_df = load_sedera_rate_table(_db_available=db is not None)
+
+    # Slot configurations
+    slot_configs = [
+        ('slot_1', 'Youngest Employee', ['EE']),
+        ('slot_2', 'Mid-Age Family', ['EC', 'F']),
+        ('slot_3', 'Older Employee', ['EE', 'ES', 'EC', 'F']),
+    ]
+
+    examples = []
+    for slot_key, slot_label, _ in slot_configs:
+        selected_id = selections.get(slot_key)
+        if selected_id is None:
+            continue
+
+        # Find the employee row using helper
+        employee_row = get_employee_row_by_id(census_df, str(selected_id))
+        if employee_row is None:
+            continue
+
+        family_status = employee_row.get('family_status', 'EE')
+        use_ee_rate_only = (family_status == 'EE') or exclude_deps
+
+        example = build_employee_example(
+            employee_row,
+            label=slot_label,
+            contribution_analysis=contribution_analysis,
+            tier_costs=data.tier_costs,
+            multi_metal_results=data.multi_metal_results,
+            contribution_pct=data.contribution_pct,
+            cooperative_ratio=cooperative_ratio,
+            dependents_df=dependents_df,
+            db=db,
+            use_ee_rate_only=use_ee_rate_only,
+            coop_rates_df=coop_rates_df,
+            flat_amounts=flat_amounts,
+            sedera_rates_df=sedera_rates_df,
+            plan_config=plan_config,
+            contribution_settings=contribution_settings
+        )
+        examples.append(example)
+
+    return examples
+
+
 def build_employee_example(employee_row: pd.Series, label: str,
                            contribution_analysis: Dict = None, tier_costs: Dict = None,
                            multi_metal_results: Dict = None, contribution_pct: float = 0.65,
@@ -5308,14 +5577,20 @@ def render_employee_card(employee, has_renewal_data: bool = True):
                                 sp_row.append(f'<td style="text-align: center;">${rate:,.0f}</td>' if rate else '<td style="text-align: center;">--</td>')
                             data_rows.append('<tr>' + ''.join(sp_row) + '</tr>')
 
-                        # Child rows
+                        # Child rows - sorted youngest to oldest
                         child_ages = [fa for fa in family_ages if fa.get('relationship', '').lower() == 'child']
-                        for idx, child in enumerate(child_ages[:5], start=1):
+                        child_ages.sort(key=lambda x: x.get('age', 0))  # Youngest first
+                        for display_idx, child in enumerate(child_ages[:5], start=1):
                             child_age = child.get('age', 0)
-                            ch_row = [f'<td style="text-align: left;">Child {idx}</td>', f'<td style="text-align: center;">{child_age}</td>']
+                            ch_row = [f'<td style="text-align: left;">Child {display_idx}</td>', f'<td style="text-align: center;">{child_age}</td>']
                             for plan_name, _ in plan_types:
                                 breakdown = member_breakdowns.get(plan_name, {})
-                                rate = breakdown.get(f'child_{idx}_rate')
+                                # Find the rate that matches this child's age
+                                rate = None
+                                for i in range(1, 6):
+                                    if breakdown.get(f'child_{i}_age') == child_age:
+                                        rate = breakdown.get(f'child_{i}_rate')
+                                        break
                                 ch_row.append(f'<td style="text-align: center;">${rate:,.0f}</td>' if rate else '<td style="text-align: center;">--</td>')
                             data_rows.append('<tr>' + ''.join(ch_row) + '</tr>')
 
@@ -5346,7 +5621,20 @@ def render_employee_card(employee, has_renewal_data: bool = True):
             st.info("Plan details not available. Complete contribution analysis to see plan options.")
 
 
-def render_employee_examples(data: DashboardData):
+def render_employee_examples(data: DashboardData, census_df: pd.DataFrame = None,
+                             dependents_df: pd.DataFrame = None,
+                             contribution_analysis: Dict = None,
+                             db=None):
+    """
+    Render employee example cards with dropdown selectors for each slot.
+
+    Args:
+        data: DashboardData containing pre-calculated values and employee_examples
+        census_df: Census DataFrame for dynamic employee selection
+        dependents_df: Dependents DataFrame for family calculations
+        contribution_analysis: Per-employee ICHRA analysis dict
+        db: Database connection for LCSP lookups
+    """
     # Section header
     st.markdown("""
     <p style="font-size: 20px; font-weight: 500; color: #101828; margin-bottom: 4px;">How this affects your employees</p>
@@ -5357,9 +5645,31 @@ def render_employee_examples(data: DashboardData):
     with st.expander("Contribution Configurator", expanded=False):
         render_contribution_input_card()
 
-    if not data.employee_examples:
+    # Check if we have census data for dynamic selection
+    if census_df is None:
+        census_df = st.session_state.get('census_df')
+
+    if census_df is None or census_df.empty:
         st.info("Employee examples will be available after census upload and contribution analysis")
         return
+
+    # Initialize employee selections in session state if not present
+    if 'employee_example_selections' not in st.session_state:
+        st.session_state.employee_example_selections = get_default_employee_selections(census_df)
+
+    # Migrate old dict-format selections to new string format
+    current_selections = st.session_state.employee_example_selections
+    for slot_key in ['slot_1', 'slot_2', 'slot_3']:
+        val = current_selections.get(slot_key)
+        if isinstance(val, dict):
+            # Convert old dict format to string
+            current_selections[slot_key] = str(val.get('employee_id', val.get('idx', '')))
+
+    # Validate selections still exist in census (in case census changed)
+    defaults = get_default_employee_selections(census_df)
+    for slot_key in ['slot_1', 'slot_2', 'slot_3']:
+        if current_selections.get(slot_key) is None or current_selections.get(slot_key) == '':
+            current_selections[slot_key] = defaults.get(slot_key)
 
     # Options row: checkboxes and export buttons in a horizontal layout
     opt_col1, opt_col2, opt_col3, opt_col4 = st.columns([1, 1, 1, 1])
@@ -5395,8 +5705,12 @@ def render_employee_examples(data: DashboardData):
     with opt_col3:
         # CSV Export button
         if st.button("📋 Export to CSV", key="export_employee_examples_csv"):
+            # Build employee examples for currently selected employees
+            selected_examples = build_selected_employee_examples(
+                census_df, data, dependents_df, contribution_analysis, db
+            )
             csv_df = generate_employee_examples_csv(
-                data.employee_examples,
+                selected_examples,
                 plan_config=st.session_state.get('plan_configurator', {})
             )
             if csv_df is not None and not csv_df.empty:
@@ -5414,11 +5728,13 @@ def render_employee_examples(data: DashboardData):
 
     with opt_col4:
         if st.button("📊 Download slide", key="export_employee_examples_pptx"):
+            # Build employee examples for currently selected employees
+            selected_examples = build_selected_employee_examples(
+                census_df, data, dependents_df, contribution_analysis, db
+            )
             # Transform data for PPTX generator
-            # Use costs directly from employee examples - they are already calculated correctly
-            # by build_employee_example with the current contribution settings and toggles
             pptx_data = []
-            for emp in data.employee_examples:
+            for emp in selected_examples:
                 use_ee_rate = emp.get('use_ee_rate_only', False)
 
                 # Transform metal_plan_details to match PPTX generator format
@@ -5481,10 +5797,110 @@ def render_employee_examples(data: DashboardData):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Each employee example gets its own full-width row
-    for employee in data.employee_examples:
+    # Get parameters needed for building employee examples dynamically
+    if contribution_analysis is None:
+        contribution_analysis = st.session_state.get('contribution_analysis')
+    if dependents_df is None:
+        dependents_df = st.session_state.get('dependents_df')
+    contribution_settings = st.session_state.get('contribution_settings', {})
+    plan_config = st.session_state.get('plan_configurator', {})
+    dashboard_config = st.session_state.get('dashboard_config', {})
+
+    # Get cooperative ratio from dashboard config
+    cooperative_ratio = dashboard_config.get('cooperative_ratio', COOPERATIVE_CONFIG['default_discount_ratio'])
+
+    # Get flat amounts if in flat_amount mode
+    flat_amounts = None
+    if contribution_settings.get('input_mode') == 'flat_amount':
+        flat_amounts = contribution_settings.get('flat_amounts', {})
+        flat_amounts = {k: v for k, v in flat_amounts.items() if v is not None}
+        if not flat_amounts:
+            flat_amounts = None
+
+    # Get exclude_dependent_ichra setting
+    exclude_deps = contribution_settings.get('exclude_dependent_ichra', False)
+
+    # Load rate tables (cached)
+    coop_rates_df = load_cooperative_rate_table()
+    sedera_rates_df = load_sedera_rate_table(_db_available=db is not None)
+
+    # Render employee cards with dropdown selectors for each slot
+    slot_configs = [
+        ('slot_1', 'Youngest Employee', ['EE']),
+        ('slot_2', 'Mid-Age Family', ['EC', 'F']),
+        ('slot_3', 'Older Employee', ['EE', 'ES', 'EC', 'F']),
+    ]
+
+    for slot_key, slot_label, tier_filter in slot_configs:
+        # Get dropdown options for this slot (list of employee ID strings)
+        options = get_employee_dropdown_options(census_df, tier_filter)
+
+        if not options:
+            continue
+
+        # Get current selection
+        current_selection = st.session_state.employee_example_selections.get(slot_key)
+
+        # Find the index of the current selection in options
+        selected_idx = 0
+        if current_selection in options:
+            selected_idx = options.index(current_selection)
+
         with st.container(border=True):
-            render_employee_card(employee, has_renewal_data=data.has_renewal_data)
+            # Dropdown selector at top of card
+            dropdown_col, _ = st.columns([3, 5])
+            with dropdown_col:
+                # Use a closure to capture census_df for format_func
+                def make_format_func(df):
+                    def format_func(emp_id):
+                        return format_employee_option(df, emp_id)
+                    return format_func
+
+                selected_emp_id = st.selectbox(
+                    slot_label,
+                    options=options,
+                    index=selected_idx,
+                    format_func=make_format_func(census_df),
+                    key=f"employee_dropdown_{slot_key}",
+                    label_visibility="collapsed"
+                )
+
+                # Update session state if selection changed
+                if selected_emp_id and selected_emp_id != current_selection:
+                    st.session_state.employee_example_selections[slot_key] = selected_emp_id
+
+            # Build the employee example for the selected employee
+            if selected_emp_id:
+                employee_row = get_employee_row_by_id(census_df, selected_emp_id)
+                if employee_row is not None:
+                    family_status = employee_row.get('family_status', 'EE')
+
+                    # Determine use_ee_rate_only based on slot and settings
+                    # Slot 1 (EE only) always uses individual rate
+                    # Other slots depend on exclude_deps toggle
+                    use_ee_rate_only = (family_status == 'EE') or exclude_deps
+
+                    # Build employee example with current settings
+                    employee_example = build_employee_example(
+                        employee_row,
+                        label=slot_label,
+                        contribution_analysis=contribution_analysis,
+                        tier_costs=data.tier_costs,
+                        multi_metal_results=data.multi_metal_results,
+                        contribution_pct=data.contribution_pct,
+                        cooperative_ratio=cooperative_ratio,
+                        dependents_df=dependents_df,
+                        db=db,
+                        use_ee_rate_only=use_ee_rate_only,
+                        coop_rates_df=coop_rates_df,
+                        flat_amounts=flat_amounts,
+                        sedera_rates_df=sedera_rates_df,
+                        plan_config=plan_config,
+                        contribution_settings=contribution_settings
+                    )
+
+                    # Render the employee card
+                    render_employee_card(employee_example, has_renewal_data=data.has_renewal_data)
 
 
 # =============================================================================
@@ -5823,7 +6239,13 @@ with st.container(border=True):
 st.markdown("<br>", unsafe_allow_html=True)
 
 # Row 4: Employee Examples
-render_employee_examples(data)
+render_employee_examples(
+    data,
+    census_df=census_df,
+    dependents_df=st.session_state.get('dependents_df'),
+    contribution_analysis=st.session_state.get('contribution_analysis'),
+    db=db
+)
 
 st.markdown("<br>", unsafe_allow_html=True)
 

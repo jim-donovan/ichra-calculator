@@ -43,14 +43,14 @@ PLAN_TYPES = [
 AFFORDABILITY_THRESHOLD_2026 = 0.0996  # 9.96% of household income
 
 # Federal Poverty Level (FPL) Safe Harbor (2026 Plan Year)
-# Source: HHS Poverty Guidelines (projected for 2026)
+# Source: HHS 2025 Poverty Guidelines (used for 2026 plan year per ACA rules)
+# https://www.mybenefitadvisor.com/articles/compliance/2025/q1/2025-federal-poverty-guidelines-announced/
 # The FPL Safe Harbor allows employers to use FPL instead of actual employee income
 # to determine affordability. If employee's LCSP cost ≤ 9.96% of FPL, it's deemed
 # affordable for ALL employees regardless of their actual income.
-# 2025 FPL (single, mainland) = $15,060; estimated 2026 with ~2.3% increase
-FPL_ANNUAL_2026 = 15400  # $15,400/year for single individual (48 contiguous states)
-FPL_MONTHLY_2026 = FPL_ANNUAL_2026 / 12  # ~$1,283/month
-FPL_SAFE_HARBOR_THRESHOLD_2026 = FPL_MONTHLY_2026 * AFFORDABILITY_THRESHOLD_2026  # ~$128/month
+FPL_ANNUAL_2026 = 15650  # $15,650/year for single individual (48 contiguous states + DC)
+FPL_MONTHLY_2026 = FPL_ANNUAL_2026 / 12  # ~$1,304/month
+FPL_SAFE_HARBOR_THRESHOLD_2026 = FPL_MONTHLY_2026 * AFFORDABILITY_THRESHOLD_2026  # ~$130/month
 
 # ==============================================================================
 # ACA 3:1 AGE RATING CURVE
@@ -482,47 +482,48 @@ DATE_FORMAT = "%Y-%m-%d"
 # Used for Unaffordability Analysis - calculating potential ACA subsidies
 # when employees decline ICHRA due to unaffordability
 
-# Federal Poverty Level (FPL) 2026 by household size
-# Source: HHS Poverty Guidelines (projected for 2026)
+# Federal Poverty Level (FPL) 2025 by household size (used for 2026 plan year)
+# Source: HHS 2025 Poverty Guidelines
+# https://www.mybenefitadvisor.com/articles/compliance/2025/q1/2025-federal-poverty-guidelines-announced/
 # Note: Alaska and Hawaii have higher FPL amounts
 FPL_2026_BY_HOUSEHOLD_SIZE = {
-    1: 15960,   # Single individual
-    2: 21640,
-    3: 27320,
-    4: 33000,
-    5: 38680,
-    6: 44360,
-    7: 50040,
-    8: 55720,
-    # Add $5,680 per additional person above 8
+    1: 15650,   # Single individual
+    2: 21150,
+    3: 26650,
+    4: 32150,
+    5: 37650,
+    6: 43150,
+    7: 48650,
+    8: 54150,
+    # Add $5,500 per additional person above 8
 }
-FPL_2026_PER_ADDITIONAL_PERSON = 5680
+FPL_2026_PER_ADDITIONAL_PERSON = 5500
 
-# Alaska FPL 2026 (approximately 25% higher)
+# Alaska FPL 2025 (for 2026 plan year)
 FPL_2026_ALASKA = {
-    1: 19950,
-    2: 27050,
-    3: 34150,
-    4: 41250,
-    5: 48350,
-    6: 55450,
-    7: 62550,
-    8: 69650,
+    1: 19550,
+    2: 26430,
+    3: 33310,
+    4: 40190,
+    5: 47070,
+    6: 53950,
+    7: 60830,
+    8: 67710,
 }
-FPL_2026_ALASKA_PER_ADDITIONAL = 7100
+FPL_2026_ALASKA_PER_ADDITIONAL = 6880
 
-# Hawaii FPL 2026 (approximately 15% higher)
+# Hawaii FPL 2025 (for 2026 plan year)
 FPL_2026_HAWAII = {
-    1: 18360,
-    2: 24890,
-    3: 31420,
-    4: 37950,
-    5: 44480,
-    6: 51010,
-    7: 57540,
-    8: 64070,
+    1: 17990,
+    2: 24320,
+    3: 30650,
+    4: 36980,
+    5: 43310,
+    6: 49640,
+    7: 55970,
+    8: 62300,
 }
-FPL_2026_HAWAII_PER_ADDITIONAL = 6530
+FPL_2026_HAWAII_PER_ADDITIONAL = 6330
 
 # 2026 ACA Applicable Percentage Table for Premium Tax Credit
 # Source: IRS Revenue Procedure (The Finance Buff 2026 projections)
